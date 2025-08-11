@@ -52,10 +52,11 @@ ehthumbs.db
 Thumbs.db
 
 # Staging and uploaded folder contents (keep folders, ignore files)
-staging/*
-!staging/.gitkeep
-uploaded/*
-!uploaded/.gitkeep
+staging/
+uploaded/
+
+# Backup folder (ignore completely)
+backup/
 
 # Logs
 *.log

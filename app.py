@@ -20,6 +20,9 @@ import logging
 import threading
 import time
 import shutil
+import sqlite3
+import urllib.parse
+import requests
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass, field
@@ -27,6 +30,9 @@ from datetime import datetime
 import re
 import json
 import hashlib
+
+# Web scraping
+from bs4 import BeautifulSoup
 
 # Flask and web components
 from flask import Flask, request, render_template, flash, redirect, url_for, jsonify
@@ -95,16 +101,19 @@ class Config:
     ALLOWED_EXTENSIONS: set = field(default_factory=lambda: {"txt", "pdf", "docx", "doc", "md"})
     
     # Embedding Model Configuration
-    EMBEDDING_PROVIDER: str = os.getenv("EMBEDDING_PROVIDER", "ollama")
+    # EMBEDDING_PROVIDER: str = os.getenv("EMBEDDING_PROVIDER", "ollama")
     EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "mxbai-embed-large")
-    
+    CLASSIFICATION_MODEL: str = os.getenv("CLASSIFICATION_MODEL", "mistral")
+
     # Ollama Configuration
-    OLLAMA_HOST: str = os.getenv("OLLAMA_HOST", "localhost")
+    OLLAMA_CLASSIFICATION_HOST: str = os.getenv("OLLAMA_CLASSIFICATION_HOST", "localhost")
+    CLASSIFICATION_BASE_URL: str = os.getenv('CHAT_CLASSIFICATIONBASE_URL', f"http://{os.getenv('OLLAMA_CLASSIFICATION_HOST','localhost')}:{os.getenv('OLLAMA_PORT','11434')}")
+    OLLAMA_CHAT_HOST: str = os.getenv("OLLAMA_CHAT_HOST", "localhost")
     OLLAMA_PORT: int = int(os.getenv("OLLAMA_PORT", "11434"))
-    
+
     # Chat Model Configuration
     CHAT_MODEL: str = os.getenv('CHAT_MODEL', 'mistral:latest')
-    CHAT_BASE_URL: str = os.getenv('CHAT_BASE_URL', f"http://{os.getenv('OLLAMA_HOST','localhost')}:{os.getenv('OLLAMA_PORT','11434')}")
+    CHAT_BASE_URL: str = os.getenv('CHAT_BASE_URL', f"http://{os.getenv('OLLAMA_CHAT_HOST','localhost')}:{os.getenv('OLLAMA_PORT','11434')}")
     CHAT_TEMPERATURE: float = float(os.getenv('CHAT_TEMPERATURE', '0.1'))
     
     # Unstructured chunking
@@ -130,6 +139,197 @@ class ProcessingStatus:
     error_details: Optional[str] = None
 
 
+class URLManager:
+    """Manages URL storage and validation using SQLite database."""
+    
+    def __init__(self, db_path: str = "urls.db"):
+        """
+        Initialize URL manager with SQLite database.
+        
+        Args:
+            db_path: Path to SQLite database file
+        """
+        self.db_path = db_path
+        self._init_database()
+        logger.info(f"URLManager initialized with database: {db_path}")
+    
+    def _init_database(self) -> None:
+        """Initialize the SQLite database and create tables if they don't exist."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS urls (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    url TEXT UNIQUE NOT NULL,
+                    title TEXT,
+                    description TEXT,
+                    added_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_checked TIMESTAMP,
+                    status TEXT DEFAULT 'active'
+                )
+            ''')
+            conn.commit()
+            logger.info("URL database initialized")
+    
+    def validate_url(self, url: str) -> bool:
+        """
+        Validate if the provided string is a valid URL.
+        
+        Args:
+            url: URL string to validate
+            
+        Returns:
+            bool: True if valid URL, False otherwise
+        """
+        try:
+            result = urllib.parse.urlparse(url)
+            return all([result.scheme, result.netloc]) and result.scheme in ['http', 'https']
+        except Exception:
+            return False
+    
+    def extract_title_from_url(self, url: str) -> str:
+        """
+        Extract the title from a web page by scraping the <title> tag.
+        
+        Args:
+            url: URL to scrape for title
+            
+        Returns:
+            str: Extracted title or fallback to domain name
+        """
+        try:
+            # Set headers to mimic a real browser
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            }
+            
+            # Make request with timeout
+            response = requests.get(url, headers=headers, timeout=10)
+            response.raise_for_status()
+            
+            # Parse HTML content
+            soup = BeautifulSoup(response.content, 'html.parser')
+            
+            # Extract title
+            title_tag = soup.find('title')
+            if title_tag and title_tag.string:
+                title = title_tag.string.strip()
+                # Clean up common title patterns
+                title = re.sub(r'\s+', ' ', title)  # Normalize whitespace
+                title = title[:200]  # Limit length
+                return title
+            
+            # Fallback to domain name if no title found
+            parsed_url = urllib.parse.urlparse(url)
+            return parsed_url.netloc
+            
+        except requests.RequestException as e:
+            logger.warning(f"Failed to fetch title from {url}: {str(e)}")
+            # Fallback to domain name on error
+            try:
+                parsed_url = urllib.parse.urlparse(url)
+                return parsed_url.netloc
+            except Exception:
+                return "Unknown Title"
+        except Exception as e:
+            logger.error(f"Error extracting title from {url}: {str(e)}")
+            return "Unknown Title"
+    
+    def add_url(self, url: str, title: str = None, description: str = None) -> Dict[str, Any]:
+        """
+        Add a new URL to the database with automatic title extraction.
+        
+        Args:
+            url: URL to add
+            title: Optional title override (will extract from page if None)
+            description: Optional description
+            
+        Returns:
+            Dict with success status and message
+        """
+        # Validate URL format
+        if not self.validate_url(url):
+            return {"success": False, "message": "Invalid URL format"}
+        
+        # Extract title from URL if not provided
+        if not title:
+            logger.info(f"Extracting title from URL: {url}")
+            title = self.extract_title_from_url(url)
+            logger.info(f"Extracted title: {title}")
+        
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "INSERT INTO urls (url, title, description) VALUES (?, ?, ?)",
+                    (url, title, description)
+                )
+                conn.commit()
+                url_id = cursor.lastrowid
+                logger.info(f"Added URL: {url} with title: {title} (ID: {url_id})")
+                return {"success": True, "message": "URL added successfully", "id": url_id, "title": title}
+        except sqlite3.IntegrityError:
+            return {"success": False, "message": "URL already exists"}
+        except Exception as e:
+            logger.error(f"Error adding URL: {str(e)}")
+            return {"success": False, "message": f"Database error: {str(e)}"}
+    
+    def get_all_urls(self) -> List[Dict[str, Any]]:
+        """
+        Retrieve all URLs from the database.
+        
+        Returns:
+            List of URL dictionaries
+        """
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT * FROM urls WHERE status = 'active' ORDER BY added_date DESC"
+                )
+                urls = [dict(row) for row in cursor.fetchall()]
+                return urls
+        except Exception as e:
+            logger.error(f"Error retrieving URLs: {str(e)}")
+            return []
+    
+    def delete_url(self, url_id: int) -> Dict[str, Any]:
+        """
+        Delete a URL from the database.
+        
+        Args:
+            url_id: ID of the URL to delete
+            
+        Returns:
+            Dict with success status and message
+        """
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM urls WHERE id = ?", (url_id,))
+                if cursor.rowcount > 0:
+                    conn.commit()
+                    logger.info(f"Deleted URL with ID: {url_id}")
+                    return {"success": True, "message": "URL deleted successfully"}
+                else:
+                    return {"success": False, "message": "URL not found"}
+        except Exception as e:
+            logger.error(f"Error deleting URL: {str(e)}")
+            return {"success": False, "message": f"Database error: {str(e)}"}
+    
+    def get_url_count(self) -> int:
+        """Get the total number of active URLs."""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT COUNT(*) FROM urls WHERE status = 'active'")
+                return cursor.fetchone()[0]
+        except Exception as e:
+            logger.error(f"Error getting URL count: {str(e)}")
+            return 0
+
+
 class DocumentProcessor:
     """
     Handles document processing operations including text extraction,
@@ -146,7 +346,7 @@ class DocumentProcessor:
         self.config = config
         self.embedding_provider = OllamaEmbeddings(
             model=self.config.EMBEDDING_MODEL, 
-            base_url=f"http://{self.config.OLLAMA_HOST}:{self.config.OLLAMA_PORT}"
+            base_url=f"http://{self.config.CLASSIFICATION_BASE_URL}"
         )
         logger.info(f"DocumentProcessor initialized with {self.config.EMBEDDING_MODEL}")
     
@@ -215,8 +415,8 @@ class DocumentProcessor:
         logger.info("Enriching chunk metadata with LLM classification (topic)...")
         
         llm = ChatOllama(
-            model=self.config.CHAT_MODEL, 
-            base_url=self.config.CHAT_BASE_URL, 
+            model=self.config.CLASSIFICATION_MODEL, 
+            base_url=self.config.CLASSIFICATION_BASE_URL, 
             temperature=self.config.CHAT_TEMPERATURE
         )
         
@@ -256,7 +456,7 @@ class MilvusManager:
             config: Application configuration instance
         """
         self.config = config
-        self.embedding_provider = OllamaEmbeddings(model=self.config.EMBEDDING_MODEL, base_url=f"http://{self.config.OLLAMA_HOST}:{self.config.OLLAMA_PORT}")
+        self.embedding_provider = OllamaEmbeddings(model=self.config.EMBEDDING_MODEL, base_url=f"http://{self.config.OLLAMA_CLASSIFICATION_HOST}:{self.config.OLLAMA_PORT}")
         self.vector_store = None
         self.connected = False
         self._connect()
@@ -266,7 +466,7 @@ class MilvusManager:
         """Establish connection to Milvus database using LangChain."""
         self.collection_name = self.config.COLLECTION_NAME
         self.connection_args = {"host": self.config.MILVUS_HOST, "port": self.config.MILVUS_PORT}
-        self.langchain_embeddings = OllamaEmbeddings(model=self.config.EMBEDDING_MODEL, base_url=f"http://{self.config.OLLAMA_HOST}:{self.config.OLLAMA_PORT}")
+        self.langchain_embeddings = OllamaEmbeddings(model=self.config.EMBEDDING_MODEL, base_url=f"http://{self.config.OLLAMA_CLASSIFICATION_HOST}:{self.config.OLLAMA_PORT}")
         connections.connect("default", host=self.config.MILVUS_HOST, port=self.config.MILVUS_PORT)
         if self.config.MILVUS_DROP_COLLECTION and utility.has_collection(self.collection_name):
             logger.info(f"Dropping existing collection '{self.collection_name}' (flag enabled)")
@@ -596,6 +796,7 @@ class RAGDocumentHandler:
         # Initialize components
         self.document_processor = DocumentProcessor(self.config)
         self.milvus_manager = MilvusManager(self.config)
+        self.url_manager = URLManager()
         
         # Processing status tracking
         self.processing_status: Dict[str, ProcessingStatus] = {}
@@ -632,11 +833,15 @@ class RAGDocumentHandler:
             # Get collection statistics
             collection_stats = self.milvus_manager.get_collection_stats()
             
+            # Get URLs for display
+            urls = self.url_manager.get_all_urls()
+            
             return render_template('index.html',
                                  staging_files=staging_files,
                                  uploaded_files=uploaded_files,
                                  collection_stats=collection_stats,
-                                 processing_status=self.processing_status)
+                                 processing_status=self.processing_status,
+                                 urls=urls)
         
         @self.app.route('/upload', methods=['POST'])
         def upload_file():
@@ -753,6 +958,35 @@ class RAGDocumentHandler:
             except Exception as e:
                 flash(f'Error deleting embeddings: {str(e)}', 'error')
                 logger.error(f"Embedding deletion error for {filename}: {str(e)}")
+            
+            return redirect(url_for('index'))
+        
+        @self.app.route('/add_url', methods=['POST'])
+        def add_url():
+            """Add a new URL with automatic title extraction."""
+            url = request.form.get('url', '').strip()
+            
+            if not url:
+                flash('URL is required', 'error')
+                return redirect(url_for('index'))
+            
+            result = self.url_manager.add_url(url)
+            if result['success']:
+                extracted_title = result.get('title', 'Unknown')
+                flash(f'URL added successfully with title: "{extracted_title}"', 'success')
+            else:
+                flash(f'Failed to add URL: {result["message"]}', 'error')
+            
+            return redirect(url_for('index'))
+        
+        @self.app.route('/delete_url/<int:url_id>', methods=['POST'])
+        def delete_url(url_id):
+            """Delete a URL."""
+            result = self.url_manager.delete_url(url_id)
+            if result['success']:
+                flash('URL deleted successfully', 'success')
+            else:
+                flash(f'Failed to delete URL: {result["message"]}', 'error')
             
             return redirect(url_for('index'))
     

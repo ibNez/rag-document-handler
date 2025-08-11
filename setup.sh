@@ -28,7 +28,7 @@ pip install --upgrade pip
 
 # Install dependencies
 echo "📚 Installing dependencies..."
-pip install flask pymilvus sentence-transformers werkzeug python-dotenv pypdf python-docx chardet
+pip install flask pymilvus sentence-transformers werkzeug python-dotenv pypdf python-docx chardet requests beautifulsoup4
 
 # Install development dependencies (optional)
 echo "🛠️ Installing development dependencies..."
@@ -46,6 +46,10 @@ if [ ! -f ".env" ]; then
 fi
 
 echo "✅ Setup complete!"
+echo ""
+echo "📊 Note: The application will automatically create:"
+echo "   - urls.db: SQLite database for URL management"
+echo "   - Milvus collections for document embeddings"
 echo ""
 echo "To start the application:"
 echo "1. Activate the virtual environment: source .venv/bin/activate"
