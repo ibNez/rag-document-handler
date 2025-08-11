@@ -23,6 +23,7 @@ import shutil
 import sqlite3
 import urllib.parse
 import requests
+import random
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass, field
@@ -33,6 +34,7 @@ import hashlib
 
 # Web scraping
 from bs4 import BeautifulSoup
+from urllib.robotparser import RobotFileParser
 
 # Flask and web components
 from flask import Flask, request, render_template, flash, redirect, url_for, jsonify
@@ -123,7 +125,19 @@ class Config:
     UNSTRUCTURED_INCLUDE_ORIG: bool = os.getenv('UNSTRUCTURED_INCLUDE_ORIG', 'false').lower() == 'true'
     
     # Milvus flags
-    MILVUS_DROP_COLLECTION: bool = os.getenv('MILVUS_DROP_COLLECTION', 'false').lower() == 'true'
+    MILVUS_DROP_COLLECTION: bool = os.getenv('MILVUS_DROP_COLLECTION', 'false').lower() == 'false'
+
+    # Crawl settings
+    CRAWL_MAX_PAGES: int = int(os.getenv('CRAWL_MAX_PAGES', '50'))
+    CRAWL_REQUEST_TIMEOUT: int = int(os.getenv('CRAWL_REQUEST_TIMEOUT', '10'))
+    CRAWL_USER_AGENT: str = os.getenv('CRAWL_USER_AGENT', 'RAGDocHandlerBot/1.0 (+contact: you@example.com)')
+    CRAWL_DELAY_SECONDS: float = float(os.getenv('CRAWL_DELAY_SECONDS', '1.0'))
+    CRAWL_JITTER_SECONDS: float = float(os.getenv('CRAWL_JITTER_SECONDS', '0.3'))
+
+    # Scheduler settings
+    SCHEDULER_POLL_SECONDS_BUSY: float = float(os.getenv('SCHEDULER_POLL_SECONDS_BUSY', '10'))
+    SCHEDULER_POLL_SECONDS_IDLE: float = float(os.getenv('SCHEDULER_POLL_SECONDS_IDLE', '30'))
+    URL_DEFAULT_REFRESH_MINUTES: int = int(os.getenv('URL_DEFAULT_REFRESH_MINUTES', '1440'))
 
 
 @dataclass
@@ -165,9 +179,63 @@ class URLManager:
                     description TEXT,
                     added_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     last_checked TIMESTAMP,
-                    status TEXT DEFAULT 'active'
+                    status TEXT DEFAULT 'active',
+                    refresh_interval_minutes INTEGER DEFAULT 1440,
+                    last_scraped TIMESTAMP,
+                    crawl_domain INTEGER DEFAULT 0,
+                    ignore_robots INTEGER DEFAULT 0
                 )
             ''')
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS url_pages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    parent_url_id INTEGER NOT NULL,
+                    page_url TEXT UNIQUE NOT NULL,
+                    last_content_hash TEXT,
+                    last_scraped TIMESTAMP,
+                    FOREIGN KEY(parent_url_id) REFERENCES urls(id)
+                )
+            ''')
+            # Ensure new columns exist for existing databases
+            try:
+                cursor.execute("PRAGMA table_info(urls)")
+                cols = {row[1] for row in cursor.fetchall()}
+                if 'refresh_interval_minutes' not in cols:
+                    cursor.execute("ALTER TABLE urls ADD COLUMN refresh_interval_minutes INTEGER")
+                if 'last_scraped' not in cols:
+                    cursor.execute("ALTER TABLE urls ADD COLUMN last_scraped TIMESTAMP")
+                if 'crawl_domain' not in cols:
+                    cursor.execute("ALTER TABLE urls ADD COLUMN crawl_domain INTEGER DEFAULT 0")
+                if 'last_content_hash' not in cols:
+                    cursor.execute("ALTER TABLE urls ADD COLUMN last_content_hash TEXT")
+                if 'last_update_status' not in cols:
+                    cursor.execute("ALTER TABLE urls ADD COLUMN last_update_status TEXT")
+                if 'ignore_robots' not in cols:
+                    cursor.execute("ALTER TABLE urls ADD COLUMN ignore_robots INTEGER DEFAULT 0")
+            except Exception as e:
+                logger.warning(f"URL table migration check/add columns warning: {e}")
+            # Backfill default refresh interval for any existing rows where it's NULL
+            try:
+                cursor.execute(
+                    "UPDATE urls SET refresh_interval_minutes = ? WHERE refresh_interval_minutes IS NULL",
+                    (Config.URL_DEFAULT_REFRESH_MINUTES,)
+                )
+            except Exception as e:
+                logger.warning(f"Failed to backfill default refresh interval: {e}")
+            # Backfill crawl_domain to 0 when NULL
+            try:
+                cursor.execute(
+                    "UPDATE urls SET crawl_domain = 0 WHERE crawl_domain IS NULL"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to backfill crawl_domain: {e}")
+            # Backfill ignore_robots to 0 when NULL
+            try:
+                cursor.execute(
+                    "UPDATE urls SET ignore_robots = 0 WHERE ignore_robots IS NULL"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to backfill ignore_robots: {e}")
             conn.commit()
             logger.info("URL database initialized")
     
@@ -261,8 +329,8 @@ class URLManager:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
                 cursor.execute(
-                    "INSERT INTO urls (url, title, description) VALUES (?, ?, ?)",
-                    (url, title, description)
+                    "INSERT INTO urls (url, title, description, refresh_interval_minutes, crawl_domain, ignore_robots) VALUES (?, ?, ?, ?, ?, ?)",
+                    (url, title, description, Config.URL_DEFAULT_REFRESH_MINUTES, 0, 0)
                 )
                 conn.commit()
                 url_id = cursor.lastrowid
@@ -286,7 +354,18 @@ class URLManager:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.cursor()
                 cursor.execute(
-                    "SELECT * FROM urls WHERE status = 'active' ORDER BY added_date DESC"
+                    """
+                    SELECT 
+                        *,
+                        CASE 
+                            WHEN refresh_interval_minutes IS NOT NULL AND refresh_interval_minutes > 0 AND last_scraped IS NOT NULL
+                            THEN datetime(last_scraped, '+' || refresh_interval_minutes || ' minutes')
+                            ELSE NULL
+                        END AS next_refresh
+                    FROM urls 
+                    WHERE status = 'active' 
+                    ORDER BY added_date DESC
+                    """
                 )
                 urls = [dict(row) for row in cursor.fetchall()]
                 return urls
@@ -317,6 +396,25 @@ class URLManager:
         except Exception as e:
             logger.error(f"Error deleting URL: {str(e)}")
             return {"success": False, "message": f"Database error: {str(e)}"}
+
+    def get_pages_for_parent(self, parent_url_id: int) -> List[str]:
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT page_url FROM url_pages WHERE parent_url_id = ?", (parent_url_id,))
+                return [row[0] for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"Error getting pages for parent {parent_url_id}: {e}")
+            return []
+
+    def delete_pages_for_parent(self, parent_url_id: int) -> None:
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM url_pages WHERE parent_url_id = ?", (parent_url_id,))
+                conn.commit()
+        except Exception as e:
+            logger.error(f"Error deleting page records for parent {parent_url_id}: {e}")
     
     def get_url_count(self) -> int:
         """Get the total number of active URLs."""
@@ -328,6 +426,102 @@ class URLManager:
         except Exception as e:
             logger.error(f"Error getting URL count: {str(e)}")
             return 0
+
+    def get_url_by_id(self, url_id: int) -> Optional[Dict[str, Any]]:
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM urls WHERE id = ?", (url_id,))
+                row = cursor.fetchone()
+                return dict(row) if row else None
+        except Exception as e:
+            logger.error(f"Error getting URL by id: {e}")
+            return None
+
+    def update_url_metadata(self, url_id: int, title: Optional[str], description: Optional[str], refresh_interval_minutes: Optional[int], crawl_domain: Optional[int], ignore_robots: Optional[int]) -> Dict[str, Any]:
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "UPDATE urls SET title = ?, description = ?, refresh_interval_minutes = ?, crawl_domain = ?, ignore_robots = ? WHERE id = ?",
+                    (title, description, refresh_interval_minutes, crawl_domain, ignore_robots, url_id)
+                )
+                conn.commit()
+                return {"success": cursor.rowcount > 0}
+        except Exception as e:
+            logger.error(f"Error updating URL metadata: {e}")
+            return {"success": False, "message": str(e)}
+
+    def mark_scraped(self, url_id: int, refresh_interval_minutes: Optional[int]) -> None:
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "UPDATE urls SET last_scraped = CURRENT_TIMESTAMP WHERE id = ?",
+                    (url_id,)
+                )
+                conn.commit()
+        except Exception as e:
+            logger.error(f"Error marking URL scraped: {e}")
+
+    def update_url_hash_status(self, url_id: int, content_hash: Optional[str], status: str) -> None:
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "UPDATE urls SET last_content_hash = ?, last_update_status = ?, last_scraped = CURRENT_TIMESTAMP WHERE id = ?",
+                    (content_hash, status, url_id)
+                )
+                conn.commit()
+        except Exception as e:
+            logger.error(f"Error updating URL hash/status: {e}")
+
+    def get_page_hash(self, page_url: str) -> Optional[str]:
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT last_content_hash FROM url_pages WHERE page_url = ?", (page_url,))
+                row = cursor.fetchone()
+                return row[0] if row and row[0] else None
+        except Exception as e:
+            logger.error(f"Error getting page hash: {e}")
+            return None
+
+    def set_page_hash(self, parent_url_id: int, page_url: str, content_hash: str) -> None:
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "INSERT INTO url_pages (parent_url_id, page_url, last_content_hash, last_scraped) VALUES (?, ?, ?, CURRENT_TIMESTAMP) "
+                    "ON CONFLICT(page_url) DO UPDATE SET last_content_hash=excluded.last_content_hash, last_scraped=CURRENT_TIMESTAMP",
+                    (parent_url_id, page_url, content_hash)
+                )
+                conn.commit()
+        except Exception as e:
+            logger.error(f"Error setting page hash: {e}")
+
+    def get_due_urls(self) -> List[Dict[str, Any]]:
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    SELECT * FROM urls
+                    WHERE status = 'active'
+                      AND refresh_interval_minutes IS NOT NULL
+                      AND refresh_interval_minutes > 0
+                      AND (
+                        last_scraped IS NULL OR
+                        datetime(last_scraped, '+' || refresh_interval_minutes || ' minutes') <= datetime('now')
+                      )
+                    """
+                )
+                return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"Error fetching due URLs: {e}")
+            return []
 
 
 class DocumentProcessor:
@@ -403,6 +597,46 @@ class DocumentProcessor:
             
         except Exception as e:
             logger.error(f"Failed to load and chunk document {filename}: {str(e)}")
+            raise
+
+    def load_and_chunk_url(self, url: str, url_id: str) -> List[Document]:
+        """Load a URL using UnstructuredLoader(web_url=...) and create lean chunks with metadata, mirroring file chunking settings."""
+        logger.info(f"Loading and chunking URL: {url}")
+        try:
+            loader = UnstructuredLoader(
+                web_url=url,
+                chunking_strategy=self.config.UNSTRUCTURED_CHUNKING_STRATEGY,
+                max_characters=self.config.UNSTRUCTURED_MAX_CHARACTERS,
+                overlap=self.config.UNSTRUCTURED_OVERLAP,
+                include_orig_elements=self.config.UNSTRUCTURED_INCLUDE_ORIG,
+            )
+            documents = loader.load()
+            logger.info(f"Loaded {len(documents)} elements from URL via UnstructuredLoader(web_url)")
+
+            chunks: List[Document] = []
+            for i, d in enumerate(documents):
+                text = (d.page_content or '').strip()
+                if not text:
+                    continue
+                content_hash = hashlib.sha1(text.encode('utf-8')).hexdigest()[:16]
+                meta = d.metadata or {}
+                page = meta.get('page') or meta.get('page_number') or (i + 1)
+                meta.update({
+                    'source': url,
+                    'page': page,
+                    'document_id': url_id,
+                    'chunk_id': f"{url_id}:{content_hash}",
+                    'content_hash': content_hash,
+                    'content_length': len(text),
+                })
+                d.metadata = meta
+                d.page_content = text
+                chunks.append(d)
+
+            logger.info(f"Created {len(chunks)} URL chunks with metadata")
+            return chunks
+        except Exception as e:
+            logger.error(f"Failed to load and chunk URL {url}: {e}")
             raise
 
     def enrich_topics(self, chunks: List[Document]) -> None:
@@ -484,12 +718,23 @@ class MilvusManager:
         """
         logger.info(f"Inserting {len(chunks)} chunks for {filename}")
         
-        # Deduplicate by content_hash
+        # Deduplicate by content_hash (compute fallback from text if missing)
         seen = set()
-        unique = []
+        unique: List[Document] = []
         for c in chunks:
-            ch = (c.metadata or {}).get('content_hash')
-            if not ch or ch in seen:
+            meta = c.metadata or {}
+            ch = meta.get('content_hash')
+            if not ch:
+                try:
+                    text = (c.page_content or '').strip()
+                    if not text:
+                        continue
+                    ch = hashlib.sha1(text.encode('utf-8')).hexdigest()[:16]
+                    meta['content_hash'] = ch
+                    c.metadata = meta
+                except Exception:
+                    continue
+            if ch in seen:
                 continue
             seen.add(ch)
             unique.append(c)
@@ -497,7 +742,8 @@ class MilvusManager:
         logger.info(f"Unique chunks after dedupe: {len(unique)} (from {len(chunks)})")
         
         if not unique:
-            raise RuntimeError("No unique chunks to insert")
+            logger.warning(f"No unique chunks to insert for {filename}; skipping insertion")
+            return
         
         # Prepare texts and metadata
         texts = [d.page_content for d in unique]
@@ -792,21 +1038,30 @@ class RAGDocumentHandler:
         self.app = Flask(__name__)
         self.app.config['SECRET_KEY'] = self.config.SECRET_KEY
         self.app.config['MAX_CONTENT_LENGTH'] = self.config.MAX_CONTENT_LENGTH
-        
+
         # Initialize components
         self.document_processor = DocumentProcessor(self.config)
         self.milvus_manager = MilvusManager(self.config)
         self.url_manager = URLManager()
-        
+
         # Processing status tracking
         self.processing_status: Dict[str, ProcessingStatus] = {}
-        
+        # URL refresh status tracking (keyed by url_id)
+        self.url_processing_status: Dict[int, ProcessingStatus] = {}
+
         # Setup directories
         self._setup_directories()
-        
+
         # Register routes
         self._register_routes()
-        
+
+        # Start background scheduler for URL refreshes
+        self._start_scheduler()
+
+        # Crawler state: robots cache and per-domain last-request timestamps
+        self._robots_cache = {}
+        self._domain_last_request = {}
+
         logger.info("RAG Document Handler application initialized")
     
     def _setup_directories(self) -> None:
@@ -835,13 +1090,35 @@ class RAGDocumentHandler:
             
             # Get URLs for display
             urls = self.url_manager.get_all_urls()
+            # Enrich with robots status info
+            enriched_urls = []
+            for u in urls:
+                try:
+                    rp, crawl_delay = self._get_robots(u.get('url', ''))
+                    try:
+                        allowed = rp.can_fetch(self.config.CRAWL_USER_AGENT, u.get('url', ''))
+                    except Exception:
+                        allowed = True
+                    try:
+                        has_entries = bool(getattr(rp, 'default_entry', None) or getattr(rp, 'entries', []))
+                    except Exception:
+                        has_entries = False
+                    u['robots_allowed'] = 1 if allowed else 0
+                    u['robots_has_rules'] = 1 if (has_entries or crawl_delay is not None) else 0
+                    u['robots_crawl_delay'] = crawl_delay
+                except Exception:
+                    u['robots_allowed'] = None
+                    u['robots_has_rules'] = None
+                    u['robots_crawl_delay'] = None
+                enriched_urls.append(u)
             
             return render_template('index.html',
                                  staging_files=staging_files,
                                  uploaded_files=uploaded_files,
                                  collection_stats=collection_stats,
                                  processing_status=self.processing_status,
-                                 urls=urls)
+                                 url_processing_status=self.url_processing_status,
+                                 urls=enriched_urls)
         
         @self.app.route('/upload', methods=['POST'])
         def upload_file():
@@ -916,6 +1193,53 @@ class RAGDocumentHandler:
                     'error_details': status.error_details
                 })
             return jsonify({'status': 'not_found'})
+
+        @self.app.route('/url_status/<int:url_id>')
+        def get_url_status(url_id: int):
+            """Get processing status for a URL refresh.
+            When background status is gone, also return final DB state (last_update_status, last_scraped, next_refresh).
+            """
+            status = self.url_processing_status.get(url_id)
+            if status:
+                return jsonify({
+                    'status': status.status,
+                    'progress': status.progress,
+                    'message': status.message,
+                    'error_details': status.error_details
+                })
+            # No in-memory status; fetch final state from DB for in-place UI update
+            try:
+                rec = self.url_manager.get_url_by_id(url_id)
+                if rec:
+                    # Compute next_refresh similar to list view
+                    next_refresh = None
+                    try:
+                        last = rec.get('last_scraped')
+                        interval = rec.get('refresh_interval_minutes')
+                        if last and interval and int(interval) > 0:
+                            # SQLite returns 'YYYY-MM-DD HH:MM:SS'
+                            from datetime import datetime, timedelta
+                            try:
+                                dt_last = datetime.fromisoformat(str(last))
+                            except Exception:
+                                # Fallback: parse only first 19 chars
+                                dt_last = datetime.fromisoformat(str(last)[:19])
+                            dt_next = dt_last + timedelta(minutes=int(interval))
+                            next_refresh = dt_next.strftime('%Y-%m-%d %H:%M')
+                    except Exception:
+                        next_refresh = None
+                    return jsonify({
+                        'status': 'not_found',
+                        'last_update_status': rec.get('last_update_status'),
+                        'last_scraped': rec.get('last_scraped'),
+                        'next_refresh': next_refresh
+                    })
+                else:
+                    # Record is gone; the URL was deleted
+                    return jsonify({'status': 'deleted'})
+            except Exception:
+                pass
+            return jsonify({'status': 'not_found'})
         
         @self.app.route('/delete/<folder>/<filename>')
         def delete_file(folder, filename):
@@ -938,6 +1262,23 @@ class RAGDocumentHandler:
                 flash(f'Error deleting file: {str(e)}', 'error')
                 logger.error(f"Delete error: {str(e)}")
             
+            return redirect(url_for('index'))
+
+        @self.app.route('/delete_file_bg/<folder>/<filename>', methods=['POST'])
+        def delete_file_bg(folder: str, filename: str):
+            """Start background deletion for a file with a progress bar, optionally removing embeddings if from uploaded."""
+            if folder not in ['staging', 'uploaded']:
+                flash('Invalid folder', 'error')
+                return redirect(url_for('index'))
+            # Seed processing status so the card shows a bar immediately
+            st = self.processing_status.get(filename)
+            if not st:
+                self.processing_status[filename] = ProcessingStatus(filename=filename)
+            # Start background worker
+            th = threading.Thread(target=self._delete_file_background, args=(folder, filename))
+            th.daemon = True
+            th.start()
+            flash('Deletion started in background', 'info')
             return redirect(url_for('index'))
         
         @self.app.route('/delete_embeddings/<filename>', methods=['POST'])
@@ -982,12 +1323,98 @@ class RAGDocumentHandler:
         @self.app.route('/delete_url/<int:url_id>', methods=['POST'])
         def delete_url(url_id):
             """Delete a URL."""
+            # Load the URL and any crawled pages
+            url_rec = self.url_manager.get_url_by_id(url_id)
+            if not url_rec:
+                flash('URL not found', 'error')
+                return redirect(url_for('index'))
+            url = url_rec.get('url')
+            # Delete embeddings for the single URL
+            try:
+                doc_id = hashlib.sha1(url.strip().encode('utf-8')).hexdigest()[:16]
+                self.milvus_manager.delete_document(document_id=doc_id)
+            except Exception as e:
+                logger.warning(f"Failed to delete primary URL embeddings: {e}")
+            # If domain crawl, delete each page embeddings
+            try:
+                pages = self.url_manager.get_pages_for_parent(url_id)
+                for page_url in pages:
+                    try:
+                        page_doc_id = hashlib.sha1(page_url.strip().encode('utf-8')).hexdigest()[:16]
+                        self.milvus_manager.delete_document(document_id=page_doc_id)
+                    except Exception as de:
+                        logger.warning(f"Failed to delete page embeddings for {page_url}: {de}")
+                # Remove page records
+                self.url_manager.delete_pages_for_parent(url_id)
+            except Exception as e:
+                logger.warning(f"Failed to clean up url_pages: {e}")
+
+            # Finally remove the URL record
             result = self.url_manager.delete_url(url_id)
             if result['success']:
-                flash('URL deleted successfully', 'success')
+                flash('URL and related embeddings deleted successfully', 'success')
             else:
                 flash(f'Failed to delete URL: {result["message"]}', 'error')
-            
+            return redirect(url_for('index'))
+
+        @self.app.route('/delete_url_bg/<int:url_id>', methods=['POST'])
+        def delete_url_bg(url_id: int):
+            """Start background deletion of a URL and its embeddings, with progress bar."""
+            url_rec = self.url_manager.get_url_by_id(url_id)
+            if not url_rec:
+                flash('URL not found', 'error')
+                return redirect(url_for('index'))
+            # If already processing something (refresh or delete), don't start another
+            if url_id in self.url_processing_status:
+                flash('An operation is already in progress for this URL', 'info')
+                return redirect(url_for('index'))
+            # Seed a status entry so the UI shows a progress bar immediately after redirect
+            self.url_processing_status[url_id] = ProcessingStatus(filename=url_rec.get('title') or url_rec.get('url'))
+            th = threading.Thread(target=self._delete_url_background, args=(url_id,))
+            th.daemon = True
+            th.start()
+            flash('Deletion started in background', 'info')
+            return redirect(url_for('index'))
+
+        @self.app.route('/update_url/<int:url_id>', methods=['POST'])
+        def update_url(url_id: int):
+            """Update URL metadata including title, description, and refresh schedule."""
+            title = request.form.get('title')
+            description = request.form.get('description')
+            refresh_raw = request.form.get('refresh_interval_minutes')
+            crawl_domain_flag = 1 if request.form.get('crawl_domain') in ('on', '1', 'true', 'True') else 0
+            ignore_robots_flag = 1 if request.form.get('ignore_robots') in ('on', '1', 'true', 'True') else 0
+            refresh_interval_minutes = None
+            if refresh_raw:
+                try:
+                    refresh_interval_minutes = int(refresh_raw)
+                    if refresh_interval_minutes < 0:
+                        refresh_interval_minutes = None
+                except ValueError:
+                    refresh_interval_minutes = None
+            result = self.url_manager.update_url_metadata(url_id, title, description, refresh_interval_minutes, crawl_domain_flag, ignore_robots_flag)
+            if result.get('success'):
+                flash('URL metadata updated', 'success')
+            else:
+                flash(f"Failed to update URL: {result.get('message','Unknown error')}", 'error')
+            return redirect(url_for('index'))
+
+        @self.app.route('/ingest_url/<int:url_id>', methods=['POST'])
+        def ingest_url(url_id: int):
+            """Trigger immediate ingestion/refresh for a URL."""
+            url_rec = self.url_manager.get_url_by_id(url_id)
+            if not url_rec:
+                flash('URL not found', 'error')
+                return redirect(url_for('index'))
+            # Initialize and start background refresh with progress if not already running
+            if url_id in self.url_processing_status:
+                flash('Refresh already in progress for this URL', 'info')
+                return redirect(url_for('index'))
+            self.url_processing_status[url_id] = ProcessingStatus(filename=url_rec.get('title') or url_rec.get('url'))
+            th = threading.Thread(target=self._process_url_background, args=(url_rec['id'],))
+            th.daemon = True
+            th.start()
+            flash('Refresh started in background', 'info')
             return redirect(url_for('index'))
     
     def _allowed_file(self, filename: str) -> bool:
@@ -1032,6 +1459,389 @@ class RAGDocumentHandler:
             status.status = "completed"; status.message = f"Successfully processed {len(chunks)} chunks"; status.progress = 100; status.end_time = datetime.now()
         except Exception as e:
             status.status = "error"; status.error_details = str(e); status.message = f"Processing failed: {str(e)}"; status.end_time = datetime.now(); logger.error(f"Processing failed for {filename}: {str(e)}")
+
+    def _delete_file_background(self, folder: str, filename: str) -> None:
+        """Background deletion of a local file; when deleting from uploaded, remove embeddings first."""
+        # Ensure status entry
+        st = self.processing_status.get(filename) or ProcessingStatus(filename=filename)
+        self.processing_status[filename] = st
+        st.status = 'processing'; st.progress = 5; st.message = 'Preparing deletion...'; st.start_time = datetime.now()
+        try:
+            folder_path = self.config.UPLOAD_FOLDER if folder == 'staging' else self.config.UPLOADED_FOLDER
+            file_path = os.path.join(folder_path, filename)
+            # When in uploaded, remove embeddings by filename
+            if folder == 'uploaded':
+                st.message = 'Removing embeddings...'; st.progress = 25
+                try:
+                    self.milvus_manager.delete_document(filename=filename)
+                except Exception as e:
+                    logger.warning(f"Embedding deletion failed for {filename}: {e}")
+            # Delete the file from disk
+            st.message = 'Deleting file from disk...'; st.progress = 75
+            try:
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+            except Exception as e:
+                logger.error(f"File delete failed for {filename}: {e}")
+                raise
+            st.status = 'completed'; st.message = 'Deletion complete'; st.progress = 100; st.end_time = datetime.now()
+        except Exception as e:
+            st.status = 'error'; st.error_details = str(e); st.message = f'Deletion failed: {e}'; st.progress = 100; st.end_time = datetime.now()
+        finally:
+            # Clear the status after a short delay to let UI catch last update
+            try:
+                # Keep brief window; UI polling will switch to normal card display after reloads or refresh
+                pass
+            except Exception:
+                pass
+
+    def _process_url_background(self, url_id: int) -> None:
+        """Fetch, chunk, and index the content at a URL. Replace previous embeddings for that URL."""
+        try:
+            url_rec = self.url_manager.get_url_by_id(url_id)
+            if not url_rec:
+                return
+            url = url_rec['url']
+            # prepare URL status object
+            st = self.url_processing_status.get(url_id)
+            if st is None:
+                st = ProcessingStatus(filename=url)
+                self.url_processing_status[url_id] = st
+            st.status = "processing"; st.progress = 5; st.message = "Starting URL refresh..."; st.start_time = datetime.now()
+            # Deterministic document_id from URL string
+            url_sig = url.strip()
+            document_id = hashlib.sha1(url_sig.encode('utf-8')).hexdigest()[:16]
+            logger.info(f"Refreshing URL id={url_id} url={url} doc_id={document_id}")
+            # Crawl entire domain if enabled; else only single page
+            if int(url_rec.get('crawl_domain') or 0) == 1:
+                st.message = "Discovering domain pages..."; st.progress = 10
+                pages = self._discover_domain_urls(url, max_pages=getattr(self.config, 'CRAWL_MAX_PAGES', 50))
+                logger.info(f"Domain crawl enabled: discovered {len(pages)} page(s) for {url}")
+                any_updated = False
+                any_content = False
+                total = max(1, len(pages))
+                processed = 0
+                for page_url in pages:
+                    try:
+                        if not (int(url_rec.get('ignore_robots') or 0) == 1 or self._can_fetch(page_url)):
+                            logger.debug(f"Robots disallow (skip): {page_url}")
+                            continue
+                        netloc = urllib.parse.urlparse(page_url).netloc
+                        self._respect_rate_limit(netloc)
+                        st.status = "chunking"; st.message = f"Fetching & chunking {processed+1}/{total} pages..."; st.progress = max(st.progress, 15)
+                        page_doc_id = hashlib.sha1(page_url.strip().encode('utf-8')).hexdigest()[:16]
+                        chunks = self.document_processor.load_and_chunk_url(page_url, page_doc_id)
+                        if not chunks:
+                            # mark page as no content
+                            self.url_manager.set_page_hash(url_id, page_url, '')
+                            processed += 1
+                            st.progress = min(95, 15 + int(75 * processed / total))
+                            continue
+                        # Compute full content hash from concatenated text
+                        full_text = "\n".join(d.page_content or '' for d in chunks).strip()
+                        page_hash = hashlib.sha1(full_text.encode('utf-8')).hexdigest()[:16] if full_text else ''
+                        prev_hash = self.url_manager.get_page_hash(page_url)
+                        if prev_hash and prev_hash == page_hash:
+                            logger.info(f"No change for {page_url}; skipping reindex")
+                            self.url_manager.set_page_hash(url_id, page_url, page_hash)
+                            processed += 1
+                            st.progress = min(95, 15 + int(75 * processed / total))
+                            continue
+                        st.status = "embedding"; st.message = f"Enriching metadata {processed+1}/{total}..."; st.progress = max(st.progress, 40)
+                        self.document_processor.enrich_topics(chunks)
+                        st.status = "storing"; st.message = f"Storing in Milvus {processed+1}/{total}..."; st.progress = max(st.progress, 60)
+                        try:
+                            self.milvus_manager.delete_document(document_id=page_doc_id)
+                        except Exception as de:
+                            logger.warning(f"Delete existing embeddings failed for {page_url}: {de}")
+                        # Safety: avoid inserting if chunks list is empty after any filtering
+                        if chunks:
+                            self.milvus_manager.insert_documents(page_url, chunks)
+                        self.url_manager.set_page_hash(url_id, page_url, page_hash)
+                        any_updated = True
+                        any_content = True
+                        processed += 1
+                        st.progress = min(95, 15 + int(75 * processed / total))
+                    except Exception as pe:
+                        logger.error(f"Failed processing page {page_url}: {pe}")
+                # Set aggregate parent status
+                if any_updated:
+                    self.url_manager.update_url_hash_status(url_id, None, 'updated')
+                else:
+                    # if we saw any content and none updated, unchanged; else no_content
+                    agg_status = 'unchanged' if any_content else 'no_content'
+                    self.url_manager.update_url_hash_status(url_id, None, agg_status)
+            else:
+                # Load and chunk single page
+                if not (int(url_rec.get('ignore_robots') or 0) == 1 or self._can_fetch(url)):
+                    logger.warning(f"Robots disallow for {url}; skipping fetch")
+                    st.status = "error"; st.message = "Blocked by robots.txt"; st.progress = 100; st.end_time = datetime.now()
+                    return
+                self._respect_rate_limit(urllib.parse.urlparse(url).netloc)
+                st.status = "chunking"; st.message = "Loading and chunking page..."; st.progress = 30
+                chunks = self.document_processor.load_and_chunk_url(url, document_id)
+                if not chunks:
+                    logger.warning(f"No chunks produced for {url}; marking no_content")
+                    self.url_manager.update_url_hash_status(url_id, None, 'no_content')
+                    logger.info(f"URL refresh complete (no content): {url}")
+                    st.status = "completed"; st.message = "No content"; st.progress = 100; st.end_time = datetime.now()
+                    return
+                full_text = "\n".join(d.page_content or '' for d in chunks).strip()
+                page_hash = hashlib.sha1(full_text.encode('utf-8')).hexdigest()[:16] if full_text else ''
+                prev_hash = (url_rec.get('last_content_hash') or '').strip()
+                if prev_hash and prev_hash == page_hash:
+                    logger.info(f"No change for {url}; skipping reindex")
+                    self.url_manager.update_url_hash_status(url_id, page_hash, 'unchanged')
+                    st.status = "completed"; st.message = "Unchanged"; st.progress = 100; st.end_time = datetime.now()
+                    return
+                st.status = "embedding"; st.message = "Enriching metadata via LLM..."; st.progress = 60
+                self.document_processor.enrich_topics(chunks)
+                st.status = "storing"; st.message = "Storing in Milvus..."; st.progress = 80
+                try:
+                    self.milvus_manager.delete_document(document_id=document_id)
+                except Exception as e:
+                    logger.warning(f"Delete existing URL embeddings warning: {e}")
+                # Safety: avoid inserting if chunks ended up empty after dedupe
+                if chunks:
+                    self.milvus_manager.insert_documents(url, chunks)
+                self.url_manager.update_url_hash_status(url_id, page_hash, 'updated')
+
+            # Mark scraped
+            if int(url_rec.get('crawl_domain') or 0) == 1:
+                # For domain crawl we already set an aggregate status above; just ensure last_scraped is updated
+                try:
+                    self.url_manager.mark_scraped(url_id, url_rec.get('refresh_interval_minutes'))
+                except Exception:
+                    pass
+            logger.info(f"URL refresh complete: {url}")
+            st.status = "completed"; st.message = "Refresh complete"; st.progress = 100; st.end_time = datetime.now()
+        except Exception as e:
+            logger.error(f"URL processing failed (id={url_id}): {e}")
+            try:
+                st = self.url_processing_status.get(url_id)
+                if st:
+                    st.status = "error"; st.message = f"Refresh failed: {e}"; st.error_details = str(e); st.progress = 100; st.end_time = datetime.now()
+            except Exception:
+                pass
+        finally:
+            # Always clear the in-memory URL status to avoid infinite UI polling/reloads
+            try:
+                del self.url_processing_status[url_id]
+            except Exception:
+                pass
+
+    def _scheduler_loop(self):
+        """Background loop to schedule URL refresh based on next_run."""
+        logger.info("URL scheduler started")
+        while True:
+            try:
+                due = self.url_manager.get_due_urls()
+                if due:
+                    logger.info(f"Scheduler found {len(due)} due URL(s)")
+                for rec in due:
+                    # Avoid starting a duplicate refresh if one is already running for this URL
+                    if rec['id'] in self.url_processing_status:
+                        continue
+                    self.url_processing_status[rec['id']] = ProcessingStatus(filename=rec.get('title') or rec.get('url'))
+                    t = threading.Thread(target=self._process_url_background, args=(rec['id'],))
+                    t.daemon = True
+                    t.start()
+                # sleep shorter if work was done
+                time.sleep(self.config.SCHEDULER_POLL_SECONDS_BUSY if due else self.config.SCHEDULER_POLL_SECONDS_IDLE)
+            except Exception as e:
+                logger.error(f"Scheduler loop error: {e}")
+                time.sleep(30)
+
+    def _start_scheduler(self):
+        th = threading.Thread(target=self._scheduler_loop)
+        th.daemon = True
+        th.start()
+
+    def _discover_domain_urls(self, base_url: str, max_pages: int = 50) -> List[str]:
+        """Discover a bounded set of in-domain URLs starting from base_url."""
+        try:
+            parsed = urllib.parse.urlparse(base_url)
+            base_netloc = parsed.netloc
+            headers = { 'User-Agent': self.config.CRAWL_USER_AGENT }
+            to_visit: List[str] = [base_url]
+            visited: set = set()
+            discovered: List[str] = []
+            blocked_exts = {'.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.pdf', '.zip', '.tar', '.gz', '.rar', '.7z', '.mp4', '.mp3', '.wav'}
+            # Check if the parent URL has ignore_robots flag
+            ignore_robots_parent = False
+            try:
+                # Resolve parent URL id via DB
+                with sqlite3.connect(self.url_manager.db_path) as conn:
+                    conn.row_factory = sqlite3.Row
+                    c = conn.cursor()
+                    c.execute("SELECT ignore_robots FROM urls WHERE url = ?", (base_url,))
+                    row = c.fetchone()
+                    if row:
+                        ignore_robots_parent = int(dict(row).get('ignore_robots') or 0) == 1
+            except Exception:
+                pass
+            while to_visit and len(discovered) < max_pages:
+                current = to_visit.pop(0)
+                if current in visited:
+                    continue
+                visited.add(current)
+                try:
+                    if not (ignore_robots_parent or self._can_fetch(current)):
+                        logger.debug(f"Robots disallow: {current}")
+                        continue
+                    self._respect_rate_limit(base_netloc)
+                    resp = requests.get(current, headers=headers, timeout=self.config.CRAWL_REQUEST_TIMEOUT)
+                    ct = resp.headers.get('Content-Type', '')
+                    if 'text/html' not in ct:
+                        continue
+                    discovered.append(current)
+                    soup = BeautifulSoup(resp.content, 'html.parser')
+                    for a in soup.find_all('a', href=True):
+                        href = a['href']
+                        abs_url = urllib.parse.urljoin(current, href)
+                        u = urllib.parse.urlparse(abs_url)
+                        if u.scheme not in ('http', 'https'):
+                            continue
+                        if u.netloc != base_netloc:
+                            continue
+                        path_lower = u.path.lower()
+                        if any(path_lower.endswith(ext) for ext in blocked_exts):
+                            continue
+                        # Normalize: remove params/query/fragment; strip trailing slash
+                        norm = urllib.parse.urlunparse((u.scheme, u.netloc, u.path.rstrip('/'), '', '', ''))
+                        if norm not in visited and norm not in to_visit and norm not in discovered:
+                            to_visit.append(norm)
+                except Exception:
+                    continue
+            return discovered
+        except Exception as e:
+            logger.error(f"Discovery failed for {base_url}: {e}")
+            return []
+
+    def _get_robots(self, base_url: str) -> Tuple[RobotFileParser, Optional[float]]:
+        """Fetch and cache robots.txt for a domain; returns parser and optional crawl delay."""
+        try:
+            parsed = urllib.parse.urlparse(base_url)
+            origin = f"{parsed.scheme}://{parsed.netloc}"
+            if origin in self._robots_cache:
+                return self._robots_cache[origin]
+            robots_url = urllib.parse.urljoin(origin, '/robots.txt')
+            rp = RobotFileParser()
+            rp.set_url(robots_url)
+            try:
+                rp.read()
+            except Exception:
+                pass
+            # urllib's RobotFileParser doesn't expose crawl-delay; we'll do a manual fetch to parse
+            crawl_delay: Optional[float] = None
+            try:
+                headers = { 'User-Agent': self.config.CRAWL_USER_AGENT }
+                resp = requests.get(robots_url, headers=headers, timeout=self.config.CRAWL_REQUEST_TIMEOUT)
+                if resp.status_code == 200 and isinstance(resp.text, str):
+                    ua = None
+                    for line in resp.text.splitlines():
+                        s = line.strip()
+                        if not s or s.startswith('#'):
+                            continue
+                        lower = s.lower()
+                        if lower.startswith('user-agent:'):
+                            ua = s.split(':',1)[1].strip()
+                        elif lower.startswith('crawl-delay:'):
+                            val = s.split(':',1)[1].strip()
+                            try:
+                                cd = float(val)
+                                # apply if this section matches our UA or wildcard
+                                if ua in (self.config.CRAWL_USER_AGENT, '*'):
+                                    crawl_delay = cd
+                            except Exception:
+                                pass
+            except Exception:
+                pass
+            self._robots_cache[origin] = (rp, crawl_delay)
+            return rp, crawl_delay
+        except Exception:
+            # default: allow
+            rp = RobotFileParser()
+            rp.parse("")
+            return rp, None
+
+    def _can_fetch(self, url: str) -> bool:
+        try:
+            rp, _ = self._get_robots(url)
+            return rp.can_fetch(self.config.CRAWL_USER_AGENT, url)
+        except Exception:
+            return True
+
+    def _respect_rate_limit(self, netloc: str) -> None:
+        """Sleep to respect per-domain rate limits and robots crawl-delay if set."""
+        try:
+            origin = f"https://{netloc}"
+            _, crawl_delay = self._get_robots(origin)
+            base_delay = crawl_delay if crawl_delay is not None else self.config.CRAWL_DELAY_SECONDS
+            jitter = random.uniform(0, self.config.CRAWL_JITTER_SECONDS)
+            delay = max(0.0, base_delay + jitter)
+            now = time.time()
+            last = self._domain_last_request.get(netloc, 0)
+            elapsed = now - last
+            if elapsed < delay:
+                time.sleep(delay - elapsed)
+            self._domain_last_request[netloc] = time.time()
+        except Exception:
+            pass
+
+    def _delete_url_background(self, url_id: int) -> None:
+        """Background deletion of a URL: remove embeddings for the URL and its crawled pages, then delete DB records."""
+        st = self.url_processing_status.get(url_id) or ProcessingStatus(filename=str(url_id))
+        self.url_processing_status[url_id] = st
+        st.status = 'processing'; st.progress = 5; st.message = 'Preparing deletion...'; st.start_time = datetime.now()
+        try:
+            url_rec = self.url_manager.get_url_by_id(url_id)
+            if not url_rec:
+                st.status = 'completed'; st.progress = 100; st.message = 'Already deleted'; st.end_time = datetime.now()
+                return
+            url = url_rec.get('url')
+            title = url_rec.get('title') or url
+            # Delete primary URL embeddings
+            st.status = 'storing'; st.message = 'Removing primary embeddings...'; st.progress = 25
+            try:
+                doc_id = hashlib.sha1(url.strip().encode('utf-8')).hexdigest()[:16]
+                self.milvus_manager.delete_document(document_id=doc_id)
+            except Exception as e:
+                logger.warning(f"Failed to delete primary URL embeddings: {e}")
+            # Delete crawled page embeddings if any
+            pages = []
+            try:
+                pages = self.url_manager.get_pages_for_parent(url_id)
+            except Exception as e:
+                logger.warning(f"Failed to list url_pages for {url_id}: {e}")
+            total = max(1, len(pages))
+            for idx, page_url in enumerate(pages):
+                try:
+                    st.message = f"Removing page {idx+1}/{len(pages)}..."; st.progress = min(90, 25 + int(60 * (idx+1) / total))
+                    page_doc_id = hashlib.sha1(page_url.strip().encode('utf-8')).hexdigest()[:16]
+                    self.milvus_manager.delete_document(document_id=page_doc_id)
+                except Exception as de:
+                    logger.warning(f"Failed to delete page embeddings for {page_url}: {de}")
+            # Remove url_pages records
+            try:
+                self.url_manager.delete_pages_for_parent(url_id)
+            except Exception as e:
+                logger.warning(f"Failed to delete url_pages rows for {url_id}: {e}")
+            # Finally remove the URL record
+            st.message = 'Removing URL record...'; st.progress = 95
+            try:
+                self.url_manager.delete_url(url_id)
+            except Exception as e:
+                logger.error(f"Failed to delete URL record {url_id}: {e}")
+            st.status = 'completed'; st.message = 'Deletion complete'; st.progress = 100; st.end_time = datetime.now()
+        except Exception as e:
+            st.status = 'error'; st.error_details = str(e); st.message = f'Deletion failed: {e}'; st.progress = 100; st.end_time = datetime.now()
+        finally:
+            # Clear status so UI can get 'deleted' from url_status
+            try:
+                del self.url_processing_status[url_id]
+            except Exception:
+                pass
     
     def run(self) -> None:
         """Start the Flask web application."""
