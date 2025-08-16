@@ -13,13 +13,13 @@ application specific initialization.
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any, Dict, Iterable, List, Optional
 
 import sqlite3
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_ollama import OllamaEmbeddings
+from .email_manager import EmailManager
 
 logger = logging.getLogger(__name__)
 
@@ -58,24 +58,12 @@ class EmailProcessor:
         self.splitter = RecursiveCharacterTextSplitter(
             chunk_size=chunk_size, chunk_overlap=chunk_overlap
         )
+        self.manager = EmailManager(sqlite_conn)
 
     # ------------------------------------------------------------------
     def _store_metadata(self, record: Dict[str, Any]) -> None:
-        """Persist an email record to the SQLite ``emails`` table."""
-        columns = list(record.keys())
-        placeholders = ",".join(["?"] * len(columns))
-        col_clause = ",".join(columns)
-        sql = f"INSERT OR REPLACE INTO emails ({col_clause}) VALUES ({placeholders})"
-        values: List[Any] = []
-        for c in columns:
-            v = record[c]
-            if isinstance(v, (list, dict)):
-                values.append(json.dumps(v))
-            else:
-                values.append(v)
-        cur = self.sqlite_conn.cursor()
-        cur.execute(sql, values)
-        self.sqlite_conn.commit()
+        """Persist an email record using :class:`EmailManager`."""
+        self.manager.upsert_email(record)
 
     # ------------------------------------------------------------------
     def _store_embeddings(

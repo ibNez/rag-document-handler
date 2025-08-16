@@ -242,6 +242,45 @@ class URLManager:
                     ingestion_timestamp TEXT DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
+            # Emails metadata table
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS emails (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    message_id TEXT UNIQUE NOT NULL,
+                    thread_id TEXT,
+                    subject TEXT,
+                    from_addr TEXT,
+                    to_addrs TEXT,
+                    cc_addrs TEXT,
+                    date_utc TEXT,
+                    received_utc TEXT,
+                    in_reply_to TEXT,
+                    references_ids TEXT,
+                    is_reply INTEGER,
+                    is_forward INTEGER,
+                    raw_size_bytes INTEGER,
+                    body_text TEXT,
+                    body_html TEXT,
+                    language TEXT,
+                    has_attachments INTEGER,
+                    attachment_manifest TEXT,
+                    processed INTEGER DEFAULT 0,
+                    ingested_at TEXT,
+                    updated_at TEXT,
+                    content_hash TEXT,
+                    summary TEXT,
+                    keywords TEXT,
+                    auto_topic TEXT,
+                    manual_topic TEXT,
+                    topic_confidence REAL,
+                    topic_version TEXT,
+                    error_state TEXT,
+                    direction TEXT,
+                    participants TEXT,
+                    participants_hash TEXT,
+                    to_primary TEXT
+                )
+            ''')
             # Lightweight migration: ensure required columns exist (idempotent)
             try:
                 cursor.execute("PRAGMA table_info(urls)")
