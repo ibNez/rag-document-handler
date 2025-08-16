@@ -45,7 +45,7 @@ The setup script installs dependencies, prepares Milvus, and initializes the loc
 
 - Configure environment variables via `.env` (see root `README.md`).
 - Visit [Usage Guide](usage.md) to interact with the application.
-- The `knowledgebase.db` SQLite database is created on first run to store URL and future email metadata.
+- The `knowledgebase.db` SQLite database is created on first run to store URL and email metadata.
 
 ## TODOs
 

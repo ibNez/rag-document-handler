@@ -11,6 +11,7 @@ For extended guides and architecture notes, see the [documentation directory](do
 - **Vector Embeddings**: Automatic text extraction and embedding generation using SentenceTransformers all-MiniLM-L6-v2 model
 - **Milvus Integration**: Store and retrieve document embeddings in Milvus vector database
 - **SQLite Integration**: Persist URL and email metadata in a local SQLite database (`knowledgebase.db`)
+- **Email Account Management**: Configure multiple IMAP accounts and ingest mailboxes without duplicates
 - **Conversational AI**: RAG-powered chat interface using Ollama for intelligent document querying
 - **Semantic Search**: Find relevant documents using natural language queries
 - **Web Interface**: Clean, responsive Flask web application with Bootstrap UI
@@ -20,7 +21,7 @@ For extended guides and architecture notes, see the [documentation directory](do
 ## 📋 How It Works
 
 1. **Content Processing**: Documents (PDFs, text files, etc.) are uploaded and processed for text extraction
-2. **URL & Email Processing**: URLs are automatically scraped to extract page titles and stored in `knowledgebase.db`; email ingestion will likewise persist messages and headers in the same database
+2. **URL & Email Processing**: URLs are automatically scraped to extract page titles and stored in `knowledgebase.db`; email messages are downloaded from configured accounts and persisted with their embeddings
 3. **Vector Embedding**: The embedding model transforms text content into numerical vectors representing semantic meaning
 4. **Vector Storage**: Generated embeddings are stored in a Milvus vector database optimized for high-dimensional vectors
 5. **Semantic Retrieval**: Applications can query the database for semantic search and content recommendation
@@ -30,7 +31,7 @@ For extended guides and architecture notes, see the [documentation directory](do
 
 - **Backend**: Python 3.8+ with Flask web framework (Single interface)
 - **Vector Database**: Milvus for efficient vector storage and retrieval
-- **Relational Storage**: SQLite database (`knowledgebase.db`) for URL management and future email metadata
+- **Relational Storage**: SQLite database (`knowledgebase.db`) for URL and email metadata
 - **Web Scraping**: BeautifulSoup4 and Requests for automatic URL title extraction
 - **AI Integration**: Ollama for conversational RAG functionality
 - **ML Framework**: SentenceTransformers for document embeddings
@@ -174,7 +175,7 @@ VECTOR_DIM=384
 
 The application automatically creates and manages the following data stores:
 
-- **`knowledgebase.db`**: SQLite database storing URL metadata and, in the future, email content
+- **`knowledgebase.db`**: SQLite database storing URL and email content
 - **Milvus Collections**: Vector embeddings stored in Milvus database
 - **Staging/Uploaded Folders**: Document file organization
 

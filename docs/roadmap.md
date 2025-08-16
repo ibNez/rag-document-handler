@@ -10,8 +10,9 @@ This document tracks planned enhancements and missing features.
 - [ ] Extract configuration settings into `config.py`.
 - [ ] Add command-line interface for document ingestion and search.
 - [ ] Implement ETL framework for loading diverse data sources into the RAG data lake.
-- [ ] Add email ingestion module for specified account credentials with metadata stored in
+- [x] Add email ingestion module for specified account credentials with metadata stored in
       `knowledgebase.db` and embeddings persisted in Milvus.
+- [x] Add UI for managing multiple email accounts.
 - [ ] Add image ingestion using TensorFlow object classification with embeddings stored in Milvus.
 - [ ] Improve test coverage and add sample tests.
 

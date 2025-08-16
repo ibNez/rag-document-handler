@@ -101,6 +101,126 @@
             </div>
         </div>
 
+        <!-- Email Accounts -->
+        <div class="row mb-4">
+            <div class="col-md-12">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0"><i class="fas fa-envelope me-2"></i>Email Accounts</h5>
+                        <button class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#addAccountModal">
+                            <i class="fas fa-plus me-1"></i>Add Account
+                        </button>
+                    </div>
+                    <div class="card-body">
+                        {% if email_accounts %}
+                        <ul class="list-group">
+                            {% for acct in email_accounts %}
+                            <li class="list-group-item d-flex justify-content-between align-items-center">
+                                <span>{{ acct.name }}</span>
+                                <div>
+                                    <button class="btn btn-sm btn-outline-secondary me-2" data-bs-toggle="modal" data-bs-target="#editAccountModal{{ acct.name|replace(' ', '_') }}">Edit</button>
+                                    <form method="POST" action="{{ url_for('delete_email_account', name=acct.name) }}" class="d-inline" onsubmit="return confirm('Delete this account?')">
+                                        <button type="submit" class="btn btn-sm btn-outline-danger">Remove</button>
+                                    </form>
+                                </div>
+                            </li>
+
+                            <!-- Edit Account Modal -->
+                            <div class="modal fade" id="editAccountModal{{ acct.name|replace(' ', '_') }}" tabindex="-1">
+                                <div class="modal-dialog">
+                                    <div class="modal-content">
+                                        <form method="POST" action="{{ url_for('update_email_account', name=acct.name) }}">
+                                            <div class="modal-header">
+                                                <h5 class="modal-title">Edit Account</h5>
+                                                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                                            </div>
+                                            <div class="modal-body">
+                                                <div class="mb-3">
+                                                    <label class="form-label">Name</label>
+                                                    <input type="text" class="form-control" name="name" value="{{ acct.name }}" readonly>
+                                                </div>
+                                                <div class="mb-3">
+                                                    <label class="form-label">IMAP Host</label>
+                                                    <input type="text" class="form-control" name="imap_host" value="{{ acct.imap_host }}" required>
+                                                </div>
+                                                <div class="mb-3">
+                                                    <label class="form-label">IMAP User</label>
+                                                    <input type="text" class="form-control" name="imap_user" value="{{ acct.imap_user }}" required>
+                                                </div>
+                                                <div class="mb-3">
+                                                    <label class="form-label">IMAP Password</label>
+                                                    <input type="password" class="form-control" name="imap_password" value="{{ acct.imap_password }}" required>
+                                                </div>
+                                                <div class="mb-3">
+                                                    <label class="form-label">IMAP Port</label>
+                                                    <input type="number" class="form-control" name="imap_port" value="{{ acct.imap_port }}" required>
+                                                </div>
+                                                <div class="mb-3">
+                                                    <label class="form-label">Mailbox</label>
+                                                    <input type="text" class="form-control" name="mailbox" value="{{ acct.mailbox }}" required>
+                                                </div>
+                                            </div>
+                                            <div class="modal-footer">
+                                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                                                <button type="submit" class="btn btn-primary">Save Changes</button>
+                                            </div>
+                                        </form>
+                                    </div>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </ul>
+                        {% else %}
+                        <p class="text-muted">No email accounts configured.</p>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Add Account Modal -->
+        <div class="modal fade" id="addAccountModal" tabindex="-1">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <form method="POST" action="{{ url_for('add_email_account') }}">
+                        <div class="modal-header">
+                            <h5 class="modal-title">Add Email Account</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                        </div>
+                        <div class="modal-body">
+                            <div class="mb-3">
+                                <label class="form-label">Name</label>
+                                <input type="text" class="form-control" name="name" required>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">IMAP Host</label>
+                                <input type="text" class="form-control" name="imap_host" required>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">IMAP User</label>
+                                <input type="text" class="form-control" name="imap_user" required>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">IMAP Password</label>
+                                <input type="password" class="form-control" name="imap_password" required>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">IMAP Port</label>
+                                <input type="number" class="form-control" name="imap_port" value="993" required>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Mailbox</label>
+                                <input type="text" class="form-control" name="mailbox" value="INBOX" required>
+                            </div>
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                            <button type="submit" class="btn btn-primary">Add</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
         <!-- File Upload -->
         <div class="row mb-4">
             <div class="col-md-12">

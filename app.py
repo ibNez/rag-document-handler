@@ -31,6 +31,7 @@ from datetime import datetime
 import re
 import json
 import hashlib
+from email_accounts import EmailAccount, EmailAccountManager
 
 # Web scraping
 from bs4 import BeautifulSoup
@@ -1043,6 +1044,7 @@ class RAGDocumentHandler:
         self.document_processor = DocumentProcessor(self.config)
         self.milvus_manager = MilvusManager(self.config)
         self.url_manager = URLManager()
+        self.email_account_manager = EmailAccountManager()
 
         # Processing status tracking
         self.processing_status: Dict[str, ProcessingStatus] = {}
@@ -1111,6 +1113,7 @@ class RAGDocumentHandler:
                     u['robots_has_rules'] = None
                     u['robots_crawl_delay'] = None
                 enriched_urls.append(u)
+            email_accounts = self.email_account_manager.list_accounts()
             
             return render_template('index.html',
                                  staging_files=staging_files,
@@ -1118,7 +1121,8 @@ class RAGDocumentHandler:
                                  collection_stats=collection_stats,
                                  processing_status=self.processing_status,
                                  url_processing_status=self.url_processing_status,
-                                 urls=enriched_urls)
+                                 urls=enriched_urls,
+                                 email_accounts=email_accounts)
         
         @self.app.route('/upload', methods=['POST'])
         def upload_file():
@@ -1356,6 +1360,50 @@ class RAGDocumentHandler:
             else:
                 flash(f'Failed to delete URL: {result["message"]}', 'error')
             return redirect(url_for('index'))
+
+        @self.app.route('/email_accounts/add', methods=['POST'])
+        def add_email_account():
+            """Add a new email account configuration."""
+            account = EmailAccount(
+                name=request.form.get('name', '').strip(),
+                imap_host=request.form.get('imap_host', '').strip(),
+                imap_user=request.form.get('imap_user', '').strip(),
+                imap_password=request.form.get('imap_password', '').strip(),
+                imap_port=int(request.form.get('imap_port', '993') or 993),
+                mailbox=request.form.get('mailbox', 'INBOX').strip() or 'INBOX',
+            )
+            try:
+                self.email_account_manager.add_account(account)
+                flash('Email account added', 'success')
+            except Exception as e:
+                flash(f'Failed to add account: {e}', 'error')
+            return redirect(url_for('index'))
+
+        @self.app.route('/email_accounts/<name>/delete', methods=['POST'])
+        def delete_email_account(name: str):
+            """Delete an email account configuration."""
+            self.email_account_manager.remove_account(name)
+            flash('Email account removed', 'info')
+            return redirect(url_for('index'))
+
+        @self.app.route('/email_accounts/<name>/update', methods=['POST'])
+        def update_email_account(name: str):
+            """Update an existing email account."""
+            account = EmailAccount(
+                name=name,
+                imap_host=request.form.get('imap_host', '').strip(),
+                imap_user=request.form.get('imap_user', '').strip(),
+                imap_password=request.form.get('imap_password', '').strip(),
+                imap_port=int(request.form.get('imap_port', '993') or 993),
+                mailbox=request.form.get('mailbox', 'INBOX').strip() or 'INBOX',
+            )
+            try:
+                self.email_account_manager.update_account(account)
+                flash('Email account updated', 'success')
+            except Exception as e:
+                flash(f'Failed to update account: {e}', 'error')
+            return redirect(url_for('index'))
+
 
         @self.app.route('/delete_url_bg/<int:url_id>', methods=['POST'])
         def delete_url_bg(url_id: int):

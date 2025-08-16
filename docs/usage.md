@@ -22,13 +22,14 @@ The application exposes a Flask web interface for managing documents and perform
 
 - **Document Upload** – upload PDF, DOCX, DOC, TXT, or MD files.
 - **URL Management** – store URLs with automatic title extraction in `knowledgebase.db`.
-- **Metadata Storage** – persist URL details now and email records in the future using `knowledgebase.db`.
+- **Metadata Storage** – persist URL and email details in `knowledgebase.db`.
+- **Email Account Management** – manage multiple IMAP accounts and ingest mailboxes with duplicate detection.
 - **Semantic Search** – query stored documents via vector search.
 - **RAG Chat** – ask questions and receive answers synthesized from relevant documents.
 
 ## TODOs
 
 - [ ] Command-line interface for batch operations.
-- [ ] Email ingestion from configured accounts with metadata stored in `knowledgebase.db` and embeddings persisted in Milvus.
+- [x] Email ingestion from configured accounts with metadata stored in `knowledgebase.db` and embeddings persisted in Milvus.
 - [ ] Image ingestion using TensorFlow object classification with embeddings stored in Milvus.
 - [ ] Export search results to external formats.
