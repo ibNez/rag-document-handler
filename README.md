@@ -1,6 +1,8 @@
 # RAG Document Handler
 
-A comprehensive document management system for storing and retrieving document embeddings in a Milvus vector database for use with RAG (Retrieval-Augmented Generation) applications.
+A comprehensive document management system for storing and retrieving document embeddings in a Milvus vector database and related metadata in a local SQLite database (`knowledgebase.db`) for use with RAG (Retrieval-Augmented Generation) applications.
+
+For extended guides and architecture notes, see the [documentation directory](docs/README.md).
 
 ## 🚀 Features
 
@@ -8,6 +10,7 @@ A comprehensive document management system for storing and retrieving document e
 - **Smart URL Management**: Store and organize important URLs with automatic title extraction from web pages
 - **Vector Embeddings**: Automatic text extraction and embedding generation using SentenceTransformers all-MiniLM-L6-v2 model
 - **Milvus Integration**: Store and retrieve document embeddings in Milvus vector database
+- **SQLite Integration**: Persist URL and email metadata in a local SQLite database (`knowledgebase.db`)
 - **Conversational AI**: RAG-powered chat interface using Ollama for intelligent document querying
 - **Semantic Search**: Find relevant documents using natural language queries
 - **Web Interface**: Clean, responsive Flask web application with Bootstrap UI
@@ -17,7 +20,7 @@ A comprehensive document management system for storing and retrieving document e
 ## 📋 How It Works
 
 1. **Content Processing**: Documents (PDFs, text files, etc.) are uploaded and processed for text extraction
-2. **URL Processing**: URLs are automatically scraped to extract page titles and stored in SQLite database
+2. **URL & Email Processing**: URLs are automatically scraped to extract page titles and stored in `knowledgebase.db`; email ingestion will likewise persist messages and headers in the same database
 3. **Vector Embedding**: The embedding model transforms text content into numerical vectors representing semantic meaning
 4. **Vector Storage**: Generated embeddings are stored in a Milvus vector database optimized for high-dimensional vectors
 5. **Semantic Retrieval**: Applications can query the database for semantic search and content recommendation
@@ -27,7 +30,7 @@ A comprehensive document management system for storing and retrieving document e
 
 - **Backend**: Python 3.8+ with Flask web framework (Single interface)
 - **Vector Database**: Milvus for efficient vector storage and retrieval
-- **URL Storage**: SQLite database for URL management with automatic title extraction
+- **Relational Storage**: SQLite database (`knowledgebase.db`) for URL management and future email metadata
 - **Web Scraping**: BeautifulSoup4 and Requests for automatic URL title extraction
 - **AI Integration**: Ollama for conversational RAG functionality
 - **ML Framework**: SentenceTransformers for document embeddings
@@ -167,11 +170,11 @@ VECTOR_DIM=384
    - View database statistics and file information
    - Delete files from staging, or uploaded folder and database
 
-## 💾 Database Files
+## 💾 Data Stores
 
-The application automatically creates and manages several database files:
+The application automatically creates and manages the following data stores:
 
-- **`urls.db`**: SQLite database storing URL metadata and extracted titles
+- **`knowledgebase.db`**: SQLite database storing URL metadata and, in the future, email content
 - **Milvus Collections**: Vector embeddings stored in Milvus database
 - **Staging/Uploaded Folders**: Document file organization
 
@@ -219,7 +222,7 @@ docker run -d \
 
 1. Follow the development rules in `DEVELOPMENT_RULES.md`
 2. Ensure all tests pass and code is properly formatted
-3. Update documentation for any API changes
+3. Update documentation for any user-facing changes
 4. Use type hints and comprehensive docstrings
 
 ## 📄 License

@@ -48,7 +48,7 @@ fi
 echo "✅ Setup complete!"
 echo ""
 echo "📊 Note: The application will automatically create:"
-echo "   - urls.db: SQLite database for URL management"
+echo "   - knowledgebase.db: SQLite database for URL and email metadata"
 echo "   - Milvus collections for document embeddings"
 echo ""
 echo "To start the application:"
