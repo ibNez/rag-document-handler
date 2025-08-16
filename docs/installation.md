@@ -47,6 +47,22 @@ The setup script installs dependencies, prepares Milvus, and initializes the loc
 - Visit [Usage Guide](usage.md) to interact with the application.
 - The `knowledgebase.db` SQLite database is created on first run to store URL and future email metadata.
 
+## Email ingestion configuration
+
+The application can optionally synchronise an IMAP inbox. Define the following environment variables in your `.env` file to enable and configure this behaviour:
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `EMAIL_ENABLED` | `false` | Enable periodic email sync |
+| `IMAP_HOST` | _(empty)_ | IMAP server hostname |
+| `IMAP_PORT` | `993` | IMAP server port |
+| `IMAP_USERNAME` | _(empty)_ | IMAP account username |
+| `IMAP_PASSWORD` | _(empty)_ | IMAP account password |
+| `IMAP_MAILBOX` | `INBOX` | Mailbox to read from |
+| `IMAP_BATCH_LIMIT` | `50` | Maximum messages fetched per cycle |
+| `IMAP_USE_SSL` | `true` | Use SSL/TLS for IMAP connection |
+| `EMAIL_SYNC_INTERVAL_SECONDS` | `300` | Interval between sync cycles |
+
 ## TODOs
 
 - [ ] Provide Docker Compose configuration for full-stack deployment.
