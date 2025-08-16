@@ -142,7 +142,7 @@ class Config:
     SCHEDULER_POLL_SECONDS_IDLE: float = float(os.getenv('SCHEDULER_POLL_SECONDS_IDLE', '30'))
     URL_DEFAULT_REFRESH_MINUTES: int = int(os.getenv('URL_DEFAULT_REFRESH_MINUTES', '1440'))
 
-    # Email settings
+    # Email ingestion settings
     EMAIL_ENABLED: bool = os.getenv('EMAIL_ENABLED', 'false').lower() == 'true'
     IMAP_HOST: str = os.getenv('IMAP_HOST', '')
     IMAP_PORT: int = int(os.getenv('IMAP_PORT', '993'))

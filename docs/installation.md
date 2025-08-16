@@ -55,13 +55,13 @@ The application can optionally synchronise an IMAP inbox. Define the following e
 | --- | --- | --- |
 | `EMAIL_ENABLED` | `false` | Enable periodic email sync |
 | `IMAP_HOST` | _(empty)_ | IMAP server hostname |
-| `IMAP_PORT` | `993` | IMAP server port |
+| `IMAP_PORT` | `993` | IMAP server port used for the connection |
 | `IMAP_USERNAME` | _(empty)_ | IMAP account username |
 | `IMAP_PASSWORD` | _(empty)_ | IMAP account password |
 | `IMAP_MAILBOX` | `INBOX` | Mailbox to read from |
 | `IMAP_BATCH_LIMIT` | `50` | Maximum messages fetched per cycle |
 | `IMAP_USE_SSL` | `true` | Use SSL/TLS for IMAP connection |
-| `EMAIL_SYNC_INTERVAL_SECONDS` | `300` | Interval between sync cycles |
+| `EMAIL_SYNC_INTERVAL_SECONDS` | `300` | Interval between sync cycles in seconds |
 
 ## TODOs
 
