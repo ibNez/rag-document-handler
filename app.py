@@ -60,6 +60,7 @@ from langchain_core.tools import tool
 
 # Configuration
 from dotenv import load_dotenv
+from ingestion.email import EmailOrchestrator
 
 # Load environment variables
 load_dotenv()
@@ -140,6 +141,17 @@ class Config:
     SCHEDULER_POLL_SECONDS_BUSY: float = float(os.getenv('SCHEDULER_POLL_SECONDS_BUSY', '10'))
     SCHEDULER_POLL_SECONDS_IDLE: float = float(os.getenv('SCHEDULER_POLL_SECONDS_IDLE', '30'))
     URL_DEFAULT_REFRESH_MINUTES: int = int(os.getenv('URL_DEFAULT_REFRESH_MINUTES', '1440'))
+
+    # Email settings
+    EMAIL_ENABLED: bool = os.getenv('EMAIL_ENABLED', 'false').lower() == 'true'
+    IMAP_HOST: str = os.getenv('IMAP_HOST', '')
+    IMAP_PORT: int = int(os.getenv('IMAP_PORT', '993'))
+    IMAP_USERNAME: str = os.getenv('IMAP_USERNAME', '')
+    IMAP_PASSWORD: str = os.getenv('IMAP_PASSWORD', '')
+    IMAP_MAILBOX: str = os.getenv('IMAP_MAILBOX', 'INBOX')
+    IMAP_BATCH_LIMIT: int = int(os.getenv('IMAP_BATCH_LIMIT', '50'))
+    IMAP_USE_SSL: bool = os.getenv('IMAP_USE_SSL', 'true').lower() == 'true'
+    EMAIL_SYNC_INTERVAL_SECONDS: int = int(os.getenv('EMAIL_SYNC_INTERVAL_SECONDS', '300'))
 
 
 @dataclass
@@ -1369,6 +1381,13 @@ class RAGKnowledgebaseManager:
                 self._start_scheduler()
             except Exception as e:
                 logger.error(f"Failed to start scheduler: {e}")
+
+        # Start email orchestrator if enabled
+        try:
+            self.email_orchestrator = EmailOrchestrator(self.config)
+            self.email_orchestrator.start()
+        except Exception as e:
+            logger.error(f"Failed to start email orchestrator: {e}")
 
         logger.info("RAG Knowledgebase Manager application initialized")
 
