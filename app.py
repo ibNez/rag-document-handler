@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-RAG Document Handler - Simplified Single-Interface Application.
+RAG Knowledgebase Handler - Simplified Single-Interface Application for managing knowledge sources.
 
-A comprehensive document management system for storing and retrieving document 
-embeddings in a Milvus vector database for use with RAG applications.
+A comprehensive knowledgebase store for storing and retrieving information specific requests. A 
+common place for managing knowledge sources for RAG implementations.
 
 Features:
 - Document upload & management (PDF, DOCX, DOC, TXT, MD)
+- URL Locations of trusted sources
 - Vector embeddings using Ollama/SentenceTransformers
 - Milvus integration for vector storage
 - Semantic search with natural language queries
@@ -37,7 +38,7 @@ from bs4 import BeautifulSoup
 from urllib.robotparser import RobotFileParser
 
 # Flask and web components
-from flask import Flask, request, render_template, flash, redirect, url_for, jsonify
+from flask import Flask, request, render_template, flash, redirect, url_for, jsonify, send_from_directory, abort
 from werkzeug.utils import secure_filename
 from werkzeug.datastructures import FileStorage
 
@@ -100,6 +101,7 @@ class Config:
     MAX_CONTENT_LENGTH: int = int(os.getenv("MAX_CONTENT_LENGTH", "104857600"))  # 100MB
     UPLOAD_FOLDER: str = os.getenv("UPLOAD_FOLDER", "staging")
     UPLOADED_FOLDER: str = os.getenv("UPLOADED_FOLDER", "uploaded")
+    DELETED_FOLDER: str = os.getenv("DELETED_FOLDER", "deleted")
     ALLOWED_EXTENSIONS: set = field(default_factory=lambda: {"txt", "pdf", "docx", "doc", "md"})
     
     # Embedding Model Configuration
@@ -151,20 +153,32 @@ class ProcessingStatus:
     end_time: Optional[datetime] = None
     chunks_count: int = 0
     error_details: Optional[str] = None
+    title: Optional[str] = None
 
 
 class URLManager:
     """Manages URL storage and validation using SQLite database."""
-
-    def __init__(self, db_path: str = "knowledgebase.db"):
+    
+    def __init__(self, db_path: str = os.path.join("databases", "knowledgebase.db")):
         """
         Initialize URL manager with SQLite database.
-
+        
         Args:
             db_path: Path to SQLite database file
         """
+        # Ensure parent directory exists
+        try:
+            parent = os.path.dirname(db_path)
+            if parent and not os.path.exists(parent):
+                os.makedirs(parent, exist_ok=True)
+        except Exception:
+            pass
         self.db_path = db_path
         self._init_database()
+        try:
+            self._log_schema_state()
+        except Exception:
+            pass
         logger.info(f"URLManager initialized with database: {db_path}")
     
     def _init_database(self) -> None:
@@ -183,7 +197,11 @@ class URLManager:
                     refresh_interval_minutes INTEGER DEFAULT 1440,
                     last_scraped TIMESTAMP,
                     crawl_domain INTEGER DEFAULT 0,
-                    ignore_robots INTEGER DEFAULT 0
+                    ignore_robots INTEGER DEFAULT 0,
+                    last_content_hash TEXT,
+                    last_update_status TEXT,
+                    refreshing INTEGER DEFAULT 0,
+                    last_refresh_started TIMESTAMP
                 )
             ''')
             cursor.execute('''
@@ -196,48 +214,128 @@ class URLManager:
                     FOREIGN KEY(parent_url_id) REFERENCES urls(id)
                 )
             ''')
-            # Ensure new columns exist for existing databases
+            # Documents metadata table
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS documents (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    filename TEXT UNIQUE NOT NULL,
+                    title TEXT,
+                    page_count INTEGER,
+                    chunk_count INTEGER,
+                    word_count INTEGER,
+                    avg_chunk_chars REAL,
+                    median_chunk_chars REAL,
+                    top_keywords TEXT, -- JSON array
+                    processing_time_seconds REAL,
+                    ingestion_timestamp TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            # Lightweight migration: ensure required columns exist (idempotent)
             try:
                 cursor.execute("PRAGMA table_info(urls)")
-                cols = {row[1] for row in cursor.fetchall()}
-                if 'refresh_interval_minutes' not in cols:
-                    cursor.execute("ALTER TABLE urls ADD COLUMN refresh_interval_minutes INTEGER")
-                if 'last_scraped' not in cols:
-                    cursor.execute("ALTER TABLE urls ADD COLUMN last_scraped TIMESTAMP")
-                if 'crawl_domain' not in cols:
-                    cursor.execute("ALTER TABLE urls ADD COLUMN crawl_domain INTEGER DEFAULT 0")
-                if 'last_content_hash' not in cols:
-                    cursor.execute("ALTER TABLE urls ADD COLUMN last_content_hash TEXT")
-                if 'last_update_status' not in cols:
-                    cursor.execute("ALTER TABLE urls ADD COLUMN last_update_status TEXT")
-                if 'ignore_robots' not in cols:
-                    cursor.execute("ALTER TABLE urls ADD COLUMN ignore_robots INTEGER DEFAULT 0")
-            except Exception as e:
-                logger.warning(f"URL table migration check/add columns warning: {e}")
-            # Backfill default refresh interval for any existing rows where it's NULL
-            try:
-                cursor.execute(
-                    "UPDATE urls SET refresh_interval_minutes = ? WHERE refresh_interval_minutes IS NULL",
-                    (Config.URL_DEFAULT_REFRESH_MINUTES,)
-                )
-            except Exception as e:
-                logger.warning(f"Failed to backfill default refresh interval: {e}")
-            # Backfill crawl_domain to 0 when NULL
-            try:
-                cursor.execute(
-                    "UPDATE urls SET crawl_domain = 0 WHERE crawl_domain IS NULL"
-                )
-            except Exception as e:
-                logger.warning(f"Failed to backfill crawl_domain: {e}")
-            # Backfill ignore_robots to 0 when NULL
-            try:
-                cursor.execute(
-                    "UPDATE urls SET ignore_robots = 0 WHERE ignore_robots IS NULL"
-                )
-            except Exception as e:
-                logger.warning(f"Failed to backfill ignore_robots: {e}")
+                existing = {row[1] for row in cursor.fetchall()}
+                required = {
+                    'last_content_hash': "ALTER TABLE urls ADD COLUMN last_content_hash TEXT",
+                    'last_update_status': "ALTER TABLE urls ADD COLUMN last_update_status TEXT",
+                    'refreshing': "ALTER TABLE urls ADD COLUMN refreshing INTEGER DEFAULT 0",
+                    'last_refresh_started': "ALTER TABLE urls ADD COLUMN last_refresh_started TIMESTAMP"
+                }
+                for col, ddl in required.items():
+                    if col not in existing:
+                        try:
+                            cursor.execute(ddl)
+                            logger.info(f"Added missing column to urls: {col}")
+                        except Exception as _e:
+                            logger.warning(f"Failed adding column {col}: {_e}")
+                cursor.execute("PRAGMA table_info(url_pages)")
+                page_existing = {row[1] for row in cursor.fetchall()}
+                if 'last_content_hash' not in page_existing:
+                    try:
+                        cursor.execute("ALTER TABLE url_pages ADD COLUMN last_content_hash TEXT")
+                        logger.info("Added missing column to url_pages: last_content_hash")
+                    except Exception as _pe:
+                        logger.warning(f"Failed adding last_content_hash to url_pages: {_pe}")
+            except Exception as _mig:
+                logger.warning(f"URL schema migration check failed: {_mig}")
             conn.commit()
             logger.info("URL database initialized")
+
+    def _ensure_schema(self) -> None:
+        """Ensure the database file and core tables exist (self-heal after external deletion).
+
+        This guards against scenarios where the SQLite file is removed (e.g. reset script)
+        while the Flask app process keeps running. Without this, subsequent operations
+        would raise 'no such table: urls'. We check cheaply and re-run _init_database if missing.
+        """
+        try:
+            if not os.path.exists(self.db_path):
+                logger.warning("Knowledgebase DB file missing; reinitializing schema")
+                self._init_database()
+                return
+            with sqlite3.connect(self.db_path) as conn:
+                cur = conn.cursor()
+                cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='urls'")
+                if not cur.fetchone():
+                    logger.warning("'urls' table missing; reinitializing schema")
+                    self._init_database()
+        except Exception as e:
+            logger.error(f"Schema ensure failed: {e}")
+
+    def _log_schema_state(self) -> None:
+        """Log current columns for key tables (diagnostic)."""
+        with sqlite3.connect(self.db_path) as conn:
+            cur = conn.cursor()
+            for table in ("urls", "url_pages", "documents"):
+                try:
+                    cur.execute(f"PRAGMA table_info({table})")
+                    cols = [r[1] for r in cur.fetchall()]
+                    logger.info(f"Schema {table} columns: {cols}")
+                except Exception as e:
+                    logger.warning(f"Could not introspect table {table}: {e}")
+
+    def upsert_document_metadata(self, filename: str, **fields) -> None:
+        """Insert or update a documents row."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            # Build columns
+            col_names = ["filename"] + list(fields.keys())
+            placeholders = ["?"] * len(col_names)
+            values = [filename] + list(fields.values())
+            update_assignments = ", ".join([f"{k}=excluded.{k}" for k in fields.keys()])
+            sql = f"INSERT INTO documents ({', '.join(col_names)}) VALUES ({', '.join(placeholders)}) ON CONFLICT(filename) DO UPDATE SET {update_assignments}"
+            cursor.execute(sql, values)
+            conn.commit()
+
+    def get_document_metadata(self, filename: str) -> Optional[Dict[str, Any]]:
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM documents WHERE filename = ?", (filename,))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            d = dict(row)
+            # Parse keywords JSON
+            try:
+                if d.get('top_keywords'):
+                    d['top_keywords'] = json.loads(d['top_keywords'])
+            except Exception:
+                pass
+            return d
+
+    def delete_document_metadata(self, filename: str) -> None:
+        """Remove a document metadata row permanently.
+
+        Args:
+            filename: Name of the document whose metadata should be deleted.
+        """
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM documents WHERE filename = ?", (filename,))
+                conn.commit()
+        except Exception as e:
+            logger.warning(f"Failed to delete metadata row for {filename}: {e}")
     
     def validate_url(self, url: str) -> bool:
         """
@@ -326,6 +424,8 @@ class URLManager:
             logger.info(f"Extracted title: {title}")
         
         try:
+            # Self-heal in case DB was externally reset after startup
+            self._ensure_schema()
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
                 cursor.execute(
@@ -350,6 +450,7 @@ class URLManager:
             List of URL dictionaries
         """
         try:
+            self._ensure_schema()
             with sqlite3.connect(self.db_path) as conn:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.cursor()
@@ -384,6 +485,7 @@ class URLManager:
             Dict with success status and message
         """
         try:
+            self._ensure_schema()
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
                 cursor.execute("DELETE FROM urls WHERE id = ?", (url_id,))
@@ -465,6 +567,19 @@ class URLManager:
         except Exception as e:
             logger.error(f"Error marking URL scraped: {e}")
 
+    def set_refreshing(self, url_id: int, refreshing: bool) -> None:
+        """Set or clear the refreshing flag (and start timestamp when setting)."""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "UPDATE urls SET refreshing = ?, last_refresh_started = CASE WHEN ? = 1 THEN CURRENT_TIMESTAMP ELSE last_refresh_started END WHERE id = ?",
+                    (1 if refreshing else 0, 1 if refreshing else 0, url_id)
+                )
+                conn.commit()
+        except Exception as e:
+            logger.error(f"Error updating refreshing flag: {e}")
+
     def update_url_hash_status(self, url_id: int, content_hash: Optional[str], status: str) -> None:
         try:
             with sqlite3.connect(self.db_path) as conn:
@@ -502,26 +617,32 @@ class URLManager:
             logger.error(f"Error setting page hash: {e}")
 
     def get_due_urls(self) -> List[Dict[str, Any]]:
-        try:
-            with sqlite3.connect(self.db_path) as conn:
-                conn.row_factory = sqlite3.Row
-                cursor = conn.cursor()
-                cursor.execute(
-                    """
-                    SELECT * FROM urls
-                    WHERE status = 'active'
-                      AND refresh_interval_minutes IS NOT NULL
-                      AND refresh_interval_minutes > 0
-                      AND (
-                        last_scraped IS NULL OR
-                        datetime(last_scraped, '+' || refresh_interval_minutes || ' minutes') <= datetime('now')
-                      )
-                    """
-                )
-                return [dict(row) for row in cursor.fetchall()]
-        except Exception as e:
-            logger.error(f"Error fetching due URLs: {e}")
-            return []
+                try:
+                        # Ensure schema exists (handles external DB deletion while app runs)
+                        self._ensure_schema()
+                        with sqlite3.connect(self.db_path) as conn:
+                                conn.row_factory = sqlite3.Row
+                                cursor = conn.cursor()
+                                cursor.execute(
+                                        """
+                                        SELECT * FROM urls
+                                        WHERE status = 'active'
+                                            AND refresh_interval_minutes IS NOT NULL
+                                            AND refresh_interval_minutes > 0
+                                            AND (refreshing IS NULL OR refreshing = 0)
+                                            AND (
+                                                last_scraped IS NULL OR
+                                                datetime(last_scraped, '+' || refresh_interval_minutes || ' minutes') <= datetime('now')
+                                            )
+                                        """
+                                )
+                                rows = [dict(row) for row in cursor.fetchall()]
+                                if not rows:
+                                        logger.debug("Scheduler: no due URLs this cycle")
+                                return rows
+                except Exception as e:
+                        logger.error(f"Error fetching due URLs: {e}")
+                        return []
 
 
 class DocumentProcessor:
@@ -598,6 +719,81 @@ class DocumentProcessor:
         except Exception as e:
             logger.error(f"Failed to load and chunk document {filename}: {str(e)}")
             raise
+
+    def extract_keywords(self, chunks: List[Document], max_keywords: int = 30) -> Dict[str, Any]:
+        """Hybrid keyword extraction: LLM global + local frequency per page.
+
+        Returns dict with keys: global_keywords (list), per_page_keywords (dict page->list)
+        """
+        # Build page texts
+        pages: Dict[int, List[str]] = {}
+        for c in chunks:
+            p = int(c.metadata.get('page', 0))
+            pages.setdefault(p, []).append(c.page_content or '')
+        page_texts = {p: '\n'.join(txts) for p, txts in pages.items()}
+
+        # Local frequency extraction
+        import re, math
+        stop = set(["the","and","of","to","a","in","for","on","is","with","by","an","be","this","that","are","as","at","from","it","or","was","were","which","can"])
+        word_re = re.compile(r"[A-Za-z][A-Za-z0-9_-]{2,}")
+        per_page_keywords: Dict[int, List[str]] = {}
+        global_counts: Dict[str,int] = {}
+        for p, text in page_texts.items():
+            counts: Dict[str,int] = {}
+            for m in word_re.finditer(text.lower()):
+                w = m.group(0)
+                if w in stop or len(w) > 40:
+                    continue
+                counts[w] = counts.get(w,0)+1
+            # top 8 per page
+            ranked = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:8]
+            kws = [k for k,_ in ranked]
+            per_page_keywords[p] = kws
+            for k in kws:
+                global_counts[k] = global_counts.get(k,0)+1
+
+        # Initial global set from frequency
+        freq_global = [k for k,_ in sorted(global_counts.items(), key=lambda kv: kv[1], reverse=True)]
+
+        # LLM call on first page text for semantic keywords + title candidate (reuse logic later)
+        llm_keywords = []
+        llm_title: Optional[str] = None
+        try:
+            first_page_text = page_texts.get(min(page_texts.keys()) if page_texts else 0, '')[:2000]
+            if first_page_text.strip():
+                llm = ChatOllama(model=self.config.CLASSIFICATION_MODEL, base_url=self.config.CLASSIFICATION_BASE_URL, temperature=0)
+                prompt = (
+                    "You extract document metadata. Given the text excerpt, return JSON with keys: title, keywords. "
+                    "keywords: 5-10 concise topical terms (1-3 words), lowercase unless proper noun, no duplicates.\nText:\n" + first_page_text
+                )
+                resp = llm.invoke(prompt).content.strip()
+                s = resp.find('{'); e = resp.rfind('}') + 1
+                if s!=-1 and e> s:
+                    import json as _json
+                    obj = _json.loads(resp[s:e])
+                    llm_keywords = [kw for kw in obj.get('keywords', []) if isinstance(kw,str)]
+                    if isinstance(obj.get('title'), str):
+                        llm_title = obj.get('title').strip() or None
+        except Exception as e:
+            logger.warning(f"LLM keyword extraction failed: {e}")
+
+        merged = []
+        seen = set()
+        for source in [llm_keywords, freq_global]:
+            for kw in source:
+                if kw not in seen:
+                    seen.add(kw)
+                    merged.append(kw)
+                if len(merged) >= max_keywords:
+                    break
+            if len(merged) >= max_keywords:
+                break
+
+        return {
+            'global_keywords': merged,
+            'per_page_keywords': per_page_keywords,
+            'llm_title': llm_title
+        }
 
     def load_and_chunk_url(self, url: str, url_id: str) -> List[Document]:
         """Load a URL using UnstructuredLoader(web_url=...) and create lean chunks with metadata, mirroring file chunking settings."""
@@ -683,114 +879,124 @@ class MilvusManager:
     """
     
     def __init__(self, config: Config):
-        """
-        Initialize Milvus manager with LangChain integration.
-        
-        Args:
-            config: Application configuration instance
-        """
+        """Initialize Milvus manager."""
         self.config = config
-        self.embedding_provider = OllamaEmbeddings(model=self.config.EMBEDDING_MODEL, base_url=f"http://{self.config.OLLAMA_CLASSIFICATION_HOST}:{self.config.OLLAMA_PORT}")
-        self.vector_store = None
-        self.connected = False
-        self._connect()
-        logger.info("MilvusManager (LangChain) initialized")
-    
-    def _connect(self) -> None:
-        """Establish connection to Milvus database using LangChain."""
-        self.collection_name = self.config.COLLECTION_NAME
-        self.connection_args = {"host": self.config.MILVUS_HOST, "port": self.config.MILVUS_PORT}
-        self.langchain_embeddings = OllamaEmbeddings(model=self.config.EMBEDDING_MODEL, base_url=f"http://{self.config.OLLAMA_CLASSIFICATION_HOST}:{self.config.OLLAMA_PORT}")
-        connections.connect("default", host=self.config.MILVUS_HOST, port=self.config.MILVUS_PORT)
-        if self.config.MILVUS_DROP_COLLECTION and utility.has_collection(self.collection_name):
-            logger.info(f"Dropping existing collection '{self.collection_name}' (flag enabled)")
-            utility.drop_collection(self.collection_name)
-        self.vector_store = None
-        logger.info("Milvus connection ready")
-
-    def insert_documents(self, filename: str, chunks: List[Document]) -> None:
-        """
-        Insert documents using same logic as notebook: dedupe, sanitize, project metadata.
-        
-        Args:
-            filename: Name of the source file
-            chunks: List of document chunks to insert
-        """
-        logger.info(f"Inserting {len(chunks)} chunks for {filename}")
-        
-        # Deduplicate by content_hash (compute fallback from text if missing)
-        seen = set()
-        unique: List[Document] = []
-        for c in chunks:
-            meta = c.metadata or {}
-            ch = meta.get('content_hash')
-            if not ch:
-                try:
-                    text = (c.page_content or '').strip()
-                    if not text:
-                        continue
-                    ch = hashlib.sha1(text.encode('utf-8')).hexdigest()[:16]
-                    meta['content_hash'] = ch
-                    c.metadata = meta
-                except Exception:
-                    continue
-            if ch in seen:
-                continue
-            seen.add(ch)
-            unique.append(c)
-        
-        logger.info(f"Unique chunks after dedupe: {len(unique)} (from {len(chunks)})")
-        
-        if not unique:
-            logger.warning(f"No unique chunks to insert for {filename}; skipping insertion")
-            return
-        
-        # Prepare texts and metadata
-        texts = [d.page_content for d in unique]
-        metas = [self._sanitize_and_project_meta(d.metadata) for d in unique]
-        
-        # Index parameters matching notebook
-        index_params = {"index_type": "AUTOINDEX", "metric_type": "COSINE"}
-        
+        self.collection_name = config.COLLECTION_NAME
+        self.connection_args = {"host": config.MILVUS_HOST, "port": config.MILVUS_PORT}
+        # Establish connection (idempotent)
         try:
-            # Create collection using from_texts (matches notebook exactly)
-            self.vector_store = LC_Milvus.from_texts(
-                texts=texts,
-                embedding=self.langchain_embeddings,
-                metadatas=metas,
+            connections.connect(alias="default", **self.connection_args)
+        except Exception:
+            pass
+        # Lazy-created vector store; embeddings model comes from outer processor
+        self.vector_store: Optional[LC_Milvus] = None
+        try:
+            # Create a dedicated embeddings instance (mirrors DocumentProcessor usage)
+            self.langchain_embeddings = OllamaEmbeddings(
+                model=self.config.EMBEDDING_MODEL,
+                base_url=f"http://{self.config.OLLAMA_CHAT_HOST}:{self.config.OLLAMA_PORT}"
+            )
+        except Exception as e:
+            logger.error(f"Failed to initialize embeddings for MilvusManager: {e}")
+            self.langchain_embeddings = None
+
+    # --------------------------------------------------
+    # Internal helpers
+    # --------------------------------------------------
+    def _ensure_vector_store(self):
+        """Ensure vector store object exists (create collection if missing)."""
+        if self.vector_store:
+            return
+        if not self.langchain_embeddings:
+            raise RuntimeError("Embeddings not initialized; cannot create vector store")
+        try:
+            self.vector_store = LC_Milvus(
+                embedding_function=self.langchain_embeddings,
                 collection_name=self.collection_name,
                 connection_args=self.connection_args,
-                index_params=index_params,
             )
-            
-            # Ensure collection is flushed and loaded
-            col = Collection(self.collection_name)
+        except Exception as e:
+            # Fallback: try from_texts with empty set to force creation
             try:
+                self.vector_store = LC_Milvus.from_texts(
+                    texts=["__init__"],
+                    embedding=self.langchain_embeddings,
+                    metadatas=[{"source": "__init__", "document_id": "__init__", "chunk_id": "init", "page": 0}],
+                    collection_name=self.collection_name,
+                    connection_args=self.connection_args,
+                )
+            except Exception as e2:
+                logger.error(f"Failed to initialize Milvus vector store: {e}; {e2}")
+                raise
+
+    # --------------------------------------------------
+    # Public insertion API
+    # --------------------------------------------------
+    def insert_documents(self, source: str, docs: List[Document]) -> int:
+        """Insert (or upsert) a list of LangChain Document objects for a given source/URL.
+
+        Ensures deterministic chunk_id & document_id fields and performs simple dedupe
+        based on content_hash.
+        Returns number of chunks inserted (after dedupe).
+        """
+        if not docs:
+            return 0
+        self._ensure_vector_store()
+        # Build normalized texts & metadata
+        seen_hashes = set()
+        texts: List[str] = []
+        metas: List[Dict[str, Any]] = []
+        for idx, d in enumerate(docs):
+            content = (d.page_content or '').strip()
+            if not content:
+                continue
+            meta = dict(d.metadata or {})
+            # Compute or keep content hash
+            ch = meta.get('content_hash')
+            if not ch:
+                ch = hashlib.sha1(content.encode('utf-8')).hexdigest()[:16]
+            if ch in seen_hashes:
+                continue
+            seen_hashes.add(ch)
+            # Populate required projection fields
+            meta.setdefault('document_id', source)
+            meta.setdefault('source', source)
+            meta.setdefault('page', int(meta.get('page', 0) or 0))
+            meta.setdefault('chunk_id', f"{source}-{idx}")
+            meta.setdefault('topic', meta.get('topic', ''))
+            meta.setdefault('category', meta.get('category', ''))
+            meta['content_hash'] = ch
+            meta['content_length'] = len(content)
+            metas.append(self._sanitize_and_project_meta(meta))
+            texts.append(content)
+        if not texts:
+            return 0
+        try:
+            if getattr(self.vector_store, 'collection_name', None) != self.collection_name:
+                # Rare mismatch; recreate
+                self.vector_store = None
+                self._ensure_vector_store()
+            # Use add_texts if store already instantiated, else from_texts
+            if hasattr(self.vector_store, 'add_texts') and len(getattr(self.vector_store, 'texts', [])) > 0:
+                self.vector_store.add_texts(texts=texts, metadatas=metas)
+            else:
+                # Recreate with from_texts to include all docs + prior ones (fallback)
+                self.vector_store = LC_Milvus.from_texts(
+                    texts=texts,
+                    embedding=self.langchain_embeddings,
+                    metadatas=metas,
+                    collection_name=self.collection_name,
+                    connection_args=self.connection_args,
+                )
+            try:
+                col = Collection(self.collection_name)
                 col.flush()
             except Exception:
                 pass
-            col.load()
-            
-            logger.info(f"Stored {col.num_entities} chunks in Milvus collection '{self.collection_name}'")
-            
-            # If zero entities, retry with add_texts like the notebook
-            if col.num_entities == 0 and texts:
-                logger.info("Insertion resulted in 0 entities. Retrying with add_texts()...")
-                try:
-                    self.vector_store.add_texts(texts=texts, metadatas=metas)
-                    try:
-                        col.flush()
-                    except Exception:
-                        pass
-                    col.load()
-                    logger.info(f"After retry, stored {col.num_entities} chunks in Milvus collection '{self.collection_name}'")
-                except Exception as e:
-                    logger.error(f"Retry with add_texts failed: {repr(e)}")
-                    raise
-            
+            return len(texts)
         except Exception as e:
-            logger.error(f"Failed to insert documents for {filename}: {str(e)}")
-            raise
+            logger.error(f"Failed inserting documents for {source}: {e}")
+            return 0
 
     def delete_document(self, document_id: str = None, filename: str = None) -> Dict[str, Any]:
         """
@@ -807,9 +1013,14 @@ class MilvusManager:
             raise ValueError("Either document_id or filename must be provided")
         
         try:
-            # Get the collection
+            # If collection doesn't exist just return success (nothing to delete)
+            if not utility.has_collection(self.collection_name):
+                return {"success": True, "deleted_count": 0, "entities_before": 0, "entities_after": 0, "verification_remaining": []}
             col = Collection(self.collection_name)
-            col.load()
+            try:
+                col.load()
+            except Exception:
+                pass
             
             # Check entities before deletion
             entities_before = col.num_entities
@@ -930,19 +1141,81 @@ class MilvusManager:
         try:
             exists = utility.has_collection(self.collection_name)
             if not exists:
-                return {"name": self.collection_name, "exists": False, "entities": 0}
+                return {
+                    "name": self.collection_name,
+                    "exists": False,
+                    "num_entities": 0,
+                    "indexed": False,
+                    "metric_type": None,
+                    "dim": None,
+                }
             col = Collection(self.collection_name)
             try:
                 col.load()
             except Exception:
                 pass
+            # Default values
+            dim = None
+            metric_type = None
+            indexed = False
+            try:
+                # Infer vector field dim from schema
+                for f in getattr(col, 'schema', {}).fields:
+                    try:
+                        params = getattr(f, 'params', {}) or {}
+                        if 'dim' in params:
+                            dim = int(params.get('dim'))
+                            break
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+            try:
+                # Check index info
+                idxs = getattr(col, 'indexes', []) or []
+                indexed = len(idxs) > 0
+                if indexed:
+                    try:
+                        # metric type usually available in index params
+                        first = idxs[0]
+                        p = getattr(first, 'params', {}) or {}
+                        metric_type = p.get('metric_type') or p.get('METRIC_TYPE')
+                    except Exception:
+                        metric_type = None
+            except Exception:
+                pass
             return {
                 "name": self.collection_name,
                 "exists": True,
-                "entities": getattr(col, 'num_entities', 0),
+                "num_entities": getattr(col, 'num_entities', 0),
+                "indexed": indexed,
+                "metric_type": metric_type,
+                "dim": dim,
             }
         except Exception as e:
-            return {"name": self.collection_name, "exists": False, "entities": 0, "error": str(e)}
+            return {
+                "name": self.collection_name,
+                "exists": False,
+                "num_entities": 0,
+                "indexed": False,
+                "metric_type": None,
+                "dim": None,
+                "error": str(e),
+            }
+
+    def check_connection(self) -> Dict[str, Any]:
+        """Check Milvus server reachability and return status info."""
+        try:
+            ver = utility.get_server_version()
+            return {"connected": True, "version": ver}
+        except Exception:
+            # Attempt a reconnect once
+            try:
+                connections.connect("default", host=self.config.MILVUS_HOST, port=self.config.MILVUS_PORT)
+                ver = utility.get_server_version()
+                return {"connected": True, "version": ver}
+            except Exception as e2:
+                return {"connected": False, "error": str(e2)}
 
     def rag_search_and_answer(self, query: str, top_k: int = 5) -> Dict[str, Any]:
         """
@@ -966,6 +1239,31 @@ class MilvusManager:
             
             # Get similar documents
             results = self.vector_store.similarity_search_with_score(query, k=top_k)
+
+            # Simple keyword-boost rerank: if query words intersect chunk keywords, slightly improve score
+            try:
+                import re
+                q_tokens = set(re.findall(r"[A-Za-z0-9_-]+", query.lower()))
+                adjusted = []
+                for doc, score in results:
+                    kws = doc.metadata.get('keywords') or []
+                    if isinstance(kws, str):
+                        # if stored as JSON string somewhere
+                        try:
+                            import json as _json
+                            kws = _json.loads(kws)
+                        except Exception:
+                            kws = []
+                    overlap = len(q_tokens.intersection({str(k).lower() for k in kws})) if kws else 0
+                    # Assuming lower score is better (distance); subtract small bonus per overlap
+                    adj_score = score - (0.05 * min(overlap, 5))
+                    adjusted.append((doc, score, adj_score))
+                # Sort by adjusted score
+                adjusted.sort(key=lambda t: t[2])
+                # Trim to top_k again just in case
+                results = [(d, s) for d, s, _ in adjusted[:top_k]]
+            except Exception as _rerank_err:
+                logger.debug(f"Keyword rerank skipped: {_rerank_err}")
             
             if not results:
                 return {
@@ -1027,13 +1325,13 @@ class MilvusManager:
             }
 
 
-class RAGDocumentHandler:
+class RAGKnowledgebaseManager:
     """
     Main application class that orchestrates document processing and web interface.
     """
     
     def __init__(self):
-        """Initialize the RAG Document Handler application."""
+        """Initialize the RAG Knowledgebase Manager application."""
         self.config = Config()
         self.app = Flask(__name__)
         self.app.config['SECRET_KEY'] = self.config.SECRET_KEY
@@ -1043,32 +1341,45 @@ class RAGDocumentHandler:
         self.document_processor = DocumentProcessor(self.config)
         self.milvus_manager = MilvusManager(self.config)
         self.url_manager = URLManager()
-
         # Processing status tracking
         self.processing_status: Dict[str, ProcessingStatus] = {}
         # URL refresh status tracking (keyed by url_id)
         self.url_processing_status: Dict[int, ProcessingStatus] = {}
-
-        # Setup directories
-        self._setup_directories()
-
-        # Register routes
-        self._register_routes()
-
-        # Start background scheduler for URL refreshes
-        self._start_scheduler()
+        # Scheduler thread handle
+        self._scheduler_thread: Optional[threading.Thread] = None
 
         # Crawler state: robots cache and per-domain last-request timestamps
         self._robots_cache = {}
         self._domain_last_request = {}
 
-        logger.info("RAG Document Handler application initialized")
+        # Setup directories and routes
+        self._setup_directories()
+        self._register_routes()
+
+        # Track last scheduler cycle time
+        self._scheduler_last_cycle: Optional[float] = None
+
+        # Start background scheduler for URL refreshes only in reloader main (to avoid double start in debug)
+        should_start = True
+        if self.config.FLASK_DEBUG and os.environ.get('WERKZEUG_RUN_MAIN') != 'true':
+            should_start = False
+            logger.info("Deferring scheduler start until reloader main process")
+        if should_start:
+            try:
+                self._start_scheduler()
+            except Exception as e:
+                logger.error(f"Failed to start scheduler: {e}")
+
+        logger.info("RAG Knowledgebase Manager application initialized")
+
+    # Document metadata now stored in SQLite 'documents' table (no JSON file)
     
     def _setup_directories(self) -> None:
         """Create necessary directories for file management."""
         directories = [
             self.config.UPLOAD_FOLDER,
             self.config.UPLOADED_FOLDER,
+            self.config.DELETED_FOLDER,
         ]
         
         for directory in directories:
@@ -1077,6 +1388,9 @@ class RAGDocumentHandler:
     
     def _register_routes(self) -> None:
         """Register Flask routes for the web interface."""
+        @self.app.route('/admin/scheduler_status')
+        def scheduler_status():  # diagnostic endpoint
+            return jsonify(self._scheduler_status())
         
         @self.app.route('/')
         def index():
@@ -1087,6 +1401,92 @@ class RAGDocumentHandler:
             
             # Get collection statistics
             collection_stats = self.milvus_manager.get_collection_stats()
+
+            # Connection health statuses
+            # SQL (SQLite)
+            try:
+                with sqlite3.connect(self.url_manager.db_path) as _c:
+                    _cur = _c.cursor()
+                    _cur.execute("SELECT sqlite_version()")
+                    ver_row = _cur.fetchone()
+                    ver = ver_row[0] if ver_row else None
+                sql_status = {"connected": True, "version": ver}
+            except Exception as _e_sql:
+                sql_status = {"connected": False, "error": str(_e_sql)}
+
+            # Milvus
+            milvus_status = self.milvus_manager.check_connection()
+
+            # Aggregate knowledgebase metadata for upstream RAG
+            kb_meta = {
+                'documents_total': 0,
+                'avg_words_per_doc': 0,
+                'avg_chunks_per_doc': 0,
+                'median_chunk_chars': 0,
+                'top_keywords': []
+            }
+            try:
+                with sqlite3.connect(self.url_manager.db_path) as conn:
+                    conn.row_factory = sqlite3.Row
+                    cur = conn.cursor()
+                    cur.execute("SELECT COUNT(*) as c, AVG(word_count) as aw, AVG(chunk_count) as ac, AVG(median_chunk_chars) as mc FROM documents")
+                    row = cur.fetchone()
+                    if row:
+                        kb_meta['documents_total'] = int(row['c'] or 0)
+                        kb_meta['avg_words_per_doc'] = int(row['aw'] or 0)
+                        kb_meta['avg_chunks_per_doc'] = int(row['ac'] or 0)
+                        kb_meta['median_chunk_chars'] = int(row['mc'] or 0)
+                    # Aggregate top keywords across docs (flatten and count)
+                    cur.execute("SELECT top_keywords FROM documents WHERE top_keywords IS NOT NULL")
+                    kw_counts = {}
+                    for (kw_json,) in cur.fetchall():
+                        try:
+                            kws = json.loads(kw_json) if kw_json else []
+                            for k in kws:
+                                kw_counts[k] = kw_counts.get(k, 0) + 1
+                        except Exception:
+                            continue
+                    kb_meta['top_keywords'] = [k for k,_ in sorted(kw_counts.items(), key=lambda x: x[1], reverse=True)[:10]]
+            except Exception as e:
+                logger.warning(f"KB meta aggregation failed: {e}")
+
+            # Aggregate URL management stats
+            url_meta = {
+                'total': 0,
+                'active': 0,
+                'crawl_on': 0,
+                'robots_ignored': 0,
+                'scraped': 0,
+                'never_scraped': 0,
+                'due_now': 0,
+            }
+            try:
+                with sqlite3.connect(self.url_manager.db_path) as conn:
+                    conn.row_factory = sqlite3.Row
+                    cur = conn.cursor()
+                    cur.execute(
+                        """
+                        SELECT
+                          COUNT(*) AS total,
+                          SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) AS active,
+                          SUM(CASE WHEN crawl_domain = 1 THEN 1 ELSE 0 END) AS crawl_on,
+                          SUM(CASE WHEN ignore_robots = 1 THEN 1 ELSE 0 END) AS robots_ignored,
+                          SUM(CASE WHEN last_scraped IS NOT NULL THEN 1 ELSE 0 END) AS scraped,
+                          SUM(CASE WHEN last_scraped IS NULL THEN 1 ELSE 0 END) AS never_scraped,
+                          SUM(CASE
+                                WHEN refresh_interval_minutes IS NOT NULL AND refresh_interval_minutes > 0 AND (
+                                      (last_scraped IS NOT NULL AND datetime(last_scraped, '+' || refresh_interval_minutes || ' minutes') <= datetime('now'))
+                                   OR (last_scraped IS NULL)
+                                )
+                                THEN 1 ELSE 0 END) AS due_now
+                        FROM urls
+                        """
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        url_meta = {k: int(row[k] or 0) for k in url_meta.keys()}
+            except Exception as e:
+                logger.warning(f"URL meta aggregation failed: {e}")
             
             # Get URLs for display
             urls = self.url_manager.get_all_urls()
@@ -1116,9 +1516,14 @@ class RAGDocumentHandler:
                                  staging_files=staging_files,
                                  uploaded_files=uploaded_files,
                                  collection_stats=collection_stats,
+                                 sql_status=sql_status,
+                                 milvus_status=milvus_status,
+                                 kb_meta=kb_meta,
+                                 url_meta=url_meta,
                                  processing_status=self.processing_status,
                                  url_processing_status=self.url_processing_status,
-                                 urls=enriched_urls)
+                                 urls=enriched_urls,
+                                 config=self.config)
         
         @self.app.route('/upload', methods=['POST'])
         def upload_file():
@@ -1146,6 +1551,41 @@ class RAGDocumentHandler:
             else:
                 flash('Invalid file type', 'error')
             
+            return redirect(url_for('index'))
+
+        @self.app.route('/download/<path:filename>')
+        def download_file(filename):
+            """Download a processed (uploaded) document by filename.
+
+            Only serves files that exist in the uploaded (processed) folder. Prevents path traversal.
+            """
+            # Basic path traversal guard
+            if '..' in filename or filename.startswith('/'):
+                abort(400)
+            file_path = os.path.join(self.config.UPLOADED_FOLDER, filename)
+            if not os.path.isfile(file_path):
+                flash('File not found or not processed yet', 'error')
+                return redirect(url_for('index'))
+            return send_from_directory(self.config.UPLOADED_FOLDER, filename, as_attachment=True)
+
+        @self.app.route('/document/<path:filename>/update', methods=['POST'])
+        def update_document_metadata(filename):
+            """Update editable document metadata like title."""
+            title = request.form.get('title','').strip()
+            if '..' in filename or filename.startswith('/'):
+                abort(400)
+            uploaded_path = os.path.join(self.config.UPLOADED_FOLDER, filename)
+            if not os.path.isfile(uploaded_path):
+                flash('Document not found', 'error')
+                return redirect(url_for('index'))
+            try:
+                if title:
+                    self.url_manager.upsert_document_metadata(filename, title=title)
+                    flash('Document title updated', 'success')
+                else:
+                    flash('No title provided', 'info')
+            except Exception as e:
+                flash(f'Update failed: {e}', 'error')
             return redirect(url_for('index'))
         
         @self.app.route('/process/<filename>')
@@ -1185,6 +1625,13 @@ class RAGDocumentHandler:
             """Get processing status for a file."""
             status = self.processing_status.get(filename)
             if status:
+                # TTL cleanup: drop completed entries older than 90s
+                try:
+                    if status.status == 'completed' and status.end_time and (datetime.now() - status.end_time).total_seconds() > 90:
+                        self.processing_status.pop(filename, None)
+                        return jsonify({'status': 'not_found'})
+                except Exception:
+                    pass
                 return jsonify({
                     'status': status.status,
                     'progress': status.progress,
@@ -1264,12 +1711,20 @@ class RAGDocumentHandler:
             
             return redirect(url_for('index'))
 
-        @self.app.route('/delete_file_bg/<folder>/<filename>', methods=['POST'])
+        @self.app.route('/delete_file_bg/<folder>/<filename>', methods=['POST','GET'])
         def delete_file_bg(folder: str, filename: str):
-            """Start background deletion for a file with a progress bar, optionally removing embeddings if from uploaded."""
+            """Start background (soft) deletion for a file.
+
+            Primary method is POST from a form. GET is accepted as a safe fallback to
+            prevent user-facing 405 errors (e.g. if a link is followed) and will also
+            initiate deletion but logs a note. For security-sensitive deployments you
+            may wish to disable GET here or add CSRF.
+            """
             if folder not in ['staging', 'uploaded']:
                 flash('Invalid folder', 'error')
                 return redirect(url_for('index'))
+            if request.method == 'GET':
+                logger.info(f"GET fallback invoked for deletion of {filename} in {folder}")
             # Seed processing status so the card shows a bar immediately
             st = self.processing_status.get(filename)
             if not st:
@@ -1423,20 +1878,87 @@ class RAGDocumentHandler:
                filename.rsplit('.', 1)[1].lower() in self.config.ALLOWED_EXTENSIONS
     
     def _get_directory_files(self, directory: str) -> List[Dict[str, Any]]:
-        """Get list of files in a directory with metadata."""
-        files = []
-        if os.path.exists(directory):
-            for filename in os.listdir(directory):
-                file_path = os.path.join(directory, filename)
-                if os.path.isfile(file_path):
-                    stat = os.stat(file_path)
-                    files.append({
-                        'name': filename,
-                        'size': stat.st_size,
-                        'modified': datetime.fromtimestamp(stat.st_mtime),
-                        'status': self.processing_status.get(filename)
-                    })
+        """Return file entries for a directory with optional metadata enrichment.
+
+        Args:
+            directory: Absolute or relative path of folder to scan.
+
+        Returns:
+            List of dict entries each containing: name, size (bytes), modified (datetime),
+            optional processing status, and for processed documents (uploaded folder) the
+            persisted metadata (title/chunk/page/word counts, keywords).
+        """
+        files: List[Dict[str, Any]] = []
+        if not os.path.exists(directory):
+            return files
+        for filename in os.listdir(directory):
+            file_path = os.path.join(directory, filename)
+            if not os.path.isfile(file_path):
+                continue
+            stat = os.stat(file_path)
+            entry: Dict[str, Any] = {
+                'name': filename,
+                'size': stat.st_size,
+                'modified': datetime.fromtimestamp(stat.st_mtime),
+                'status': self.processing_status.get(filename)
+            }
+            if directory == self.config.UPLOADED_FOLDER:
+                meta = self.url_manager.get_document_metadata(filename) or {}
+                entry['title'] = meta.get('title') or self._fallback_title_from_filename(filename)
+                entry['chunks_count'] = meta.get('chunk_count')
+                entry['page_count'] = meta.get('page_count')
+                entry['word_count'] = meta.get('word_count')
+                entry['top_keywords'] = meta.get('top_keywords')
+                st = entry['status']
+                if st and st.status == 'completed' and (st.message or '').lower().startswith('deletion complete'):
+                    # Skip lingering deletion status entries to avoid stale display
+                    continue
+            files.append(entry)
         return sorted(files, key=lambda x: x['modified'], reverse=True)
+
+    def _fallback_title_from_filename(self, filename: str) -> str:
+        base = os.path.splitext(filename)[0]
+        base = base.replace('_', ' ').replace('-', ' ').strip()
+        if not base:
+            return filename
+        words = []
+        for w in base.split():
+            if len(w) > 3 and w.isupper():
+                words.append(w)
+            else:
+                words.append(w.capitalize())
+        return ' '.join(words)
+
+    def _derive_title_from_chunks(self, filename: str, chunks: List[Document]) -> str:
+        try:
+            candidates: List[str] = []
+            for c in chunks[:5]:
+                text = (c.page_content or '').strip()
+                for line in text.splitlines()[:5]:
+                    l = line.strip()
+                    if not l:
+                        continue
+                    if len(l) > 120:
+                        continue
+                    words = l.split()
+                    if not (3 <= len(words) <= 15):
+                        continue
+                    alpha_words = [w for w in words if any(ch.isalpha() for ch in w)]
+                    if len(alpha_words) / len(words) < 0.6:
+                        continue
+                    tc = sum(1 for w in alpha_words if w[:1].isupper()) / max(1, len(alpha_words))
+                    if tc < 0.5:
+                        continue
+                    if l.endswith((':', ',')):
+                        continue
+                    candidates.append(l)
+            if candidates:
+                good = [c for c in candidates if len(c) >= 15]
+                chosen = sorted(good or candidates, key=len)[0]
+                return chosen
+        except Exception:
+            pass
+        return self._fallback_title_from_filename(filename)
     
     def _process_document_background(self, filename: str) -> None:
         status = self.processing_status[filename]
@@ -1450,50 +1972,129 @@ class RAGDocumentHandler:
             document_id = hashlib.sha1(file_sig.encode('utf-8')).hexdigest()[:16]
             chunks = self.document_processor.load_and_chunk(file_path, filename, document_id)
             status.chunks_count = len(chunks)
+            # Derive and persist title
+            try:
+                title = self._derive_title_from_chunks(filename, chunks)
+                status.title = title
+            except Exception as e:
+                logger.warning(f"Title derivation failed for {filename}: {e}")
+            # Keyword extraction (hybrid)
+            status.status = "embedding"; status.message = "Extracting keywords..."; status.progress = 55
+            kw_data = self.document_processor.extract_keywords(chunks)
+            global_keywords = kw_data['global_keywords']
+            per_page_kw = kw_data['per_page_keywords']
+            # Prefer LLM-derived title if reasonable
+            llm_title = kw_data.get('llm_title')
+            if llm_title:
+                try:
+                    # Basic quality heuristics: length & word count & not all caps
+                    wc = len(llm_title.split())
+                    if 2 <= wc <= 20 and 8 <= len(llm_title) <= 140 and not llm_title.isupper():
+                        status.title = llm_title
+                except Exception:
+                    pass
+            # Attach keywords list to each chunk metadata (global subset for search boost)
+            for c in chunks:
+                c.metadata['keywords'] = global_keywords
+            # Basic stats
+            word_count = sum(len((c.page_content or '').split()) for c in chunks)
+            lengths = [len(c.page_content or '') for c in chunks]
+            import statistics
+            avg_len = float(sum(lengths)/len(lengths)) if lengths else 0.0
+            med_len = float(statistics.median(lengths)) if lengths else 0.0
+            page_count = max(int(c.metadata.get('page',0)) for c in chunks) + 1 if chunks else 0
             status.status = "embedding"; status.message = "Enriching metadata via LLM..."; status.progress = 60
             self.document_processor.enrich_topics(chunks)
             status.status = "storing"; status.message = "Storing in Milvus..."; status.progress = 80
             self.milvus_manager.insert_documents(filename, chunks)
             uploaded_path = os.path.join(self.config.UPLOADED_FOLDER, filename)
             shutil.move(file_path, uploaded_path)
+            # Upsert document metadata row
+            elapsed = (datetime.now() - status.start_time).total_seconds() if status.start_time else None
+            try:
+                self.url_manager.upsert_document_metadata(
+                    filename,
+                    title=status.title,
+                    page_count=page_count,
+                    chunk_count=len(chunks),
+                    word_count=word_count,
+                    avg_chunk_chars=avg_len,
+                    median_chunk_chars=med_len,
+                    top_keywords=json.dumps(global_keywords),
+                    processing_time_seconds=elapsed
+                )
+            except Exception as e:
+                logger.warning(f"Failed to upsert document metadata for {filename}: {e}")
             status.status = "completed"; status.message = f"Successfully processed {len(chunks)} chunks"; status.progress = 100; status.end_time = datetime.now()
         except Exception as e:
             status.status = "error"; status.error_details = str(e); status.message = f"Processing failed: {str(e)}"; status.end_time = datetime.now(); logger.error(f"Processing failed for {filename}: {str(e)}")
 
     def _delete_file_background(self, folder: str, filename: str) -> None:
-        """Background deletion of a local file; when deleting from uploaded, remove embeddings first."""
-        # Ensure status entry
+        """Background deletion worker.
+
+        Strict removal policy:
+        - Staging files: permanently removed from disk.
+        - Uploaded files: embeddings removed (Milvus), metadata row purged (SQLite), file moved
+          to DELETED_FOLDER (only raw file retained for possible manual restore). No metadata
+          history is preserved.
+        After completion the ProcessingStatus entry is dropped so re-uploads start with fresh
+        processing and regenerated metadata.
+        """
+        # Ensure status entry exists for UI progress
         st = self.processing_status.get(filename) or ProcessingStatus(filename=filename)
         self.processing_status[filename] = st
-        st.status = 'processing'; st.progress = 5; st.message = 'Preparing deletion...'; st.start_time = datetime.now()
+        st.status = 'processing'
+        st.progress = 5
+        st.message = 'Preparing deletion...'
+        st.start_time = datetime.now()
         try:
             folder_path = self.config.UPLOAD_FOLDER if folder == 'staging' else self.config.UPLOADED_FOLDER
             file_path = os.path.join(folder_path, filename)
-            # When in uploaded, remove embeddings by filename
             if folder == 'uploaded':
-                st.message = 'Removing embeddings...'; st.progress = 25
+                st.message = 'Removing embeddings...'
+                st.progress = 20
                 try:
                     self.milvus_manager.delete_document(filename=filename)
                 except Exception as e:
                     logger.warning(f"Embedding deletion failed for {filename}: {e}")
-            # Delete the file from disk
-            st.message = 'Deleting file from disk...'; st.progress = 75
+                else:
+                    st.progress = 40
+                # Purge metadata row
+                try:
+                    self.url_manager.delete_document_metadata(filename)
+                except Exception as e:
+                    logger.warning(f"Metadata deletion failed for {filename}: {e}")
+                else:
+                    st.progress = max(st.progress, 55)
+            st.message = 'Archiving file...'
+            st.progress = max(st.progress, 70)
             try:
                 if os.path.exists(file_path):
-                    os.remove(file_path)
+                    if folder == 'uploaded':
+                        archive_path = os.path.join(self.config.DELETED_FOLDER, filename)
+                        if os.path.exists(archive_path):
+                            stem, ext = os.path.splitext(filename)
+                            archive_path = os.path.join(self.config.DELETED_FOLDER, f"{stem}_{int(time.time())}{ext}")
+                        shutil.move(file_path, archive_path)
+                    else:
+                        os.remove(file_path)
             except Exception as e:
-                logger.error(f"File delete failed for {filename}: {e}")
+                logger.error(f"File archive/delete failed for {filename}: {e}")
                 raise
-            st.status = 'completed'; st.message = 'Deletion complete'; st.progress = 100; st.end_time = datetime.now()
+            st.status = 'completed'
+            st.message = 'Deletion complete'
+            st.progress = 100
+            st.end_time = datetime.now()
         except Exception as e:
-            st.status = 'error'; st.error_details = str(e); st.message = f'Deletion failed: {e}'; st.progress = 100; st.end_time = datetime.now()
+            st.status = 'error'
+            st.error_details = str(e)
+            st.message = f'Deletion failed: {e}'
+            st.progress = 100
+            st.end_time = datetime.now()
         finally:
-            # Clear the status after a short delay to let UI catch last update
-            try:
-                # Keep brief window; UI polling will switch to normal card display after reloads or refresh
-                pass
-            except Exception:
-                pass
+            # Keep status entry so UI can observe 'Deletion complete'.
+            # A TTL cleanup will purge it later via get_status.
+            pass
 
     def _process_url_background(self, url_id: int) -> None:
         """Fetch, chunk, and index the content at a URL. Replace previous embeddings for that URL."""
@@ -1633,11 +2234,14 @@ class RAGDocumentHandler:
     def _scheduler_loop(self):
         """Background loop to schedule URL refresh based on next_run."""
         logger.info("URL scheduler started")
+        cycle = 0
         while True:
             try:
+                cycle += 1
+                self._scheduler_last_cycle = time.time()
                 due = self.url_manager.get_due_urls()
-                if due:
-                    logger.info(f"Scheduler found {len(due)} due URL(s)")
+                logger.info(f"Scheduler cycle {cycle} heartbeat: due={len(due)} active_urls_total={self.url_manager.get_url_count()}")
+                started = 0
                 for rec in due:
                     # Avoid starting a duplicate refresh if one is already running for this URL
                     if rec['id'] in self.url_processing_status:
@@ -1646,16 +2250,48 @@ class RAGDocumentHandler:
                     t = threading.Thread(target=self._process_url_background, args=(rec['id'],))
                     t.daemon = True
                     t.start()
-                # sleep shorter if work was done
-                time.sleep(self.config.SCHEDULER_POLL_SECONDS_BUSY if due else self.config.SCHEDULER_POLL_SECONDS_IDLE)
+                    started += 1
+                sleep_for = self.config.SCHEDULER_POLL_SECONDS_BUSY if started else self.config.SCHEDULER_POLL_SECONDS_IDLE
+                logger.debug(f"Scheduler cycle {cycle}: started {started} task(s); sleeping {sleep_for}s")
+                time.sleep(sleep_for)
             except Exception as e:
                 logger.error(f"Scheduler loop error: {e}")
                 time.sleep(30)
 
     def _start_scheduler(self):
-        th = threading.Thread(target=self._scheduler_loop)
+        # Avoid duplicate scheduler threads
+        if self._scheduler_thread and self._scheduler_thread.is_alive():
+            logger.debug("Scheduler thread already running")
+            return
+        th = threading.Thread(target=self._scheduler_loop, name="url-scheduler")
         th.daemon = True
         th.start()
+        self._scheduler_thread = th
+        logger.info(f"Scheduler thread started (ident={th.ident})")
+
+    def _scheduler_status(self) -> Dict[str, Any]:
+        """Return current scheduler diagnostic info."""
+        alive = bool(self._scheduler_thread and self._scheduler_thread.is_alive())
+        try:
+            due_preview = self.url_manager.get_due_urls()[:5]
+        except Exception:
+            due_preview = []
+        last_cycle_age = None
+        if self._scheduler_last_cycle:
+            try:
+                last_cycle_age = round(time.time() - self._scheduler_last_cycle, 2)
+            except Exception:
+                pass
+        return {
+            'running': alive,
+            'thread_ident': getattr(self._scheduler_thread, 'ident', None),
+            'due_count': len(due_preview),
+            'due_sample': [d.get('url') for d in due_preview],
+            'in_progress': list(self.url_processing_status.keys()),
+            'last_cycle_age_seconds': last_cycle_age,
+            'poll_busy_seconds': self.config.SCHEDULER_POLL_SECONDS_BUSY,
+            'poll_idle_seconds': self.config.SCHEDULER_POLL_SECONDS_IDLE
+        }
 
     def _discover_domain_urls(self, base_url: str, max_pages: int = 50) -> List[str]:
         """Discover a bounded set of in-domain URLs starting from base_url."""
@@ -1845,7 +2481,7 @@ class RAGDocumentHandler:
     
     def run(self) -> None:
         """Start the Flask web application."""
-        logger.info(f"Starting RAG Document Handler on {self.config.FLASK_HOST}:{self.config.FLASK_PORT}")
+        logger.info(f"Starting RAG Knowledgebase Manager on {self.config.FLASK_HOST}:{self.config.FLASK_PORT}")
         self.app.run(
             host=self.config.FLASK_HOST,
             port=self.config.FLASK_PORT,
@@ -1856,10 +2492,10 @@ class RAGDocumentHandler:
 
 def main() -> None:
     """Main entry point for the application."""
-    logger.info("Starting RAG Document Handler application")
+    logger.info("Starting RAG Knowledgebase Manager application")
     
     # Create and run application
-    app = RAGDocumentHandler()
+    app = RAGKnowledgebaseManager()
     app.run()
 
 
