@@ -155,11 +155,11 @@ class ProcessingStatus:
 
 class URLManager:
     """Manages URL storage and validation using SQLite database."""
-    
-    def __init__(self, db_path: str = "urls.db"):
+
+    def __init__(self, db_path: str = "knowledgebase.db"):
         """
         Initialize URL manager with SQLite database.
-        
+
         Args:
             db_path: Path to SQLite database file
         """
