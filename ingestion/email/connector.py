@@ -48,11 +48,13 @@ class IMAPConnector(EmailConnector):
         password: str,
         mailbox: str = "INBOX",
         *,
+        port: int = 993,
         batch_limit: Optional[int] = 50,
         use_ssl: bool = True,
         primary_mailbox: Optional[str] = None,
     ) -> None:
         self.host = host
+        self.port = port
         self.username = username
         self.password = password
         self.mailbox = mailbox
@@ -64,7 +66,11 @@ class IMAPConnector(EmailConnector):
     def fetch_emails(self, since_date: Optional[datetime] = None) -> List[Dict[str, Any]]:
         """Fetch emails via IMAP and return canonical records."""
 
-        conn = imaplib.IMAP4_SSL(self.host) if self.use_ssl else imaplib.IMAP4(self.host)
+        conn = (
+            imaplib.IMAP4_SSL(self.host, self.port)
+            if self.use_ssl
+            else imaplib.IMAP4(self.host, self.port)
+        )
         conn.login(self.username, self.password)
         conn.select(self.mailbox)
 

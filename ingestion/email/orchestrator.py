@@ -31,6 +31,7 @@ class EmailOrchestrator:
         """Background loop that fetches emails at the configured interval."""
         connector = IMAPConnector(
             host=self.config.IMAP_HOST,
+            port=self.config.IMAP_PORT,
             username=self.config.IMAP_USERNAME,
             password=self.config.IMAP_PASSWORD,
             mailbox=self.config.IMAP_MAILBOX,
