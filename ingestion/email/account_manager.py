@@ -35,10 +35,23 @@ class EmailAccountManager:
                 password TEXT NOT NULL,
                 mailbox TEXT,
                 batch_limit INTEGER,
-                use_ssl INTEGER
+                use_ssl INTEGER,
+                refresh_interval_minutes INTEGER,
+                last_synced TIMESTAMP
             )
             """
         )
+        # Add missing columns for upgrades
+        cur.execute("PRAGMA table_info(email_accounts)")
+        existing = {row[1] for row in cur.fetchall()}
+        if "refresh_interval_minutes" not in existing:
+            cur.execute(
+                "ALTER TABLE email_accounts ADD COLUMN refresh_interval_minutes INTEGER"
+            )
+        if "last_synced" not in existing:
+            cur.execute(
+                "ALTER TABLE email_accounts ADD COLUMN last_synced TIMESTAMP"
+            )
         self.conn.commit()
 
     # ------------------------------------------------------------------
@@ -96,7 +109,18 @@ class EmailAccountManager:
         """
         self.conn.row_factory = sqlite3.Row
         cur = self.conn.cursor()
-        cur.execute("SELECT * FROM email_accounts")
+        cur.execute(
+            """
+            SELECT
+                *,
+                CASE
+                    WHEN refresh_interval_minutes IS NOT NULL AND refresh_interval_minutes > 0 AND last_synced IS NOT NULL
+                    THEN datetime(last_synced, '+' || refresh_interval_minutes || ' minutes')
+                    ELSE NULL
+                END AS next_run
+            FROM email_accounts
+            """
+        )
         rows = cur.fetchall()
 
         accounts: List[Dict[str, Any]] = []

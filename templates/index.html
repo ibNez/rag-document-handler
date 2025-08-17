@@ -486,6 +486,7 @@
                                             <th>Display Name</th>
                                             <th>Server</th>
                                             <th>Username</th>
+                                            <th>Schedule</th>
                                             <th class="text-end">Actions</th>
                                         </tr>
                                     </thead>
@@ -495,6 +496,11 @@
                                             <td>{{ acct.account_name }}</td>
                                             <td>{{ acct.server }}:{{ acct.port }}</td>
                                             <td>{{ acct.username }}</td>
+                                            <td class="small">
+                                                <div>Every {{ acct.refresh_interval_minutes or config.EMAIL_DEFAULT_REFRESH_MINUTES }} min</div>
+                                                <div class="text-muted">Last: {{ (acct.last_synced or '')[:16] if acct.last_synced else '—' }}</div>
+                                                <div class="text-muted">Next: {{ (acct.next_run or '')[:16] if acct.next_run else '—' }}</div>
+                                            </td>
                                             <td class="text-end">
                                                 <div class="btn-group btn-group-sm" role="group">
                                                     <button type="button" class="btn btn-outline-secondary edit-account-btn"
@@ -507,6 +513,7 @@
                                                             data-port="{{ acct.port }}"
                                                             data-mailbox="{{ acct.mailbox or '' }}"
                                                             data-batch="{{ acct.batch_limit or '' }}"
+                                                            data-interval="{{ acct.refresh_interval_minutes or '' }}"
                                                             data-ssl="{{ '1' if acct.use_ssl else '0' }}">
                                                         <i class="fas fa-pen"></i>
                                                     </button>
@@ -571,11 +578,15 @@
                                 </div>
                             </div>
                             <div class="row">
-                                <div class="col-md-6 mb-3">
+                                <div class="col-md-4 mb-3">
                                     <label class="form-label">Batch Limit</label>
                                     <input type="number" class="form-control" name="batch_limit">
                                 </div>
-                                <div class="col-md-6 mb-3 form-check form-switch">
+                                <div class="col-md-4 mb-3">
+                                    <label class="form-label">Refresh interval (minutes)</label>
+                                    <input type="number" class="form-control" name="refresh_interval_minutes" value="{{ config.EMAIL_DEFAULT_REFRESH_MINUTES }}">
+                                </div>
+                                <div class="col-md-4 mb-3 form-check form-switch">
                                     <input class="form-check-input" type="checkbox" name="use_ssl" id="addUseSSL">
                                     <label class="form-check-label" for="addUseSSL">Use SSL</label>
                                 </div>
@@ -628,11 +639,15 @@
                                 </div>
                             </div>
                             <div class="row">
-                                <div class="col-md-6 mb-3">
+                                <div class="col-md-4 mb-3">
                                     <label class="form-label">Batch Limit</label>
                                     <input type="number" class="form-control" name="batch_limit" id="editBatchLimit">
                                 </div>
-                                <div class="col-md-6 mb-3 form-check form-switch">
+                                <div class="col-md-4 mb-3">
+                                    <label class="form-label">Refresh interval (minutes)</label>
+                                    <input type="number" class="form-control" name="refresh_interval_minutes" id="editRefreshInterval">
+                                </div>
+                                <div class="col-md-4 mb-3 form-check form-switch">
                                     <input class="form-check-input" type="checkbox" name="use_ssl" id="editUseSSL">
                                     <label class="form-check-label" for="editUseSSL">Use SSL</label>
                                 </div>
@@ -980,6 +995,7 @@
                     document.getElementById('editPort').value = btn.dataset.port || '';
                     document.getElementById('editMailbox').value = btn.dataset.mailbox || '';
                     document.getElementById('editBatchLimit').value = btn.dataset.batch || '';
+                    document.getElementById('editRefreshInterval').value = btn.dataset.interval || '';
                     document.getElementById('editUseSSL').checked = btn.dataset.ssl === '1';
                 });
             });

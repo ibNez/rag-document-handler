@@ -79,12 +79,14 @@ def test_email_account_manager_crud(manager: EmailAccountManager) -> None:
         "mailbox": "INBOX",
         "batch_limit": 10,
         "use_ssl": 1,
+        "refresh_interval_minutes": 5,
     }
 
     account_id = manager.create_account(record)
     accounts = manager.list_accounts()
     assert len(accounts) == 1
     assert accounts[0]["account_name"] == "Work"
+    assert accounts[0]["refresh_interval_minutes"] == 5
 
     # Password should not be returned by default
     assert "password" not in accounts[0]
@@ -164,6 +166,7 @@ def test_email_account_crud(client):
             "mailbox": "INBOX",
             "batch_limit": "10",
             "use_ssl": "1",
+            "refresh_interval_minutes": "5",
         },
     )
     assert response.status_code == 302
@@ -174,6 +177,7 @@ def test_email_account_crud(client):
     assert len(accounts) == 1
     account_id = accounts[0]["id"]
     assert "password" not in accounts[0]
+    assert accounts[0]["refresh_interval_minutes"] == 5
 
     response = client.post(f"/email_accounts/{account_id}", data={"username": "new"})
     assert response.status_code == 302
