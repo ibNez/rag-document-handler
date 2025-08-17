@@ -1979,6 +1979,18 @@ class RAGKnowledgebaseManager:
 
             return redirect(url_for('index'))
 
+        @self.app.route('/email_accounts/<int:account_id>/refresh', methods=['POST'])
+        def refresh_email_account(account_id: int):
+            """Trigger immediate sync for an email account."""
+            if not getattr(self, 'email_account_manager', None):
+                flash('Email ingestion not configured', 'error')
+                return redirect(url_for('index'))
+            th = threading.Thread(target=self._refresh_email_account_background, args=(account_id,))
+            th.daemon = True
+            th.start()
+            flash('Email refresh started in background', 'info')
+            return redirect(url_for('index'))
+
         @self.app.route('/add_url', methods=['POST'])
         def add_url():
             """Add a new URL with automatic title extraction."""
@@ -2317,6 +2329,85 @@ class RAGKnowledgebaseManager:
             # Keep status entry so UI can observe 'Deletion complete'.
             # A TTL cleanup will purge it later via get_status.
             pass
+
+    def _refresh_email_account_background(self, account_id: int) -> None:
+        """Fetch emails for a specific account in a background thread."""
+        if not self.email_account_manager:
+            return
+        try:
+            account = None
+            for acct in self.email_account_manager.list_accounts(include_password=True):
+                if acct.get('id') == account_id:
+                    account = acct
+                    break
+            if not account:
+                return
+
+            from ingestion.email.connector import IMAPConnector, GmailConnector, ExchangeConnector
+            from ingestion.email.processor import EmailProcessor
+            from ingestion.email.ingest import run_email_ingestion
+            from google.oauth2.credentials import Credentials
+            from google.auth.transport.requests import Request
+
+            server_type = (account.get('server_type') or '').lower()
+            batch = account.get('batch_limit')
+            batch_limit = None if batch in (None, 'all') else int(batch)
+
+            connector = None
+            if server_type == 'imap':
+                connector = IMAPConnector(
+                    host=account['server'],
+                    port=int(account['port']),
+                    username=account['username'],
+                    password=account['password'],
+                    mailbox=account.get('mailbox') or 'INBOX',
+                    batch_limit=batch_limit,
+                    use_ssl=bool(account.get('use_ssl', True)),
+                )
+            elif server_type == 'gmail':
+                token_path = account.get('token_file') or account.get('token_path')
+                if not token_path:
+                    logger.error(f"No token file configured for Gmail account {account.get('account_name')}")
+                    return
+                creds = Credentials.from_authorized_user_file(token_path)
+                if getattr(creds, 'expired', False) and getattr(creds, 'refresh_token', None):
+                    try:
+                        creds.refresh(Request())
+                        with open(token_path, 'w') as fh:
+                            fh.write(creds.to_json())
+                    except Exception as exc:
+                        logger.warning(f"Failed to refresh Gmail token for {account.get('account_name')}: {exc}")
+                connector = GmailConnector(
+                    credentials=creds,
+                    user_id=account.get('username') or 'me',
+                    batch_limit=batch_limit,
+                )
+            elif server_type == 'exchange':
+                connector = ExchangeConnector(
+                    server=account['server'],
+                    username=account['username'],
+                    password=account['password'],
+                    batch_limit=batch_limit,
+                )
+            else:
+                logger.warning(f"Unknown server type '{server_type}' for account {account_id}")
+                return
+
+            try:
+                processor = EmailProcessor(self.milvus_manager, sqlite3.connect(self.url_manager.db_path))
+                run_email_ingestion(connector, processor)
+            except Exception as exc:
+                logger.error(f"Email ingestion failed for account {account.get('account_name')}: {exc}")
+
+            try:
+                self.email_account_manager.update_account(
+                    account_id,
+                    {'last_synced': datetime.utcnow().isoformat(sep=' ', timespec='seconds')},
+                )
+            except Exception:
+                pass
+        except Exception as exc:
+            logger.error(f"Email refresh error for account {account_id}: {exc}")
 
     def _process_url_background(self, url_id: int) -> None:
         """Fetch, chunk, and index the content at a URL. Replace previous embeddings for that URL."""
