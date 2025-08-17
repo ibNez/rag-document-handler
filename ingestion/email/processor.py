@@ -14,6 +14,7 @@ application specific initialization.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any, Dict, Iterable, List, Optional
 
 import sqlite3
@@ -54,7 +55,9 @@ class EmailProcessor:
     ) -> None:
         self.milvus = milvus
         self.sqlite_conn = sqlite_conn
-        self.embedding_model = embedding_model or OllamaEmbeddings()
+        self.embedding_model = embedding_model or OllamaEmbeddings(
+            model=os.getenv("EMBEDDING_MODEL", "mxbai-embed-large")
+        )
         self.splitter = RecursiveCharacterTextSplitter(
             chunk_size=chunk_size, chunk_overlap=chunk_overlap
         )
