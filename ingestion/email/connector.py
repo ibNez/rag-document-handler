@@ -95,88 +95,109 @@ class IMAPConnector(EmailConnector):
             if self.use_ssl
             else imaplib.IMAP4(self.host, self.port)
         )
-        if not self.use_ssl:
-            try:
-                status, _ = conn.starttls(ssl_context=ssl.create_default_context())
-                if status != "OK":
-                    raise imaplib.IMAP4.error("STARTTLS failed")
-            except Exception as exc:  # pragma: no cover - defensive
-                conn.logout()
-                raise RuntimeError(
-                    "IMAP server requires a secure connection; STARTTLS negotiation failed"
-                ) from exc
-        conn.login(self.username, self.password)
-        conn.select(self.mailbox)
+        try:
+            if not self.use_ssl:
+                try:
+                    status, _ = conn.starttls(ssl_context=ssl.create_default_context())
+                    if status != "OK":
+                        raise imaplib.IMAP4.error("STARTTLS failed")
+                except Exception as exc:  # pragma: no cover - defensive
+                    raise RuntimeError(
+                        "IMAP server requires a secure connection; STARTTLS negotiation failed"
+                    ) from exc
 
-        criteria: List[str] = []
-        if since_date is not None:
-            criteria.append(f'SINCE "{since_date.strftime("%d-%b-%Y")}"')
-        search_query = "ALL" if not criteria else " ".join(criteria)
-        status, messages = conn.search(None, search_query)
-        if status != "OK":
-            conn.logout()
-            return []
-        email_ids = messages[0].split()
-        if self.batch_limit is not None:
-            email_ids = email_ids[-self.batch_limit :]
-
-        results: List[Dict[str, Any]] = []
-        for eid in email_ids:
-            status, msg_data = conn.fetch(eid, "(RFC822)")
-            if status != "OK" or not msg_data or not msg_data[0]:
-                continue
-            try:
-                msg = message_from_bytes(msg_data[0][1])
-                rec = self._parse_email(msg)
-                rec["server_type"] = "imap"
-                results.append(rec)
-            except Exception as exc:  # pragma: no cover - defensive
-                results.append(
-                    {
-                        "message_id": None,
-                        "thread_id": None,
-                        "subject": None,
-                        "from_addr": None,
-                        "to_addrs": [],
-                        "cc_addrs": [],
-                        "date_utc": None,
-                        "received_utc": None,
-                        "in_reply_to": None,
-                        "references_ids": [],
-                        "is_reply": 0,
-                        "is_forward": 0,
-                        "raw_size_bytes": None,
-                        "body_text": None,
-                        "body_html": None,
-                        "language": None,
-                        "has_attachments": 0,
-                        "attachment_manifest": [],
-                        "processed": 0,
-                        "ingested_at": None,
-                        "updated_at": None,
-                        "content_hash": None,
-                        "summary": None,
-                        "keywords": None,
-                        "auto_topic": None,
-                        "manual_topic": None,
-                        "topic_confidence": None,
-                        "topic_version": None,
-                        "error_state": f"parse_error: {exc.__class__.__name__}",
-                        "direction": None,
-                        "participants": [],
-                        "participants_hash": None,
-                        "to_primary": None,
-                        "server_type": "imap",
-                    }
+            status, _ = conn.login(self.username, self.password)
+            if status != "OK":
+                logger.warning(
+                    "IMAP login failed for user %s: status=%s", self.username, status
                 )
-        conn.logout()
-        logger.info(
-            "Retrieved %d emails from IMAP server %s for user %s",
-            len(results),
-            self.host,
-            self.username,
-        )
-        return results
+                return []
+
+            status, _ = conn.select(self.mailbox)
+            if status != "OK":
+                logger.warning(
+                    "IMAP select failed for mailbox %s: status=%s", self.mailbox, status
+                )
+                return []
+
+            criteria: List[str] = []
+            if since_date is not None:
+                criteria.append(f'SINCE "{since_date.strftime("%d-%b-%Y")}"')
+            search_query = "ALL" if not criteria else " ".join(criteria)
+            status, messages = conn.search(None, search_query)
+            if status != "OK":
+                logger.warning("IMAP search failed: status=%s", status)
+                return []
+            email_ids = messages[0].split()
+            if self.batch_limit is not None:
+                email_ids = email_ids[-self.batch_limit :]
+
+            results: List[Dict[str, Any]] = []
+            for eid in email_ids:
+                status, msg_data = conn.fetch(eid, "(RFC822)")
+                if status != "OK" or not msg_data or not msg_data[0]:
+                    continue
+                try:
+                    msg = message_from_bytes(msg_data[0][1])
+                    rec = self._parse_email(msg)
+                    rec["server_type"] = "imap"
+                    results.append(rec)
+                except Exception as exc:  # pragma: no cover - defensive
+                    decoded_eid = eid.decode() if isinstance(eid, bytes) else str(eid)
+                    logger.warning(
+                        "Failed to parse message %s: %s", decoded_eid, exc
+                    )
+                    results.append(
+                        {
+                            "message_id": None,
+                            "thread_id": None,
+                            "subject": None,
+                            "from_addr": None,
+                            "to_addrs": [],
+                            "cc_addrs": [],
+                            "date_utc": None,
+                            "received_utc": None,
+                            "in_reply_to": None,
+                            "references_ids": [],
+                            "is_reply": 0,
+                            "is_forward": 0,
+                            "raw_size_bytes": None,
+                            "body_text": None,
+                            "body_html": None,
+                            "language": None,
+                            "has_attachments": 0,
+                            "attachment_manifest": [],
+                            "processed": 0,
+                            "ingested_at": None,
+                            "updated_at": None,
+                            "content_hash": None,
+                            "summary": None,
+                            "keywords": None,
+                            "auto_topic": None,
+                            "manual_topic": None,
+                            "topic_confidence": None,
+                            "topic_version": None,
+                            "error_state": f"parse_error: {exc.__class__.__name__}",
+                            "direction": None,
+                            "participants": [],
+                            "participants_hash": None,
+                            "to_primary": None,
+                            "server_type": "imap",
+                        }
+                    )
+
+            logger.info(
+                "Retrieved %d emails from IMAP server %s for user %s",
+                len(results),
+                self.host,
+                self.username,
+            )
+            return results
+        finally:
+            try:
+                conn.logout()
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning("Error during IMAP logout: %s", exc)
 
     # ------------------------------------------------------------------
     def _decode_header_value(self, raw_val: Optional[str]) -> Optional[str]:

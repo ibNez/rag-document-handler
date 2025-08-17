@@ -34,8 +34,9 @@ class DummyIMAP4:
         self.calls.append("starttls")
         return "OK", b""
 
-    def login(self, *_: Any, **__: Any) -> None:  # pragma: no cover - interface stub
+    def login(self, *_: Any, **__: Any):  # pragma: no cover - interface stub
         self.calls.append("login")
+        return "OK", [b""]
 
     def select(self, *_: Any, **__: Any):  # pragma: no cover - interface stub
         return "OK", [b"0"]
