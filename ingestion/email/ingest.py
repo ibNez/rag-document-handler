@@ -5,7 +5,7 @@ import hashlib
 import json
 import logging
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 from bs4 import BeautifulSoup
@@ -73,7 +73,7 @@ def _normalize(record: Dict[str, Any]) -> Dict[str, Any]:
     record["participants_hash"] = _participants_hash(record["participants"])
     record["header_hash"] = compute_header_hash(record)
     record["content_hash"] = _content_hash(record)
-    record.setdefault("ingested_at", datetime.utcnow().isoformat())
+    record.setdefault("ingested_at", datetime.now(UTC).isoformat())
     return record
 
 
@@ -153,7 +153,7 @@ def main() -> None:
 
     milvus = _NoopMilvus()
     processor = EmailProcessor(milvus, sqlite_conn)
-    since = datetime.utcnow() - timedelta(days=args.since_days)
+    since = datetime.now(UTC) - timedelta(days=args.since_days)
     run_email_ingestion(connector, processor, since_date=since)
 
 

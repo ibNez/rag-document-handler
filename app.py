@@ -28,7 +28,7 @@ import random
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 import re
 import json
 import hashlib
@@ -2409,7 +2409,11 @@ class RAGKnowledgebaseManager:
             try:
                 self.email_account_manager.update_account(
                     account_id,
-                    {'last_synced': datetime.utcnow().isoformat(sep=' ', timespec='seconds')},
+                    {
+                        'last_synced': datetime.now(UTC).isoformat(
+                            sep=' ', timespec='seconds'
+                        )
+                    },
                 )
             except Exception:
                 pass

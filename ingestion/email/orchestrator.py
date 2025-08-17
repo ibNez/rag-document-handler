@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from google.auth.transport.requests import Request
@@ -37,7 +37,7 @@ class EmailOrchestrator:
         # Refresh accounts to ensure we operate on latest configuration
         self.refresh_accounts()
         default_interval = getattr(self.config, "EMAIL_DEFAULT_REFRESH_MINUTES", 5)
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
         due: List[Dict[str, Any]] = []
         for account in self.accounts:
             interval = account.get("refresh_interval_minutes")
@@ -130,7 +130,7 @@ class EmailOrchestrator:
                 self.account_manager.update_account(
                     acct_id,
                     {
-                        "last_synced": datetime.utcnow().isoformat(
+                        "last_synced": datetime.now(UTC).isoformat(
                             sep=" ", timespec="seconds"
                         )
                     },
