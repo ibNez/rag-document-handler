@@ -518,6 +518,11 @@
                                                             data-type="{{ acct.server_type }}">
                                                         <i class="fas fa-pen"></i>
                                                     </button>
+                                                    <form method="POST" action="{{ url_for('refresh_email_account', account_id=acct.id) }}">
+                                                        <button type="submit" class="btn btn-outline-primary" title="Refresh now">
+                                                            <i class="fas fa-sync"></i>
+                                                        </button>
+                                                    </form>
                                                     <button type="button" class="btn btn-outline-danger delete-account-btn"
                                                             data-bs-toggle="modal" data-bs-target="#deleteEmailAccountModal"
                                                             data-action="{{ url_for('delete_email_account', account_id=acct.id) }}"
