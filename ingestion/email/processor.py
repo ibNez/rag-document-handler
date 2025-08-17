@@ -82,6 +82,7 @@ class EmailProcessor:
                 "from_addr": record.get("from_addr"),
                 "to_addrs": record.get("to_addrs"),
                 "date_utc": record.get("date_utc"),
+                "server_type": record.get("server_type"),
             }
             metadatas.append(meta)
 

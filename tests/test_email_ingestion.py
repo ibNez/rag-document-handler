@@ -80,6 +80,7 @@ def raw_email_record() -> Dict[str, Any]:
         "participants": [],
         "participants_hash": None,
         "to_primary": None,
+        "server_type": "imap",
     }
 
 
@@ -136,6 +137,7 @@ def test_run_email_ingestion_deduplicates() -> None:
                 "participants": [],
                 "participants_hash": None,
                 "to_primary": None,
+                "server_type": "imap",
             }
             rec1 = {"message_id": "1", **base}
             rec2 = {"message_id": "1", **base, "body_html": "<p>Second</p>"}
@@ -315,6 +317,7 @@ def test_run_email_ingestion_header_hash_dedup(monkeypatch: pytest.MonkeyPatch) 
                 "participants": [],
                 "participants_hash": None,
                 "to_primary": None,
+                "server_type": "imap",
             }
             rec1 = {"message_id": "1", **base}
             rec2 = {"message_id": "1", **base, "body_html": "<p>Second</p>"}

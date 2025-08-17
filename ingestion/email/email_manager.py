@@ -77,7 +77,8 @@ class EmailManager:
                 participants TEXT,
                 participants_hash TEXT,
                 to_primary TEXT,
-                header_hash TEXT
+                header_hash TEXT,
+                server_type TEXT
             )
             '''
         )
@@ -89,6 +90,9 @@ class EmailManager:
             cursor.execute("ALTER TABLE emails ADD COLUMN header_hash TEXT")
             self.conn.commit()
             self._backfill_header_hash()
+        if "server_type" not in cols:
+            cursor.execute("ALTER TABLE emails ADD COLUMN server_type TEXT")
+            self.conn.commit()
 
     # ------------------------------------------------------------------
     def _backfill_header_hash(self) -> None:

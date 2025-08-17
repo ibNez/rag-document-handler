@@ -1844,6 +1844,7 @@ class RAGKnowledgebaseManager:
         def add_email_account():
             """Create a new email account configuration."""
             account_name = request.form.get('account_name', '').strip()
+            server_type = request.form.get('server_type', 'imap').strip().lower() or 'imap'
             server = request.form.get('server', '').strip()
             username = request.form.get('username', '').strip()
             password = request.form.get('password', '').strip()
@@ -1867,7 +1868,7 @@ class RAGKnowledgebaseManager:
 
             record = {
                 'account_name': account_name,
-                'server_type': 'imap',
+                'server_type': server_type,
                 'server': server,
                 'port': port,
                 'username': username,
@@ -1900,12 +1901,15 @@ class RAGKnowledgebaseManager:
             batch_limit_str = request.form.get('batch_limit', '').strip()
             refresh_raw = request.form.get('refresh_interval_minutes', '').strip()
             use_ssl = request.form.get('use_ssl', '0') == '1'
+            server_type = request.form.get('server_type', '').strip()
 
             updates: Dict[str, Any] = {}
             if account_name:
                 updates['account_name'] = account_name
             if server:
                 updates['server'] = server
+            if server_type:
+                updates['server_type'] = server_type.lower()
             if username:
                 updates['username'] = username
             if password:

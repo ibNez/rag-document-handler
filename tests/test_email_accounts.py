@@ -159,6 +159,7 @@ def test_email_account_crud(client):
         "/email_accounts",
         data={
             "account_name": "Work",
+            "server_type": "imap",
             "server": "imap.example.com",
             "username": "user",
             "password": "pass",
