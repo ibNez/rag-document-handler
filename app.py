@@ -60,7 +60,7 @@ from langchain_core.tools import tool
 
 # Configuration
 from dotenv import load_dotenv
-from ingestion.email import EmailOrchestrator
+from ingestion.email import EmailOrchestrator, EmailAccountManager
 
 # Load environment variables
 load_dotenv()
@@ -1569,19 +1569,31 @@ class RAGKnowledgebaseManager:
                     u['robots_has_rules'] = None
                     u['robots_crawl_delay'] = None
                 enriched_urls.append(u)
-            
-            return render_template('index.html',
-                                 staging_files=staging_files,
-                                 uploaded_files=uploaded_files,
-                                 collection_stats=collection_stats,
-                                 sql_status=sql_status,
-                                 milvus_status=milvus_status,
-                                 kb_meta=kb_meta,
-                                 url_meta=url_meta,
-                                 processing_status=self.processing_status,
-                                 url_processing_status=self.url_processing_status,
-                                 urls=enriched_urls,
-                                 config=self.config)
+
+            # Get configured email accounts
+            email_accounts: List[Dict[str, Any]] = []
+            try:
+                with sqlite3.connect(self.url_manager.db_path) as conn:
+                    manager = EmailAccountManager(conn)
+                    email_accounts = manager.list_accounts()
+            except Exception as e:
+                logger.warning(f"Failed to load email accounts: {e}")
+
+            return render_template(
+                'index.html',
+                staging_files=staging_files,
+                uploaded_files=uploaded_files,
+                collection_stats=collection_stats,
+                sql_status=sql_status,
+                milvus_status=milvus_status,
+                kb_meta=kb_meta,
+                url_meta=url_meta,
+                processing_status=self.processing_status,
+                url_processing_status=self.url_processing_status,
+                urls=enriched_urls,
+                email_accounts=email_accounts,
+                config=self.config,
+            )
         
         @self.app.route('/upload', methods=['POST'])
         def upload_file():
@@ -1812,9 +1824,130 @@ class RAGKnowledgebaseManager:
             except Exception as e:
                 flash(f'Error deleting embeddings: {str(e)}', 'error')
                 logger.error(f"Embedding deletion error for {filename}: {str(e)}")
-            
+
             return redirect(url_for('index'))
-        
+
+        @self.app.route('/email_accounts', methods=['GET'])
+        def list_email_accounts():
+            """Return JSON list of configured email accounts."""
+            try:
+                with sqlite3.connect(self.url_manager.db_path) as conn:
+                    manager = EmailAccountManager(conn)
+                    accounts = manager.list_accounts()
+                return jsonify(accounts)
+            except Exception as e:
+                logger.error(f"Failed to fetch email accounts: {e}")
+                return jsonify({"error": "Failed to fetch email accounts"}), 500
+
+        @self.app.route('/email_accounts', methods=['POST'])
+        def add_email_account():
+            """Create a new email account configuration."""
+            account_name = request.form.get('account_name', '').strip()
+            server = request.form.get('server', '').strip()
+            username = request.form.get('username', '').strip()
+            password = request.form.get('password', '').strip()
+            port_str = request.form.get('port', '').strip()
+            mailbox = request.form.get('mailbox', '').strip() or None
+            batch_limit_str = request.form.get('batch_limit', '').strip()
+            use_ssl = request.form.get('use_ssl', '0') == '1'
+
+            if not all([account_name, server, username, password, port_str]):
+                flash('Missing required fields', 'error')
+                return redirect(url_for('index'))
+
+            try:
+                port = int(port_str)
+                batch_limit = int(batch_limit_str) if batch_limit_str else None
+            except ValueError:
+                flash('Port and batch limit must be numbers', 'error')
+                return redirect(url_for('index'))
+
+            record = {
+                'account_name': account_name,
+                'server_type': 'imap',
+                'server': server,
+                'port': port,
+                'username': username,
+                'password': password,
+                'mailbox': mailbox,
+                'batch_limit': batch_limit,
+                'use_ssl': 1 if use_ssl else 0,
+            }
+
+            try:
+                with sqlite3.connect(self.url_manager.db_path) as conn:
+                    manager = EmailAccountManager(conn)
+                    manager.create_account(record)
+                flash('Email account added successfully', 'success')
+            except Exception as e:
+                flash(f'Failed to add email account: {e}', 'error')
+
+            return redirect(url_for('index'))
+
+        @self.app.route('/email_accounts/<int:account_id>', methods=['POST'])
+        def update_email_account(account_id: int):
+            """Update an existing email account configuration."""
+            account_name = request.form.get('account_name', '').strip()
+            server = request.form.get('server', '').strip()
+            username = request.form.get('username', '').strip()
+            password = request.form.get('password', '').strip()
+            port_str = request.form.get('port', '').strip()
+            mailbox = request.form.get('mailbox', '').strip() or None
+            batch_limit_str = request.form.get('batch_limit', '').strip()
+            use_ssl = request.form.get('use_ssl', '0') == '1'
+
+            updates: Dict[str, Any] = {}
+            if account_name:
+                updates['account_name'] = account_name
+            if server:
+                updates['server'] = server
+            if username:
+                updates['username'] = username
+            if password:
+                updates['password'] = password
+            if mailbox is not None:
+                updates['mailbox'] = mailbox
+            if batch_limit_str:
+                try:
+                    updates['batch_limit'] = int(batch_limit_str)
+                except ValueError:
+                    flash('Batch limit must be a number', 'error')
+                    return redirect(url_for('index'))
+            if port_str:
+                try:
+                    updates['port'] = int(port_str)
+                except ValueError:
+                    flash('Port must be a number', 'error')
+                    return redirect(url_for('index'))
+            updates['use_ssl'] = 1 if use_ssl else 0
+
+            if not updates:
+                flash('No fields to update', 'error')
+                return redirect(url_for('index'))
+
+            try:
+                with sqlite3.connect(self.url_manager.db_path) as conn:
+                    manager = EmailAccountManager(conn)
+                    manager.update_account(account_id, updates)
+                flash('Email account updated successfully', 'success')
+            except Exception as e:
+                flash(f'Failed to update email account: {e}', 'error')
+
+            return redirect(url_for('index'))
+
+        @self.app.route('/email_accounts/<int:account_id>/delete', methods=['POST'])
+        def delete_email_account(account_id: int):
+            """Remove an email account configuration."""
+            try:
+                with sqlite3.connect(self.url_manager.db_path) as conn:
+                    manager = EmailAccountManager(conn)
+                    manager.delete_account(account_id)
+                flash('Email account deleted', 'success')
+            except Exception as e:
+                flash(f'Failed to delete email account: {e}', 'error')
+
+            return redirect(url_for('index'))
+
         @self.app.route('/add_url', methods=['POST'])
         def add_url():
             """Add a new URL with automatic title extraction."""
