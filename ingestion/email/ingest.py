@@ -7,6 +7,8 @@ import sqlite3
 from datetime import datetime, timedelta
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
+from bs4 import BeautifulSoup
+
 from .connector import EmailConnector, IMAPConnector
 from .processor import EmailProcessor
 
@@ -38,7 +40,23 @@ def _content_hash(record: Dict[str, Any]) -> str:
 
 
 def _normalize(record: Dict[str, Any]) -> Dict[str, Any]:
-    """Normalize an email record by populating hashes and defaults."""
+    """Normalize an email record by populating hashes and defaults.
+
+    This function performs light text normalisation on the message body prior
+    to computing hashes. If ``body_text`` is missing but ``body_html`` is
+    present, the HTML is converted to plain text. Simple email signature blocks
+    are stripped by removing any content following the conventional ``"--"``
+    separator.
+    """
+    body_text = record.get("body_text")
+    body_html = record.get("body_html")
+    if not body_text and body_html:
+        body_text = BeautifulSoup(body_html, "html.parser").get_text()
+    if body_text:
+        # Remove common signature blocks marked by "--" on its own line
+        parts = body_text.split("\n--\n", 1)
+        record["body_text"] = parts[0].strip()
+    
     participants = set()
     from_addr = record.get("from_addr")
     if from_addr:
