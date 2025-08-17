@@ -514,7 +514,8 @@
                                                             data-mailbox="{{ acct.mailbox or '' }}"
                                                             data-batch="{{ acct.batch_limit or '' }}"
                                                             data-interval="{{ acct.refresh_interval_minutes or '' }}"
-                                                            data-ssl="{{ '1' if acct.use_ssl else '0' }}">
+                                                            data-ssl="{{ '1' if acct.use_ssl else '0' }}"
+                                                            data-type="{{ acct.server_type }}">
                                                         <i class="fas fa-pen"></i>
                                                     </button>
                                                     <button type="button" class="btn btn-outline-danger delete-account-btn"
@@ -554,6 +555,13 @@
                             <div class="mb-3">
                                 <label class="form-label">Display Name</label>
                                 <input type="text" class="form-control" name="account_name" required>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Server Type</label>
+                                <select class="form-select" name="server_type" required>
+                                    <option value="imap">IMAP</option>
+                                    <option value="gmail">Gmail</option>
+                                </select>
                             </div>
                             <div class="mb-3">
                                 <label class="form-label">Server</label>
@@ -615,6 +623,13 @@
                             <div class="mb-3">
                                 <label class="form-label">Display Name</label>
                                 <input type="text" class="form-control" name="account_name" id="editAccountName" required>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Server Type</label>
+                                <select class="form-select" name="server_type" id="editServerType" required>
+                                    <option value="imap">IMAP</option>
+                                    <option value="gmail">Gmail</option>
+                                </select>
                             </div>
                             <div class="mb-3">
                                 <label class="form-label">Server</label>
@@ -997,6 +1012,7 @@
                     document.getElementById('editBatchLimit').value = btn.dataset.batch || '';
                     document.getElementById('editRefreshInterval').value = btn.dataset.interval || '';
                     document.getElementById('editUseSSL').checked = btn.dataset.ssl === '1';
+                    document.getElementById('editServerType').value = btn.dataset.type || 'imap';
                 });
             });
             // Populate delete confirmation modal

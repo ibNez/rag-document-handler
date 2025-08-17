@@ -97,7 +97,9 @@ class IMAPConnector(EmailConnector):
                 continue
             try:
                 msg = message_from_bytes(msg_data[0][1])
-                results.append(self._parse_email(msg))
+                rec = self._parse_email(msg)
+                rec["server_type"] = "imap"
+                results.append(rec)
             except Exception as exc:  # pragma: no cover - defensive
                 results.append(
                     {
@@ -134,6 +136,7 @@ class IMAPConnector(EmailConnector):
                         "participants": [],
                         "participants_hash": None,
                         "to_primary": None,
+                        "server_type": "imap",
                     }
                 )
         conn.logout()
@@ -367,7 +370,9 @@ class GmailConnector(EmailConnector):
                     try:
                         raw = base64.urlsafe_b64decode(msg_data.get("raw", "").encode("utf-8"))
                         msg = message_from_bytes(raw)
-                        results.append(self._parse_email(msg))
+                        rec = self._parse_email(msg)
+                        rec["server_type"] = "gmail"
+                        results.append(rec)
                     except Exception:
                         continue
                     fetched += 1

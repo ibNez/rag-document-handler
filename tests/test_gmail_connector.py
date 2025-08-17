@@ -59,3 +59,4 @@ def test_gmail_fetch_emails_returns_canonical_records(monkeypatch: pytest.Monkey
     assert record["body_text"].strip() == "Hi Bob"
     assert record["has_attachments"] == 1
     assert record["attachment_manifest"][0]["filename"] == "note.txt"
+    assert record["server_type"] == "gmail"
