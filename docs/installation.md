@@ -63,6 +63,21 @@ The application can optionally synchronise an IMAP inbox. Define the following e
 | `IMAP_USE_SSL` | `true` | Use SSL/TLS for IMAP connection |
 | `EMAIL_SYNC_INTERVAL_SECONDS` | `300` | Interval between sync cycles in seconds |
 
+### Email account secret key
+
+Passwords for stored email accounts are encrypted using a symmetric key. The
+application expects a Fernet key to be supplied via the
+`EMAIL_ENCRYPTION_KEY` environment variable. Generate a key and set it in your
+environment (or `.env` file) before running the app:
+
+```bash
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+export EMAIL_ENCRYPTION_KEY="<output-from-command>"
+```
+
+Keep this value secret and **do not** commit it to version control. If the key
+is rotated, previously stored passwords will need to be re-entered.
+
 ## TODOs
 
 - [ ] Provide Docker Compose configuration for full-stack deployment.

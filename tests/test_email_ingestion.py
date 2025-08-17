@@ -203,7 +203,7 @@ def test_email_orchestrator_processes_multiple_accounts(monkeypatch: pytest.Monk
     monkeypatch.setattr(orchestrator_module, "IMAPConnector", DummyConnector)
 
     class DummyAccountManager:
-        def list_accounts(self):
+        def list_accounts(self, include_password: bool = False):
             return [
                 {
                     "server_type": "imap",

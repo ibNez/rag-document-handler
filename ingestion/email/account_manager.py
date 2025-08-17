@@ -6,6 +6,8 @@ import logging
 import sqlite3
 from typing import Any, Dict, List
 
+from .crypto import decrypt, encrypt
+
 logger = logging.getLogger(__name__)
 
 
@@ -65,6 +67,11 @@ class EmailAccountManager:
         if missing:
             raise ValueError(f"record missing required fields: {', '.join(sorted(missing))}")
 
+        # Encrypt the password before persisting
+        record = dict(record)
+        if "password" in record:
+            record["password"] = encrypt(str(record["password"]))
+
         cols = list(record.keys())
         placeholders = ",".join(["?"] * len(cols))
         sql = f"INSERT INTO email_accounts ({','.join(cols)}) VALUES ({placeholders})"
@@ -76,13 +83,34 @@ class EmailAccountManager:
         return account_id
 
     # ------------------------------------------------------------------
-    def list_accounts(self) -> List[Dict[str, Any]]:
-        """Return all email account records."""
+    def list_accounts(self, include_password: bool = False) -> List[Dict[str, Any]]:
+        """Return all email account records.
+
+        Parameters
+        ----------
+        include_password:
+            If ``True`` decrypted passwords are included in the returned
+            dictionaries.  When ``False`` (default) the ``password`` field is
+            omitted entirely so sensitive data is not exposed to templates or
+            API responses.
+        """
         self.conn.row_factory = sqlite3.Row
         cur = self.conn.cursor()
         cur.execute("SELECT * FROM email_accounts")
         rows = cur.fetchall()
-        return [self._row_to_dict(r) for r in rows]
+
+        accounts: List[Dict[str, Any]] = []
+        for row in rows:
+            data = self._row_to_dict(row)
+            if include_password and "password" in data:
+                try:
+                    data["password"] = decrypt(data["password"])
+                except Exception:
+                    data["password"] = ""
+            else:
+                data.pop("password", None)
+            accounts.append(data)
+        return accounts
 
     # ------------------------------------------------------------------
     def update_account(self, account_id: int, updates: Dict[str, Any]) -> None:
@@ -97,8 +125,13 @@ class EmailAccountManager:
         """
         if not updates:
             return
-        assignments = ", ".join([f"{col} = ?" for col in updates])
-        values = list(updates.values()) + [account_id]
+        # Encrypt password if present
+        params = dict(updates)
+        if "password" in params:
+            params["password"] = encrypt(str(params["password"]))
+
+        assignments = ", ".join([f"{col} = ?" for col in params])
+        values = list(params.values()) + [account_id]
         cur = self.conn.cursor()
         cur.execute(
             f"UPDATE email_accounts SET {assignments} WHERE id = ?",

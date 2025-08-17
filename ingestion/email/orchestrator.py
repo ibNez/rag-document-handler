@@ -37,7 +37,7 @@ class EmailOrchestrator:
         if not self.account_manager:
             return
         try:
-            self.accounts = self.account_manager.list_accounts()
+            self.accounts = self.account_manager.list_accounts(include_password=True)
         except Exception as exc:  # pragma: no cover - defensive
             logger.error(f"Failed to load email accounts: {exc}")
             self.accounts = []
