@@ -111,7 +111,7 @@ def test_run_email_ingestion_deduplicates() -> None:
                 "is_forward": 0,
                 "raw_size_bytes": None,
                 "body_text": None,
-                "body_html": "<p>Same</p>",
+                "body_html": "<p>First</p>",
                 "language": None,
                 "has_attachments": 0,
                 "attachment_manifest": [],
@@ -132,15 +132,18 @@ def test_run_email_ingestion_deduplicates() -> None:
                 "to_primary": None,
             }
             rec1 = {"message_id": "1", **base}
-            rec2 = {"message_id": "2", **base}
+            rec2 = {"message_id": "1", **base, "body_html": "<p>Second</p>"}
             return [rec1, rec2]
 
     class DummyManager:
         def __init__(self):
             self.seen: set[str] = set()
 
+        def get_email_by_header_hash(self, hh: str):
+            return {"header_hash": hh} if hh in self.seen else None
+
         def get_email_by_hash(self, ch: str):
-            return {"content_hash": ch} if ch in self.seen else None
+            return None
 
         def upsert_email(self, record: Dict[str, Any]) -> None:  # pragma: no cover - stub
             pass
@@ -151,7 +154,7 @@ def test_run_email_ingestion_deduplicates() -> None:
             self.processed: List[Dict[str, Any]] = []
 
         def process(self, record: Dict[str, Any]) -> None:
-            self.manager.seen.add(record["content_hash"])
+            self.manager.seen.add(record["header_hash"])
             self.processed.append(record)
 
     connector = DummyConnector()
