@@ -7,6 +7,7 @@ import os
 import sys
 from datetime import datetime
 from typing import Any
+import logging
 from unittest.mock import MagicMock
 
 import pytest
@@ -60,3 +61,23 @@ def test_gmail_fetch_emails_returns_canonical_records(monkeypatch: pytest.Monkey
     assert record["has_attachments"] == 1
     assert record["attachment_manifest"][0]["filename"] == "note.txt"
     assert record["server_type"] == "gmail"
+
+
+def test_gmail_fetch_emails_handles_http_error(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """``GmailConnector.fetch_emails`` should log a warning and return an empty list on HttpError."""
+    service = MagicMock()
+    users = service.users.return_value
+    messages = users.messages.return_value
+    messages.list.return_value.execute.side_effect = connector_module.HttpError("boom")
+
+    monkeypatch.setattr(connector_module, "build", lambda *a, **k: service)
+
+    connector = GmailConnector(credentials=MagicMock(), user_id="me", batch_limit=10)
+
+    with caplog.at_level(logging.WARNING, logger=connector_module.__name__):
+        records = connector.fetch_emails()
+
+    assert records == []
+    assert any("Gmail API error" in r.message for r in caplog.records)
