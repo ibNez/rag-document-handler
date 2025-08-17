@@ -2387,10 +2387,10 @@ class RAGKnowledgebaseManager:
             # A TTL cleanup will purge it later via get_status.
             pass
 
-        def _refresh_email_account_background(self, account_id: int) -> None:
-            """Fetch emails for a specific account in a background thread."""
-            if not self.email_account_manager:
-                return
+    def _refresh_email_account_background(self, account_id: int) -> None:
+        """Fetch emails for a specific account in a background thread."""
+        if not self.email_account_manager:
+            return
         try:
             account = None
             for acct in self.email_account_manager.list_accounts(include_password=True):
@@ -2445,6 +2445,7 @@ class RAGKnowledgebaseManager:
                     user_id=account.get('username') or 'me',
                     batch_limit=batch_limit,
                 )
+                
             elif server_type == 'exchange':
                 connector = ExchangeConnector(
                     server=account['server'],
