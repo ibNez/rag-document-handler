@@ -1397,6 +1397,8 @@ class RAGKnowledgebaseManager:
         self.processing_status: Dict[str, ProcessingStatus] = {}
         # URL refresh status tracking (keyed by url_id)
         self.url_processing_status: Dict[int, ProcessingStatus] = {}
+        # Email refresh status tracking (keyed by account id)
+        self.email_processing_status: Dict[int, ProcessingStatus] = {}
         # Scheduler thread handle
         self._scheduler_thread: Optional[threading.Thread] = None
 
@@ -1429,7 +1431,6 @@ class RAGKnowledgebaseManager:
             self.email_orchestrator = EmailOrchestrator(
                 self.config, self.email_account_manager
             )
-            self.email_orchestrator.start()
         except Exception as e:
             logger.error(f"Failed to start email orchestrator: {e}")
 
@@ -2343,6 +2344,12 @@ class RAGKnowledgebaseManager:
             if not account:
                 return
 
+            st = self.email_processing_status.get(account_id)
+            if st is None:
+                st = ProcessingStatus(filename=account.get('account_name') or account.get('username'))
+                self.email_processing_status[account_id] = st
+            st.status = 'processing'; st.message = 'Starting email refresh...'; st.progress = 5; st.start_time = datetime.now()
+
             from ingestion.email.connector import IMAPConnector, GmailConnector, ExchangeConnector
             from ingestion.email.processor import EmailProcessor
             from ingestion.email.ingest import run_email_ingestion
@@ -2406,8 +2413,18 @@ class RAGKnowledgebaseManager:
                 )
             except Exception:
                 pass
+            if st:
+                st.status = 'completed'; st.message = 'Email refresh complete'; st.progress = 100; st.end_time = datetime.now()
         except Exception as exc:
             logger.error(f"Email refresh error for account {account_id}: {exc}")
+            st = self.email_processing_status.get(account_id)
+            if st:
+                st.status = 'error'; st.message = f'Refresh failed: {exc}'; st.error_details = str(exc); st.progress = 100; st.end_time = datetime.now()
+        finally:
+            try:
+                del self.email_processing_status[account_id]
+            except Exception:
+                pass
 
     def _process_url_background(self, url_id: int) -> None:
         """Fetch, chunk, and index the content at a URL. Replace previous embeddings for that URL."""
@@ -2545,18 +2562,30 @@ class RAGKnowledgebaseManager:
                 pass
 
     def _scheduler_loop(self):
-        """Background loop to schedule URL refresh based on next_run."""
-        logger.info("URL scheduler started")
+        """Background loop that schedules URL and email refresh tasks."""
+        logger.info("Scheduler started")
         cycle = 0
         while True:
             try:
                 cycle += 1
                 self._scheduler_last_cycle = time.time()
-                due = self.url_manager.get_due_urls()
-                logger.info(f"Scheduler cycle {cycle} heartbeat: due={len(due)} active_urls_total={self.url_manager.get_url_count()}")
+                due_urls = self.url_manager.get_due_urls()
+                due_accounts = []
+                if getattr(self, 'email_orchestrator', None):
+                    try:
+                        due_accounts = self.email_orchestrator.get_due_accounts()
+                    except Exception as exc:
+                        logger.error(f"Failed to get due email accounts: {exc}")
+                        due_accounts = []
+                logger.info(
+                    "Scheduler cycle %s heartbeat: urls_due=%s emails_due=%s active_urls_total=%s",
+                    cycle,
+                    len(due_urls),
+                    len(due_accounts),
+                    self.url_manager.get_url_count(),
+                )
                 started = 0
-                for rec in due:
-                    # Avoid starting a duplicate refresh if one is already running for this URL
+                for rec in due_urls:
                     if rec['id'] in self.url_processing_status:
                         continue
                     self.url_processing_status[rec['id']] = ProcessingStatus(filename=rec.get('title') or rec.get('url'))
@@ -2564,19 +2593,30 @@ class RAGKnowledgebaseManager:
                     t.daemon = True
                     t.start()
                     started += 1
+                for account in due_accounts:
+                    acct_id = account.get('id')
+                    if acct_id is None or acct_id in self.email_processing_status:
+                        continue
+                    self.email_processing_status[acct_id] = ProcessingStatus(filename=account.get('account_name') or account.get('username'))
+                    t = threading.Thread(target=self._refresh_email_account_background, args=(acct_id,))
+                    t.daemon = True
+                    t.start()
+                    started += 1
                 sleep_for = self.config.SCHEDULER_POLL_SECONDS_BUSY if started else self.config.SCHEDULER_POLL_SECONDS_IDLE
-                logger.debug(f"Scheduler cycle {cycle}: started {started} task(s); sleeping {sleep_for}s")
+                logger.debug(
+                    f"Scheduler cycle {cycle}: started {started} task(s); sleeping {sleep_for}s"
+                )
                 time.sleep(sleep_for)
             except Exception as e:
                 logger.error(f"Scheduler loop error: {e}")
                 time.sleep(30)
 
     def _start_scheduler(self):
-        # Avoid duplicate scheduler threads
+        """Start the unified scheduler thread if not already running."""
         if self._scheduler_thread and self._scheduler_thread.is_alive():
             logger.debug("Scheduler thread already running")
             return
-        th = threading.Thread(target=self._scheduler_loop, name="url-scheduler")
+        th = threading.Thread(target=self._scheduler_loop, name="scheduler")
         th.daemon = True
         th.start()
         self._scheduler_thread = th
