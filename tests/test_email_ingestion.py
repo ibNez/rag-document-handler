@@ -6,6 +6,7 @@ from typing import Any, Dict, List
 from unittest.mock import MagicMock
 
 import sqlite3
+import logging
 import pytest
 import sys
 import os
@@ -167,9 +168,82 @@ def test_run_email_ingestion_deduplicates() -> None:
 
     connector = DummyConnector()
     processor = DummyProcessor()
-    processed = run_email_ingestion(connector, processor)
+    processed, failures = run_email_ingestion(connector, processor)
     assert processed == 1
+    assert failures == 0
     assert len(processor.processed) == 1
+
+
+def test_run_email_ingestion_counts_failures(caplog: pytest.LogCaptureFixture) -> None:
+    """Failures should be logged and counted without stopping processing."""
+
+    class DummyConnector:
+        def fetch_emails(self, since_date=None):
+            base = {
+                "thread_id": None,
+                "subject": "Hi",
+                "from_addr": "a@example.com",
+                "to_addrs": ["b@example.com"],
+                "cc_addrs": [],
+                "date_utc": "2024-01-01",
+                "received_utc": None,
+                "in_reply_to": None,
+                "references_ids": [],
+                "is_reply": 0,
+                "is_forward": 0,
+                "raw_size_bytes": None,
+                "body_text": None,
+                "body_html": "<p>First</p>",
+                "language": None,
+                "has_attachments": 0,
+                "attachment_manifest": [],
+                "processed": 0,
+                "ingested_at": None,
+                "updated_at": None,
+                "content_hash": None,
+                "summary": None,
+                "keywords": None,
+                "auto_topic": None,
+                "manual_topic": None,
+                "topic_confidence": None,
+                "topic_version": None,
+                "error_state": None,
+                "direction": None,
+                "participants": [],
+                "participants_hash": None,
+                "to_primary": None,
+                "server_type": "imap",
+            }
+            rec1 = {"message_id": "1", **base}
+            rec2 = {"message_id": "2", **base}
+            rec3 = {"message_id": "3", **base}
+            return [rec1, rec2, rec3]
+
+    class DummyManager:
+        def get_email_by_header_hash(self, hh: str):
+            return None
+
+        def get_email_by_hash(self, ch: str):
+            return None
+
+    class DummyProcessor:
+        def __init__(self):
+            self.manager = DummyManager()
+            self.processed: List[Dict[str, Any]] = []
+
+        def process(self, record: Dict[str, Any]) -> None:
+            if record["message_id"] == "2":
+                raise ValueError("boom")
+            self.processed.append(record)
+
+    connector = DummyConnector()
+    processor = DummyProcessor()
+    with caplog.at_level(logging.ERROR):
+        processed, failures = run_email_ingestion(connector, processor)
+    assert processed == 2
+    assert failures == 1
+    assert [r["message_id"] for r in processor.processed] == ["1", "3"]
+    assert "Failed to process email 2" in caplog.text
 
 
 def test_email_processor_process_uses_dependencies(raw_email_record: Dict[str, Any]) -> None:
@@ -354,8 +428,9 @@ def test_run_email_ingestion_header_hash_dedup(monkeypatch: pytest.MonkeyPatch) 
 
     connector = DummyConnector()
     processor = DummyProcessor()
-    processed = run_email_ingestion(connector, processor)
+    processed, failures = run_email_ingestion(connector, processor)
     assert processed == 1
+    assert failures == 0
     assert len(processor.processed) == 1
     assert manager.get_email_by_header_hash.call_count == 2
 

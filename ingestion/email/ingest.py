@@ -6,7 +6,7 @@ import json
 import logging
 import sqlite3
 from datetime import UTC, datetime, timedelta
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from bs4 import BeautifulSoup
 
@@ -82,7 +82,8 @@ def run_email_ingestion(
     processor: EmailProcessor,
     *,
     since_date: Optional[datetime] = None,
-) -> int:
+
+) -> Tuple[int, int]:
     """Execute the email ingestion pipeline.
 
     The pipeline performs the following steps:
@@ -94,8 +95,8 @@ def run_email_ingestion(
 
     Returns
     -------
-    int
-        Number of new emails processed.
+    Tuple[int, int]
+        A tuple of ``(successes, failures)``.
     """
     logger.info(
         "Starting email ingestion using %s", connector.__class__.__name__
@@ -104,9 +105,10 @@ def run_email_ingestion(
     logger.info("Fetched %d emails", len(records))
     if not records:
         logger.info("No emails retrieved; ending ingestion run")
-        return 0
+        return 0, 0
 
     processed = 0
+    failures = 0
     for rec in (_normalize(r) for r in records):
         hh = rec.get("header_hash")
         if hh and processor.manager.get_email_by_header_hash(hh):
@@ -114,10 +116,22 @@ def run_email_ingestion(
         ch = rec.get("content_hash")
         if ch and processor.manager.get_email_by_hash(ch):
             continue
-        processor.process(rec)
-        processed += 1
-    logger.info("Email ingestion complete; processed %d new emails", processed)
-    return processed
+        try:
+            processor.process(rec)
+            processed += 1
+        except Exception:  # pragma: no cover - defensive
+            message_id = rec.get("message_id")
+            if message_id:
+                logger.exception("Failed to process email %s", message_id)
+            else:
+                logger.exception("Failed to process email")
+            failures += 1
+    logger.info(
+        "Email ingestion complete; processed %d emails (%d failures)",
+        processed,
+        failures,
+    )
+    return processed, failures
 
 
 def main() -> None:
