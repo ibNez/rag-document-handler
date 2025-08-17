@@ -1010,6 +1010,7 @@ class MilvusManager:
         seen_hashes = set()
         texts: List[str] = []
         metas: List[Dict[str, Any]] = []
+        duplicates = 0
         for idx, d in enumerate(docs):
             content = (d.page_content or '').strip()
             if not content:
@@ -1020,6 +1021,7 @@ class MilvusManager:
             if not ch:
                 ch = hashlib.sha1(content.encode('utf-8')).hexdigest()[:16]
             if ch in seen_hashes:
+                duplicates += 1
                 continue
             seen_hashes.add(ch)
             # Populate required projection fields
@@ -1033,8 +1035,11 @@ class MilvusManager:
             meta['content_length'] = len(content)
             metas.append(self._sanitize_and_project_meta(meta))
             texts.append(content)
+        if duplicates:
+            logger.debug(f"Skipped {duplicates} duplicate chunks for source '{source}'")
         if not texts:
             return 0
+        start_time = time.perf_counter()
         try:
             if getattr(self.vector_store, 'collection_name', None) != self.collection_name:
                 # Rare mismatch; recreate
@@ -1057,6 +1062,10 @@ class MilvusManager:
                 col.flush()
             except Exception:
                 pass
+            elapsed = time.perf_counter() - start_time
+            logger.info(
+                f"Inserted {len(texts)} unique chunks for source '{source}' in {elapsed:.2f}s"
+            )
             return len(texts)
         except Exception as e:
             logger.error(f"Failed inserting documents for {source}: {e}")
