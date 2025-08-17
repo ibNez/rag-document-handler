@@ -182,6 +182,19 @@ class EmailAccountManager:
         logger.debug("Deleted email account %s", account_id)
 
     # ------------------------------------------------------------------
+    def get_account_count(self) -> int:
+        """Get the total number of active email accounts."""
+        try:
+            cur = self.conn.cursor()
+            cur.execute(
+                "SELECT COUNT(*) FROM email_accounts WHERE refresh_interval_minutes IS NULL OR refresh_interval_minutes > 0"
+            )
+            return cur.fetchone()[0]
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.error(f"Error getting email account count: {exc}")
+            return 0
+
+    # ------------------------------------------------------------------
     def _row_to_dict(self, row: sqlite3.Row) -> Dict[str, Any]:
         data = dict(row)
         if "use_ssl" in data:

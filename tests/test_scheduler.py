@@ -6,6 +6,7 @@ import os
 import sys
 import types
 import threading
+import logging
 import pytest
 
 # Stub external dependencies for app import
@@ -121,3 +122,50 @@ def test_scheduler_triggers_url_and_email(monkeypatch):
 
     assert url_event.is_set()
     assert email_event.is_set()
+
+
+def test_scheduler_logs_active_email_count(monkeypatch, caplog):
+    """Scheduler heartbeat should include active email account count."""
+
+    class DummyURLManager:
+        def get_due_urls(self):
+            return []
+
+        def get_url_count(self):
+            return 1
+
+    class DummyAccountManager:
+        def get_account_count(self):
+            return 2
+
+    class DummyEmailOrchestrator:
+        def __init__(self):
+            self.account_manager = DummyAccountManager()
+
+        def get_due_accounts(self):
+            return []
+
+    mgr = object.__new__(app.RAGKnowledgebaseManager)
+    mgr.config = types.SimpleNamespace(
+        SCHEDULER_POLL_SECONDS_BUSY=0, SCHEDULER_POLL_SECONDS_IDLE=0
+    )
+    mgr.url_manager = DummyURLManager()
+    mgr.email_orchestrator = DummyEmailOrchestrator()
+    mgr.url_processing_status = {}
+    mgr.email_processing_status = {}
+    mgr._scheduler_last_cycle = None
+
+    class SchedulerExit(BaseException):
+        pass
+
+    def fake_sleep(_):
+        raise SchedulerExit()
+
+    monkeypatch.setattr(app, "time", types.SimpleNamespace(time=lambda: 0, sleep=fake_sleep))
+
+    with caplog.at_level(logging.INFO):
+        with pytest.raises(SchedulerExit):
+            mgr._scheduler_loop()
+
+    messages = "\n".join(record.getMessage() for record in caplog.records)
+    assert "active_emails_total=2" in messages
