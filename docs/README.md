@@ -10,6 +10,7 @@ The application forms a RAG-focused data lake using Milvus for vector embeddings
 - [System Architecture](architecture.md)
 - [Contributing](contributing.md)
 - [Gmail Email Ingestion](gmail_ingestion.md)
+- [Exchange Email Ingestion](exchange_ingestion.md)
 - [Roadmap](roadmap.md)
 - [Realm Tiles Prompt](realm_tiles_prompt.md)
 
