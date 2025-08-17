@@ -28,7 +28,7 @@ pip install --upgrade pip
 
 # Install dependencies
 echo "📚 Installing dependencies..."
-pip install flask pymilvus sentence-transformers werkzeug python-dotenv pypdf python-docx chardet requests beautifulsoup4
+pip install flask pymilvus sentence-transformers werkzeug python-dotenv pypdf python-docx chardet requests beautifulsoup4 google-api-python-client google-auth
 
 # Install development dependencies (optional)
 echo "🛠️ Installing development dependencies..."
