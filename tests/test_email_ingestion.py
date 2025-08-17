@@ -268,6 +268,57 @@ def test_email_processor_process_uses_dependencies(raw_email_record: Dict[str, A
     milvus.add_embeddings.assert_called_once()
 
 
+def test_email_processor_logs_and_counts_missing_body(caplog: pytest.LogCaptureFixture) -> None:
+    """Messages lacking body text should be logged and counted."""
+
+    class FakeEmbedModel:
+        def embed_documents(self, docs: List[str]) -> List[List[float]]:  # pragma: no cover - stub
+            return [[0.0] for _ in docs]
+
+    milvus = MagicMock()
+    sqlite_conn = sqlite3.connect(":memory:")
+    processor = EmailProcessor(
+        milvus, sqlite_conn, embedding_model=FakeEmbedModel(), chunk_size=50, chunk_overlap=0
+    )
+    processor.manager.upsert_email = MagicMock()
+
+    record = {"message_id": "skip-1", "body_text": "   "}
+
+    with caplog.at_level(logging.DEBUG):
+        processor.process(record)
+
+    assert "Skipping message skip-1 due to missing body text" in caplog.text
+    assert processor.skipped_messages == 1
+
+
+def test_email_processor_logs_and_counts_zero_chunks(caplog: pytest.LogCaptureFixture) -> None:
+    """Zero chunks after splitting should be logged and counted."""
+
+    class FakeEmbedModel:
+        def embed_documents(self, docs: List[str]) -> List[List[float]]:  # pragma: no cover - stub
+            return [[0.0] for _ in docs]
+
+    milvus = MagicMock()
+    sqlite_conn = sqlite3.connect(":memory:")
+    processor = EmailProcessor(
+        milvus, sqlite_conn, embedding_model=FakeEmbedModel(), chunk_size=50, chunk_overlap=0
+    )
+    processor.manager.upsert_email = MagicMock()
+
+    # Force splitter to return only empty/whitespace strings
+    processor.splitter.split_text = MagicMock(return_value=["   ", ""])
+
+    record = {"message_id": "skip-2", "body_text": "hello"}
+
+    with caplog.at_level(logging.DEBUG):
+        processor.process(record)
+
+    assert (
+        "Skipping message skip-2 because splitter produced no chunks" in caplog.text
+    )
+    assert processor.skipped_messages == 1
+
+
 def test_email_processor_uses_env_model(monkeypatch: pytest.MonkeyPatch) -> None:
     """Default EmailProcessor should initialize OllamaEmbeddings with env model."""
 
