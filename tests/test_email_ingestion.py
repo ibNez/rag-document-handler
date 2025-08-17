@@ -194,6 +194,30 @@ def test_email_processor_process_uses_dependencies(raw_email_record: Dict[str, A
     milvus.add_embeddings.assert_called_once()
 
 
+def test_email_processor_uses_env_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Default EmailProcessor should initialize OllamaEmbeddings with env model."""
+
+    captured: Dict[str, Any] = {}
+
+    class DummyEmbeddings:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            captured.update(kwargs)
+
+        def embed_documents(self, docs: List[str]) -> List[List[float]]:  # pragma: no cover - stub
+            return [[0.0] for _ in docs]
+
+    import ingestion.email.processor as processor_module
+
+    monkeypatch.setenv("EMBEDDING_MODEL", "env-model")
+    monkeypatch.setattr(processor_module, "OllamaEmbeddings", DummyEmbeddings)
+
+    milvus = MagicMock()
+    sqlite_conn = sqlite3.connect(":memory:")
+    processor_module.EmailProcessor(milvus, sqlite_conn)
+
+    assert captured.get("model") == "env-model"
+
+
 def test_email_orchestrator_processes_multiple_accounts(monkeypatch: pytest.MonkeyPatch) -> None:
     """EmailOrchestrator should fetch emails for each configured account."""
 
