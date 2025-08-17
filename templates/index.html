@@ -484,9 +484,10 @@
                                     <thead class="table-light">
                                         <tr>
                                             <th>Display Name</th>
+                                            <th>Server Type</th>
                                             <th>Server</th>
                                             <th>Username</th>
-                                            <th>Schedule</th>
+                                            <th>Schedule / Time</th>
                                             <th class="text-end">Actions</th>
                                         </tr>
                                     </thead>
@@ -494,6 +495,7 @@
                                     {% for acct in email_accounts %}
                                         <tr>
                                             <td>{{ acct.account_name }}</td>
+                                            <td>{{ {'imap': 'IMAP', 'gmail': 'Gmail', 'exchange': 'Exchange'}.get(acct.server_type, acct.server_type) }}</td>
                                             <td>{{ acct.server }}:{{ acct.port }}</td>
                                             <td>{{ acct.username }}</td>
                                             <td class="small">
