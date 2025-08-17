@@ -389,16 +389,16 @@
                                                 </td>
                                                 <td class="text-end">
                                                     <div class="btn-group btn-group-sm" role="group">
-                                                        <button type="button" class="btn btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#editUrlModal-{{ url.id }}" title="Edit">
+                                                        <button type="button" class="btn btn-outline-secondary action-btn" data-bs-toggle="modal" data-bs-target="#editUrlModal-{{ url.id }}" title="Edit">
                                                             <i class="fas fa-pen"></i>
                                                         </button>
                                                         <form method="POST" action="{{ url_for('ingest_url', url_id=url.id) }}">
-                                                            <button type="submit" class="btn btn-outline-primary" title="Refresh now">
+                                                            <button type="submit" class="btn btn-outline-primary action-btn" title="Refresh now">
                                                                 <i class="fas fa-sync"></i>
                                                             </button>
                                                         </form>
                                                         <form method="POST" action="{{ url_for('delete_url_bg', url_id=url.id) }}" onsubmit="return confirm('Are you sure you want to delete this URL and its embeddings?')">
-                                                            <button type="submit" class="btn btn-outline-danger" title="Delete">
+                                                            <button type="submit" class="btn btn-outline-danger action-btn" title="Delete">
                                                                 <i class="fas fa-trash"></i>
                                                             </button>
                                                         </form>
@@ -505,7 +505,7 @@
                                             </td>
                                             <td class="text-end">
                                                 <div class="btn-group btn-group-sm" role="group">
-                                                    <button type="button" class="btn btn-outline-secondary edit-account-btn"
+                                                    <button type="button" class="btn btn-outline-secondary action-btn edit-account-btn"
                                                             data-bs-toggle="modal" data-bs-target="#editEmailAccountModal"
                                                             data-action="{{ url_for('update_email_account', account_id=acct.id) }}"
                                                             data-id="{{ acct.id }}"
@@ -517,18 +517,20 @@
                                                             data-batch="{{ acct.batch_limit or '' }}"
                                                             data-interval="{{ acct.refresh_interval_minutes or '' }}"
                                                             data-ssl="{{ '1' if acct.use_ssl else '0' }}"
-                                                            data-type="{{ acct.server_type }}">
+                                                            data-type="{{ acct.server_type }}"
+                                                            title="Edit">
                                                         <i class="fas fa-pen"></i>
                                                     </button>
                                                     <form method="POST" action="{{ url_for('refresh_email_account', account_id=acct.id) }}">
-                                                        <button type="submit" class="btn btn-outline-primary" title="Refresh now">
+                                                        <button type="submit" class="btn btn-outline-primary action-btn" title="Refresh now">
                                                             <i class="fas fa-sync"></i>
                                                         </button>
                                                     </form>
-                                                    <button type="button" class="btn btn-outline-danger delete-account-btn"
+                                                    <button type="button" class="btn btn-outline-danger action-btn delete-account-btn"
                                                             data-bs-toggle="modal" data-bs-target="#deleteEmailAccountModal"
                                                             data-action="{{ url_for('delete_email_account', account_id=acct.id) }}"
-                                                            data-name="{{ acct.account_name }}">
+                                                            data-name="{{ acct.account_name }}"
+                                                            title="Delete">
                                                         <i class="fas fa-trash"></i>
                                                     </button>
                                                 </div>
@@ -727,7 +729,7 @@
                                             <th scope="col">Pages</th>
                                             <th scope="col">Words</th>
                                             <th scope="col">Chunks</th>
-                                            <th scope="col">Actions</th>
+                                            <th scope="col" class="text-end">Actions</th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -763,7 +765,7 @@
                                                     <span class="badge bg-info text-dark">{{ file.chunks_count }}</span>
                                                 {% else %}-{% endif %}
                                             </td>
-                                            <td>
+                                            <td class="text-end">
                                                 {% set st = file.status %}
                                                 {% if st and ('deletion' in (st.message or '').lower() or 'archiving' in (st.message or '').lower() or 'removing embeddings' in (st.message or '').lower()) %}
                                                     <div class="small mb-1">{{ st.message }}</div>
@@ -774,11 +776,13 @@
                                                              style="width: 0%"></div>
                                                     </div>
                                                 {% else %}
-                                                    <form method="POST" action="{{ url_for('delete_file_bg', folder='uploaded', filename=file.name) }}" onsubmit="return confirm('Delete this file and remove from database?')" style="display:inline;">
-                                                        <button type="submit" class="btn btn-sm btn-outline-danger" title="Delete">
-                                                            <i class="fas fa-trash"></i>
-                                                        </button>
-                                                    </form>
+                                                    <div class="btn-group btn-group-sm" role="group">
+                                                        <form method="POST" action="{{ url_for('delete_file_bg', folder='uploaded', filename=file.name) }}" onsubmit="return confirm('Delete this file and remove from database?')" style="display:inline;">
+                                                            <button type="submit" class="btn btn-outline-danger action-btn" title="Delete">
+                                                                <i class="fas fa-trash"></i>
+                                                            </button>
+                                                        </form>
+                                                    </div>
                                                 {% endif %}
                                             </td>
                                         </tr>
