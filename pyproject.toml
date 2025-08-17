@@ -15,13 +15,14 @@ keywords = ["rag", "milvus", "document-management", "url-management", "web-scrap
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
 ]
+
+license = "MIT"
 
 dependencies = [
     "flask>=2.3.0",
@@ -62,7 +63,10 @@ Repository = "https://github.com/tonyphilip/rag-document-handler"
 Documentation = "https://github.com/tonyphilip/rag-document-handler#readme"
 
 [tool.setuptools]
-py-modules = ["app", "config"]
+py-modules = ["app"]
+
+[project.scripts]
+rag-document-handler = "app:main"
 
 [tool.black]
 line-length = 88
