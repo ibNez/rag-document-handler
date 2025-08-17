@@ -501,8 +501,9 @@ class GmailConnector(EmailConnector):
                     self.batch_limit is not None and fetched >= self.batch_limit
                 ):
                     break
-        except HttpError:
-            pass
+        except HttpError as exc:
+            logger.warning("Gmail API error: %s", exc)
+            return []
         logger.info(
             "Retrieved %d emails from Gmail for user %s", len(results), self.user_id
         )
