@@ -167,7 +167,7 @@ def test_email_account_crud(client):
             "port": "993",
             "mailbox": "INBOX",
             "batch_limit": "10",
-            "use_ssl": "1",
+            "use_ssl": "on",
             "refresh_interval_minutes": "5",
         },
     )
@@ -180,6 +180,7 @@ def test_email_account_crud(client):
     account_id = accounts[0]["id"]
     assert "password" not in accounts[0]
     assert accounts[0]["refresh_interval_minutes"] == 5
+    assert accounts[0]["use_ssl"] == 1
     assert "last_update_status" in accounts[0]
     assert accounts[0]["last_update_status"] is None
 

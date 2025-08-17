@@ -617,18 +617,18 @@
                                 </div>
                             </div>
                             <div class="row">
-                                <div class="col-md-4 mb-3">
+                                <div class="col-md-6 mb-3">
                                     <label class="form-label">Batch Limit</label>
                                     <input type="number" class="form-control" name="batch_limit">
                                 </div>
-                                <div class="col-md-4 mb-3">
+                                <div class="col-md-6 mb-3">
                                     <label class="form-label">Refresh interval (minutes)</label>
                                     <input type="number" class="form-control" name="refresh_interval_minutes" value="{{ config.EMAIL_DEFAULT_REFRESH_MINUTES }}">
                                 </div>
-                                <div class="col-md-4 mb-3 form-check form-switch">
-                                    <input class="form-check-input" type="checkbox" name="use_ssl" id="addUseSSL">
-                                    <label class="form-check-label" for="addUseSSL">Use SSL</label>
-                                </div>
+                            </div>
+                            <div class="mb-3 form-check form-switch">
+                                <input class="form-check-input" type="checkbox" name="use_ssl" id="addUseSSL" value="1">
+                                <label class="form-check-label" for="addUseSSL">Use SSL</label>
                             </div>
                         </div>
                         <div class="modal-footer">
@@ -686,18 +686,18 @@
                                 </div>
                             </div>
                             <div class="row">
-                                <div class="col-md-4 mb-3">
+                                <div class="col-md-6 mb-3">
                                     <label class="form-label">Batch Limit</label>
                                     <input type="number" class="form-control" name="batch_limit" id="editBatchLimit">
                                 </div>
-                                <div class="col-md-4 mb-3">
+                                <div class="col-md-6 mb-3">
                                     <label class="form-label">Refresh interval (minutes)</label>
                                     <input type="number" class="form-control" name="refresh_interval_minutes" id="editRefreshInterval">
                                 </div>
-                                <div class="col-md-4 mb-3 form-check form-switch">
-                                    <input class="form-check-input" type="checkbox" name="use_ssl" id="editUseSSL">
-                                    <label class="form-check-label" for="editUseSSL">Use SSL</label>
-                                </div>
+                            </div>
+                            <div class="mb-3 form-check form-switch">
+                                <input class="form-check-input" type="checkbox" name="use_ssl" id="editUseSSL" value="1">
+                                <label class="form-check-label" for="editUseSSL">Use SSL</label>
                             </div>
                         </div>
                         <div class="modal-footer">
@@ -1108,7 +1108,7 @@
                     document.getElementById('editMailbox').value = btn.dataset.mailbox || '';
                     document.getElementById('editBatchLimit').value = btn.dataset.batch || '';
                     document.getElementById('editRefreshInterval').value = btn.dataset.interval || '';
-                    document.getElementById('editUseSSL').checked = btn.dataset.ssl === '1';
+                    document.getElementById('editUseSSL').checked = ['1','true','on'].includes(btn.dataset.ssl);
                     document.getElementById('editServerType').value = btn.dataset.type || 'imap';
                 });
             });

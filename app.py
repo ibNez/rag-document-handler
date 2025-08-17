@@ -1913,7 +1913,7 @@ class RAGKnowledgebaseManager:
             mailbox = request.form.get('mailbox', '').strip() or None
             batch_limit_str = request.form.get('batch_limit', '').strip()
             refresh_raw = request.form.get('refresh_interval_minutes', '').strip()
-            use_ssl = request.form.get('use_ssl', '0') == '1'
+            use_ssl = request.form.get('use_ssl') in ('1', 'on')
 
             logger.info(
                 "Request to add email account '%s' (%s) on %s by user %s",
@@ -1973,7 +1973,7 @@ class RAGKnowledgebaseManager:
             mailbox = request.form.get('mailbox', '').strip() or None
             batch_limit_str = request.form.get('batch_limit', '').strip()
             refresh_raw = request.form.get('refresh_interval_minutes', '').strip()
-            use_ssl = request.form.get('use_ssl', '0') == '1'
+            use_ssl = request.form.get('use_ssl') in ('1', 'on')
             server_type = request.form.get('server_type', '').strip()
 
             updates: Dict[str, Any] = {}
