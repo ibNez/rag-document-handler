@@ -53,6 +53,11 @@ class EmailOrchestrator:
         while not self._stop_event.is_set():
             # Refresh accounts each cycle to pick up changes
             self.refresh_accounts()
+            logger.info(
+                "Beginning email sync cycle with %d accounts", len(self.accounts)
+            )
+            if not self.accounts:
+                logger.debug("No email accounts configured")
             now = datetime.utcnow()
             for account in self.accounts:
                 interval = account.get("refresh_interval_minutes")
@@ -63,15 +68,21 @@ class EmailOrchestrator:
                     last_dt = datetime.fromisoformat(str(last)) if last else None
                 except Exception:  # pragma: no cover - defensive
                     last_dt = None
+                name = account.get("account_name") or account.get("username")
                 if interval <= 0:
+                    logger.debug("Account %s has refresh disabled", name)
                     continue
                 if last_dt and last_dt + timedelta(minutes=int(interval)) > now:
+                    logger.debug(
+                        "Skipping account %s; next run at %s",
+                        name,
+                        (last_dt + timedelta(minutes=int(interval))).isoformat(),
+                    )
                     continue
 
                 server_type = (account.get("server_type") or "").lower()
                 batch = account.get("batch_limit")
                 batch_limit = None if batch in (None, "all") else int(batch)
-                name = account.get("account_name") or account.get("username")
 
                 if server_type == "imap":
                     connector = IMAPConnector(
@@ -121,7 +132,10 @@ class EmailOrchestrator:
                         batch_limit=batch_limit,
                     )
                 else:
+                    logger.warning("Unknown server type '%s' for %s", server_type, name)
                     continue
+
+                logger.info("Syncing account %s using %s", name, server_type)
 
                 try:
                     records = connector.fetch_emails()
@@ -129,7 +143,7 @@ class EmailOrchestrator:
                         "Fetched %d emails for account %s", len(records), name
                     )
                 except Exception as exc:  # pragma: no cover - defensive
-                    logger.error(f"Email sync error for {name}: {exc}")
+                    logger.error("Email sync error for %s: %s", name, exc)
 
                 acct_id = account.get("id")
                 if acct_id and self.account_manager and hasattr(self.account_manager, "update_account"):
@@ -146,6 +160,9 @@ class EmailOrchestrator:
                         logger.error(
                             "Failed to update last_synced for %s: %s", name, exc
                         )
+            logger.info(
+                "Email sync cycle complete; sleeping %d seconds", poll_interval
+            )
             self._stop_event.wait(poll_interval)
 
     def stop(self) -> None:
