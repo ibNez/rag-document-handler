@@ -48,9 +48,17 @@ class EmailOrchestrator:
                 last_dt = datetime.fromisoformat(str(last)) if last else None
             except Exception:  # pragma: no cover - defensive
                 last_dt = None
+
+            # Always sync accounts that have never been synced before
+            if not last_dt:
+                due.append(account)
+                continue
+
+            # Skip disabled accounts after initial sync
             if interval <= 0:
                 continue
-            if not last_dt or last_dt + timedelta(minutes=int(interval)) <= now:
+
+            if last_dt + timedelta(minutes=int(interval)) <= now:
                 due.append(account)
         return due
 
