@@ -50,11 +50,12 @@ class EmailOrchestrator:
         """Background loop that fetches emails for each configured account."""
         poll_interval = max(1, int(self.config.EMAIL_SYNC_INTERVAL_SECONDS))
         default_interval = getattr(self.config, "EMAIL_DEFAULT_REFRESH_MINUTES", 5)
+        cycle = 1
         while not self._stop_event.is_set():
             # Refresh accounts each cycle to pick up changes
             self.refresh_accounts()
             logger.info(
-                "Beginning email sync cycle with %d accounts", len(self.accounts)
+                "Email cycle %d start: accounts=%d", cycle, len(self.accounts)
             )
             if not self.accounts:
                 logger.debug("No email accounts configured")
@@ -161,8 +162,9 @@ class EmailOrchestrator:
                             "Failed to update last_synced for %s: %s", name, exc
                         )
             logger.info(
-                "Email sync cycle complete; sleeping %d seconds", poll_interval
+                "Email cycle %d complete; sleeping %d seconds", cycle, poll_interval
             )
+            cycle += 1
             self._stop_event.wait(poll_interval)
 
     def stop(self) -> None:
