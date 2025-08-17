@@ -1,4 +1,5 @@
 import logging
+import sqlite3
 from datetime import UTC, datetime, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -7,6 +8,8 @@ from google.oauth2.credentials import Credentials
 
 from .connector import IMAPConnector, GmailConnector, ExchangeConnector
 from .account_manager import EmailAccountManager
+from .processor import EmailProcessor
+from .ingest import _normalize
 
 logger = logging.getLogger(__name__)
 
@@ -14,9 +17,15 @@ logger = logging.getLogger(__name__)
 class EmailOrchestrator:
     """Periodically sync emails from configured accounts."""
 
-    def __init__(self, config, account_manager: Optional[EmailAccountManager] = None):
+    def __init__(
+        self,
+        config,
+        account_manager: Optional[EmailAccountManager] = None,
+        processor: Optional[EmailProcessor] = None,
+    ) -> None:
         self.config = config
         self.account_manager = account_manager
+        self.processor = processor
         self.accounts: List[Dict[str, Any]] = []
         self.refresh_accounts()
 
@@ -62,8 +71,10 @@ class EmailOrchestrator:
                 due.append(account)
         return due
 
-    def sync_account(self, account: Dict[str, Any]) -> None:
-        """Fetch emails for a single account and update its last_synced timestamp."""
+    def sync_account(
+        self, account: Dict[str, Any], processor: Optional[EmailProcessor] = None
+    ) -> None:
+        """Fetch and process emails for a single account and update its last_synced timestamp."""
         name = account.get("account_name") or account.get("username")
         server_type = (account.get("server_type") or "").lower()
         batch = account.get("batch_limit")
@@ -118,9 +129,37 @@ class EmailOrchestrator:
 
         logger.info("Syncing account %s using %s", name, server_type)
 
+        processor = processor or self.processor
+        if processor is None:
+            class _NoopMilvus:
+                def add_embeddings(self, embeddings, ids, metadatas):
+                    pass
+
+            try:
+                processor = EmailProcessor(_NoopMilvus(), sqlite3.connect(":memory:"))
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.error("Failed to initialize EmailProcessor: %s", exc)
+                processor = None
+
         try:
             records = connector.fetch_emails()
             logger.info("Fetched %d emails for account %s", len(records), name)
+            if processor:
+                for rec in records:
+                    try:
+                        norm = _normalize(rec)
+                        hh = norm.get("header_hash")
+                        if hh and processor.manager.get_email_by_header_hash(hh):
+                            continue
+                        ch = norm.get("content_hash")
+                        if ch and processor.manager.get_email_by_hash(ch):
+                            continue
+                        processor.process(norm)
+                    except Exception as exc:  # pragma: no cover - defensive
+                        mid = rec.get("message_id")
+                        logger.error(
+                            "Failed to process email %s for %s: %s", mid, name, exc
+                        )
         except Exception as exc:  # pragma: no cover - defensive
             logger.error("Email sync error for %s: %s", name, exc)
 
@@ -153,6 +192,6 @@ class EmailOrchestrator:
             "Email sync cycle start: accounts=%d", len(due_accounts)
         )
         for account in due_accounts:
-            self.sync_account(account)
+            self.sync_account(account, processor=self.processor)
         logger.info("Email sync cycle complete")
         return True

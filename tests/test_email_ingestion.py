@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from unittest.mock import MagicMock
 
 import sqlite3
@@ -411,6 +411,63 @@ def test_email_orchestrator_processes_multiple_accounts(monkeypatch: pytest.Monk
     )
     orchestrator.run_cycle()
     assert processed == ["u1", "u2"]
+
+
+def test_email_orchestrator_processes_and_persists(
+    monkeypatch: pytest.MonkeyPatch, raw_email_record: Dict[str, Any]
+) -> None:
+    """EmailOrchestrator should process fetched emails using EmailProcessor."""
+
+    class DummyIMAPConnector:
+        def __init__(self, **kwargs: Any) -> None:
+            pass
+
+        def fetch_emails(self):
+            return [raw_email_record]
+
+    monkeypatch.setattr(orchestrator_module, "IMAPConnector", DummyIMAPConnector)
+
+    class DummyAccountManager:
+        def __init__(self) -> None:
+            self.updated: Optional[Dict[str, Any]] = None
+
+        def list_accounts(self, include_password: bool = False):
+            return [
+                {
+                    "id": 1,
+                    "server_type": "imap",
+                    "server": "s1",
+                    "port": 993,
+                    "username": "u1",
+                    "password": "p",
+                    "use_ssl": 1,
+                }
+            ]
+
+        def update_account(self, acct_id: int, data: Dict[str, Any]) -> None:
+            self.updated = {"acct_id": acct_id, **data}
+
+    class DummyConfig:
+        EMAIL_ENABLED = True
+        EMAIL_DEFAULT_REFRESH_MINUTES = 5
+
+    class DummyMilvus:
+        def add_embeddings(self, embeddings, ids, metadatas):
+            pass
+
+    sqlite_conn = sqlite3.connect(":memory:")
+    processor = EmailProcessor(DummyMilvus(), sqlite_conn, embedding_model=_DummyEmbeddings())
+
+    orchestrator = orchestrator_module.EmailOrchestrator(
+        DummyConfig(), account_manager=DummyAccountManager(), processor=processor
+    )
+
+    orchestrator.run_cycle()
+
+    cur = sqlite_conn.cursor()
+    cur.execute("SELECT message_id FROM emails")
+    row = cur.fetchone()
+    assert row[0] == raw_email_record["message_id"]
 
 
 def test_run_email_ingestion_header_hash_dedup(monkeypatch: pytest.MonkeyPatch) -> None:
