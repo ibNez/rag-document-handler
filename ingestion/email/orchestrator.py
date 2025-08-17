@@ -1,5 +1,6 @@
 import threading
 import logging
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from google.auth.transport.requests import Request
@@ -47,11 +48,26 @@ class EmailOrchestrator:
 
     def _run_loop(self) -> None:
         """Background loop that fetches emails for each configured account."""
-        interval = max(1, int(self.config.EMAIL_SYNC_INTERVAL_SECONDS))
+        poll_interval = max(1, int(self.config.EMAIL_SYNC_INTERVAL_SECONDS))
+        default_interval = getattr(self.config, "EMAIL_DEFAULT_REFRESH_MINUTES", 5)
         while not self._stop_event.is_set():
             # Refresh accounts each cycle to pick up changes
             self.refresh_accounts()
+            now = datetime.utcnow()
             for account in self.accounts:
+                interval = account.get("refresh_interval_minutes")
+                if interval is None:
+                    interval = default_interval
+                try:
+                    last = account.get("last_synced")
+                    last_dt = datetime.fromisoformat(str(last)) if last else None
+                except Exception:  # pragma: no cover - defensive
+                    last_dt = None
+                if interval <= 0:
+                    continue
+                if last_dt and last_dt + timedelta(minutes=int(interval)) > now:
+                    continue
+
                 server_type = (account.get("server_type") or "").lower()
                 batch = account.get("batch_limit")
                 batch_limit = None if batch in (None, "all") else int(batch)
@@ -107,7 +123,23 @@ class EmailOrchestrator:
                     )
                 except Exception as exc:  # pragma: no cover - defensive
                     logger.error(f"Email sync error for {name}: {exc}")
-            self._stop_event.wait(interval)
+
+                acct_id = account.get("id")
+                if acct_id and self.account_manager and hasattr(self.account_manager, "update_account"):
+                    try:
+                        self.account_manager.update_account(
+                            acct_id,
+                            {
+                                "last_synced": datetime.utcnow().isoformat(
+                                    sep=" ", timespec="seconds"
+                                )
+                            },
+                        )
+                    except Exception as exc:  # pragma: no cover - defensive
+                        logger.error(
+                            "Failed to update last_synced for %s: %s", name, exc
+                        )
+            self._stop_event.wait(poll_interval)
 
     def stop(self) -> None:
         """Stop the background sync loop."""

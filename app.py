@@ -152,6 +152,7 @@ class Config:
     IMAP_BATCH_LIMIT: int = int(os.getenv('IMAP_BATCH_LIMIT', '50'))
     IMAP_USE_SSL: bool = os.getenv('IMAP_USE_SSL', 'true').lower() == 'true'
     EMAIL_SYNC_INTERVAL_SECONDS: int = int(os.getenv('EMAIL_SYNC_INTERVAL_SECONDS', '300'))
+    EMAIL_DEFAULT_REFRESH_MINUTES: int = int(os.getenv('EMAIL_DEFAULT_REFRESH_MINUTES', '5'))
 
 
 @dataclass
@@ -1849,6 +1850,7 @@ class RAGKnowledgebaseManager:
             port_str = request.form.get('port', '').strip()
             mailbox = request.form.get('mailbox', '').strip() or None
             batch_limit_str = request.form.get('batch_limit', '').strip()
+            refresh_raw = request.form.get('refresh_interval_minutes', '').strip()
             use_ssl = request.form.get('use_ssl', '0') == '1'
 
             if not all([account_name, server, username, password, port_str]):
@@ -1858,8 +1860,9 @@ class RAGKnowledgebaseManager:
             try:
                 port = int(port_str)
                 batch_limit = int(batch_limit_str) if batch_limit_str else None
+                refresh_interval = int(refresh_raw) if refresh_raw else Config.EMAIL_DEFAULT_REFRESH_MINUTES
             except ValueError:
-                flash('Port and batch limit must be numbers', 'error')
+                flash('Port, batch limit and refresh interval must be numbers', 'error')
                 return redirect(url_for('index'))
 
             record = {
@@ -1872,6 +1875,7 @@ class RAGKnowledgebaseManager:
                 'mailbox': mailbox,
                 'batch_limit': batch_limit,
                 'use_ssl': 1 if use_ssl else 0,
+                'refresh_interval_minutes': refresh_interval,
             }
 
             try:
@@ -1894,6 +1898,7 @@ class RAGKnowledgebaseManager:
             port_str = request.form.get('port', '').strip()
             mailbox = request.form.get('mailbox', '').strip() or None
             batch_limit_str = request.form.get('batch_limit', '').strip()
+            refresh_raw = request.form.get('refresh_interval_minutes', '').strip()
             use_ssl = request.form.get('use_ssl', '0') == '1'
 
             updates: Dict[str, Any] = {}
@@ -1918,6 +1923,12 @@ class RAGKnowledgebaseManager:
                     updates['port'] = int(port_str)
                 except ValueError:
                     flash('Port must be a number', 'error')
+                    return redirect(url_for('index'))
+            if refresh_raw:
+                try:
+                    updates['refresh_interval_minutes'] = int(refresh_raw)
+                except ValueError:
+                    flash('Refresh interval must be a number', 'error')
                     return redirect(url_for('index'))
             updates['use_ssl'] = 1 if use_ssl else 0
 
