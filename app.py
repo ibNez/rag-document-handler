@@ -2469,8 +2469,11 @@ class RAGKnowledgebaseManager:
                         'last_update_status': status_text,
                     },
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.error(
+                    f"Failed to update account {account_id} after email refresh: {exc}"
+                )
+                raise
             if status_text and status_text.startswith('error'):
                 pass
             elif st:
@@ -2483,8 +2486,15 @@ class RAGKnowledgebaseManager:
         finally:
             try:
                 del self.email_processing_status[account_id]
-            except Exception:
-                pass
+            except KeyError:
+                logger.warning(
+                    f"No processing status found for account {account_id} during cleanup"
+                )
+            except Exception as exc:
+                logger.error(
+                    f"Unexpected error cleaning up status for account {account_id}: {exc}"
+                )
+                raise
 
 
     def _process_url_background(self, url_id: int) -> None:
