@@ -1575,7 +1575,7 @@ class RAGKnowledgebaseManager:
             try:
                 with sqlite3.connect(self.url_manager.db_path) as conn:
                     manager = EmailAccountManager(conn)
-                    email_accounts = manager.list_accounts()
+                    email_accounts = manager.list_accounts(include_password=False)
             except Exception as e:
                 logger.warning(f"Failed to load email accounts: {e}")
 
@@ -1833,7 +1833,7 @@ class RAGKnowledgebaseManager:
             try:
                 with sqlite3.connect(self.url_manager.db_path) as conn:
                     manager = EmailAccountManager(conn)
-                    accounts = manager.list_accounts()
+                    accounts = manager.list_accounts(include_password=False)
                 return jsonify(accounts)
             except Exception as e:
                 logger.error(f"Failed to fetch email accounts: {e}")

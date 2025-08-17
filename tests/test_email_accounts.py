@@ -6,6 +6,7 @@ import sys
 from typing import Any, Dict
 import types
 import pytest
+from cryptography.fernet import Fernet
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -55,8 +56,9 @@ from ingestion.email.account_manager import EmailAccountManager
 
 
 @pytest.fixture
-def manager() -> EmailAccountManager:
+def manager(monkeypatch: pytest.MonkeyPatch) -> EmailAccountManager:
     """Return an ``EmailAccountManager`` backed by an in-memory database."""
+    monkeypatch.setenv("EMAIL_ENCRYPTION_KEY", Fernet.generate_key().decode())
     conn = sqlite3.connect(":memory:")
     return EmailAccountManager(conn)
 
@@ -80,8 +82,21 @@ def test_email_account_manager_crud(manager: EmailAccountManager) -> None:
     assert len(accounts) == 1
     assert accounts[0]["account_name"] == "Work"
 
+    # Password should not be returned by default
+    assert "password" not in accounts[0]
+
+    # Decrypted password should be available when requested
+    accounts_with_pw = manager.list_accounts(include_password=True)
+    assert accounts_with_pw[0]["password"] == "pass"
+
+    # Database should store an encrypted value
+    cur = manager.conn.cursor()
+    cur.execute("SELECT password FROM email_accounts WHERE id = ?", (account_id,))
+    stored = cur.fetchone()[0]
+    assert stored != "pass"
+
     manager.update_account(account_id, {"username": "new"})
-    accounts = manager.list_accounts()
+    accounts = manager.list_accounts(include_password=True)
     assert accounts[0]["username"] == "new"
 
     manager.delete_account(account_id)
@@ -120,6 +135,7 @@ class DummyEmailOrchestrator:
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     """Return a Flask test client with dependencies stubbed."""
+    monkeypatch.setenv("EMAIL_ENCRYPTION_KEY", Fernet.generate_key().decode())
     url_manager_cls = app_module.URLManager
     monkeypatch.setattr(app_module, "MilvusManager", DummyMilvusManager)
     monkeypatch.setattr(app_module, "EmailOrchestrator", DummyEmailOrchestrator)
@@ -153,6 +169,7 @@ def test_email_account_crud(client):
     assert isinstance(accounts, list)
     assert len(accounts) == 1
     account_id = accounts[0]["id"]
+    assert "password" not in accounts[0]
 
     response = client.post(f"/email_accounts/{account_id}", data={"username": "new"})
     assert response.status_code == 302

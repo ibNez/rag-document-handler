@@ -504,7 +504,6 @@
                                                             data-name="{{ acct.account_name }}"
                                                             data-server="{{ acct.server }}"
                                                             data-username="{{ acct.username }}"
-                                                            data-password="{{ acct.password }}"
                                                             data-port="{{ acct.port }}"
                                                             data-mailbox="{{ acct.mailbox or '' }}"
                                                             data-batch="{{ acct.batch_limit or '' }}"
@@ -615,8 +614,8 @@
                                 <input type="text" class="form-control" name="username" id="editUsername" required>
                             </div>
                             <div class="mb-3">
-                                <label class="form-label">Password</label>
-                                <input type="password" class="form-control" name="password" id="editPassword" required>
+                                <label class="form-label">Password (leave blank to keep current)</label>
+                                <input type="password" class="form-control" name="password" id="editPassword">
                             </div>
                             <div class="row">
                                 <div class="col-md-6 mb-3">
@@ -977,7 +976,7 @@
                     document.getElementById('editAccountName').value = btn.dataset.name || '';
                     document.getElementById('editServer').value = btn.dataset.server || '';
                     document.getElementById('editUsername').value = btn.dataset.username || '';
-                    document.getElementById('editPassword').value = btn.dataset.password || '';
+                    document.getElementById('editPassword').value = '';
                     document.getElementById('editPort').value = btn.dataset.port || '';
                     document.getElementById('editMailbox').value = btn.dataset.mailbox || '';
                     document.getElementById('editBatchLimit').value = btn.dataset.batch || '';
