@@ -46,6 +46,30 @@ class EmailOrchestrator:
             logger.error(f"Failed to load email accounts: {exc}")
             self.accounts = []
 
+    def get_due_accounts(self) -> List[Dict[str, Any]]:
+        """Return accounts that need a refresh based on their schedule."""
+        if not self.config.EMAIL_ENABLED or not self.account_manager:
+            return []
+        # Refresh accounts to ensure we operate on latest configuration
+        self.refresh_accounts()
+        default_interval = getattr(self.config, "EMAIL_DEFAULT_REFRESH_MINUTES", 5)
+        now = datetime.utcnow()
+        due: List[Dict[str, Any]] = []
+        for account in self.accounts:
+            interval = account.get("refresh_interval_minutes")
+            if interval is None:
+                interval = default_interval
+            try:
+                last = account.get("last_synced")
+                last_dt = datetime.fromisoformat(str(last)) if last else None
+            except Exception:  # pragma: no cover - defensive
+                last_dt = None
+            if interval <= 0:
+                continue
+            if not last_dt or last_dt + timedelta(minutes=int(interval)) <= now:
+                due.append(account)
+        return due
+
     def _run_loop(self) -> None:
         """Background loop that fetches emails for each configured account."""
         poll_interval = max(1, int(self.config.EMAIL_SYNC_INTERVAL_SECONDS))
