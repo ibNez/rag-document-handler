@@ -192,7 +192,7 @@ def test_email_orchestrator_processes_multiple_accounts(monkeypatch: pytest.Monk
 
     processed: list[str] = []
 
-    class DummyConnector:
+    class DummyIMAPConnector:
         def __init__(self, **kwargs: Any) -> None:
             self.username = kwargs.get("username")
 
@@ -200,7 +200,33 @@ def test_email_orchestrator_processes_multiple_accounts(monkeypatch: pytest.Monk
             processed.append(self.username)
             return []
 
-    monkeypatch.setattr(orchestrator_module, "IMAPConnector", DummyConnector)
+    class DummyGmailConnector:
+        def __init__(self, **kwargs: Any) -> None:
+            self.user_id = kwargs.get("user_id")
+
+        def fetch_emails(self):
+            processed.append(self.user_id)
+            return []
+
+    class DummyCreds:
+        expired = False
+        refresh_token = None
+
+        def refresh(self, _):
+            pass
+
+        def to_json(self):  # pragma: no cover - stub
+            return "{}"
+
+    class DummyCredentials:
+        @staticmethod
+        def from_authorized_user_file(*args, **kwargs):
+            return DummyCreds()
+
+    monkeypatch.setattr(orchestrator_module, "IMAPConnector", DummyIMAPConnector)
+    monkeypatch.setattr(orchestrator_module, "GmailConnector", DummyGmailConnector)
+    monkeypatch.setattr(orchestrator_module, "Credentials", DummyCredentials)
+    monkeypatch.setattr(orchestrator_module, "Request", lambda: None)
 
     class DummyAccountManager:
         def list_accounts(self, include_password: bool = False):
@@ -214,12 +240,9 @@ def test_email_orchestrator_processes_multiple_accounts(monkeypatch: pytest.Monk
                     "use_ssl": 1,
                 },
                 {
-                    "server_type": "imap",
-                    "server": "s2",
-                    "port": 2,
+                    "server_type": "gmail",
                     "username": "u2",
-                    "password": "p",
-                    "use_ssl": 1,
+                    "token_file": "/tmp/token.json",
                 },
             ]
 

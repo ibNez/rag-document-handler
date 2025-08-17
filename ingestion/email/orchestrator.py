@@ -2,14 +2,17 @@ import threading
 import logging
 from typing import Any, Dict, List, Optional
 
-from .connector import IMAPConnector
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+
+from .connector import IMAPConnector, GmailConnector
 from .account_manager import EmailAccountManager
 
 logger = logging.getLogger(__name__)
 
 
 class EmailOrchestrator:
-    """Periodically sync emails from configured IMAP accounts."""
+    """Periodically sync emails from configured accounts."""
 
     def __init__(self, config, account_manager: Optional[EmailAccountManager] = None):
         self.config = config
@@ -49,20 +52,54 @@ class EmailOrchestrator:
             # Refresh accounts each cycle to pick up changes
             self.refresh_accounts()
             for account in self.accounts:
-                if account.get("server_type", "").lower() != "imap":
-                    continue
+                server_type = (account.get("server_type") or "").lower()
                 batch = account.get("batch_limit")
                 batch_limit = None if batch in (None, "all") else int(batch)
-                connector = IMAPConnector(
-                    host=account["server"],
-                    port=int(account["port"]),
-                    username=account["username"],
-                    password=account["password"],
-                    mailbox=account.get("mailbox") or "INBOX",
-                    batch_limit=batch_limit,
-                    use_ssl=bool(account.get("use_ssl", True)),
-                )
                 name = account.get("account_name") or account.get("username")
+
+                if server_type == "imap":
+                    connector = IMAPConnector(
+                        host=account["server"],
+                        port=int(account["port"]),
+                        username=account["username"],
+                        password=account["password"],
+                        mailbox=account.get("mailbox") or "INBOX",
+                        batch_limit=batch_limit,
+                        use_ssl=bool(account.get("use_ssl", True)),
+                    )
+                elif server_type == "gmail":
+                    token_path = account.get("token_file") or account.get("token_path")
+                    if not token_path:
+                        logger.error(
+                            f"No token file configured for Gmail account {name}"
+                        )
+                        continue
+                    try:
+                        creds = Credentials.from_authorized_user_file(token_path)
+                        if creds.expired and creds.refresh_token:
+                            try:
+                                creds.refresh(Request())
+                                with open(token_path, "w") as fh:
+                                    fh.write(creds.to_json())
+                            except Exception as exc:  # pragma: no cover - defensive
+                                logger.warning(
+                                    "Failed to refresh Gmail token for %s: %s",
+                                    name,
+                                    exc,
+                                )
+                    except Exception as exc:
+                        logger.error(
+                            f"Failed to load Gmail credentials for {name}: {exc}"
+                        )
+                        continue
+                    connector = GmailConnector(
+                        credentials=creds,
+                        user_id=account.get("username") or "me",
+                        batch_limit=batch_limit,
+                    )
+                else:
+                    continue
+
                 try:
                     records = connector.fetch_emails()
                     logger.info(
