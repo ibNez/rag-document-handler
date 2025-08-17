@@ -80,7 +80,7 @@ For extended guides and architecture notes, see the [documentation directory](do
 
 2. **Install dependencies**:
    ```bash
-   pip install flask pymilvus sentence-transformers werkzeug python-dotenv pypdf python-docx chardet requests beautifulsoup4
+   pip install flask pymilvus sentence-transformers werkzeug python-dotenv pypdf python-docx chardet requests beautifulsoup4 google-api-python-client google-auth
    ```
 
 3. **Start Milvus database**:
