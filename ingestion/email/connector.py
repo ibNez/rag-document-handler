@@ -23,6 +23,10 @@ import imaplib
 import quopri
 from typing import Any, Dict, Iterable, List, Optional
 
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+
 
 class EmailConnector(ABC):
     """Abstract base class for fetching email records."""
@@ -302,3 +306,76 @@ class IMAPConnector(EmailConnector):
         if in_reply_to:
             return in_reply_to
         return message_id
+
+
+class GmailConnector(EmailConnector):
+    """Retrieve emails using the Gmail API."""
+
+    _decode_header_value = IMAPConnector._decode_header_value
+    _decode_part = IMAPConnector._decode_part
+    _derive_thread_id = IMAPConnector._derive_thread_id
+    _parse_email = IMAPConnector._parse_email
+
+    def __init__(
+        self,
+        credentials: Optional[Credentials] = None,
+        token_path: Optional[str] = None,
+        *,
+        user_id: str = "me",
+        batch_limit: Optional[int] = 50,
+    ) -> None:
+        if credentials is None and token_path is None:
+            raise ValueError("Either credentials or token_path must be provided")
+        if credentials is None and token_path is not None:
+            credentials = Credentials.from_authorized_user_file(token_path)
+        self.creds = credentials
+        self.service = build("gmail", "v1", credentials=credentials)
+        self.user_id = user_id
+        self.batch_limit = batch_limit
+
+    # ------------------------------------------------------------------
+    def fetch_emails(self, since_date: Optional[datetime] = None) -> List[Dict[str, Any]]:
+        """Fetch emails via Gmail API and return canonical records."""
+
+        results: List[Dict[str, Any]] = []
+        page_token: Optional[str] = None
+        fetched = 0
+        query = None
+        if since_date is not None:
+            query = f"after:{since_date.strftime('%Y/%m/%d')}"
+        try:
+            while True:
+                list_kwargs: Dict[str, Any] = {"userId": self.user_id, "maxResults": 500}
+                if query:
+                    list_kwargs["q"] = query
+                if page_token:
+                    list_kwargs["pageToken"] = page_token
+                response = self.service.users().messages().list(**list_kwargs).execute()
+                messages = response.get("messages", [])
+                for meta in messages:
+                    if self.batch_limit is not None and fetched >= self.batch_limit:
+                        return results
+                    try:
+                        msg_data = (
+                            self.service.users()
+                            .messages()
+                            .get(userId=self.user_id, id=meta["id"], format="raw")
+                            .execute()
+                        )
+                    except HttpError:
+                        continue
+                    try:
+                        raw = base64.urlsafe_b64decode(msg_data.get("raw", "").encode("utf-8"))
+                        msg = message_from_bytes(raw)
+                        results.append(self._parse_email(msg))
+                    except Exception:
+                        continue
+                    fetched += 1
+                page_token = response.get("nextPageToken")
+                if not page_token or (
+                    self.batch_limit is not None and fetched >= self.batch_limit
+                ):
+                    break
+        except HttpError:
+            pass
+        return results
