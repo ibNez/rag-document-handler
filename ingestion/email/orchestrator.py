@@ -1,4 +1,3 @@
-import threading
 import logging
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
@@ -19,22 +18,7 @@ class EmailOrchestrator:
         self.config = config
         self.account_manager = account_manager
         self.accounts: List[Dict[str, Any]] = []
-        self._thread: Optional[threading.Thread] = None
-        self._stop_event = threading.Event()
         self.refresh_accounts()
-
-    def start(self) -> None:
-        """Start the background email sync loop if enabled."""
-        if not self.config.EMAIL_ENABLED:
-            logger.info("Email ingestion disabled; orchestrator not started")
-            return
-        if self._thread and self._thread.is_alive():
-            return
-        # Ensure we have the latest account list before starting
-        self.refresh_accounts()
-        self._thread = threading.Thread(target=self._run_loop, name="email-sync", daemon=True)
-        self._thread.start()
-        logger.info("Email orchestrator started")
 
     def refresh_accounts(self) -> None:
         """Reload the email account configurations."""
@@ -70,129 +54,97 @@ class EmailOrchestrator:
                 due.append(account)
         return due
 
-    def _run_loop(self) -> None:
-        """Background loop that fetches emails for each configured account."""
-        poll_interval = max(1, int(self.config.EMAIL_SYNC_INTERVAL_SECONDS))
-        default_interval = getattr(self.config, "EMAIL_DEFAULT_REFRESH_MINUTES", 5)
-        cycle = 1
-        while not self._stop_event.is_set():
-            # Refresh accounts each cycle to pick up changes
-            self.refresh_accounts()
-            logger.info(
-                "Email cycle %d start: accounts=%d", cycle, len(self.accounts)
+    def sync_account(self, account: Dict[str, Any]) -> None:
+        """Fetch emails for a single account and update its last_synced timestamp."""
+        name = account.get("account_name") or account.get("username")
+        server_type = (account.get("server_type") or "").lower()
+        batch = account.get("batch_limit")
+        batch_limit = None if batch in (None, "all") else int(batch)
+
+        if server_type == "imap":
+            connector = IMAPConnector(
+                host=account["server"],
+                port=int(account["port"]),
+                username=account["username"],
+                password=account["password"],
+                mailbox=account.get("mailbox") or "INBOX",
+                batch_limit=batch_limit,
+                use_ssl=bool(account.get("use_ssl", True)),
             )
-            if not self.accounts:
-                logger.debug("No email accounts configured")
-            now = datetime.utcnow()
-            for account in self.accounts:
-                interval = account.get("refresh_interval_minutes")
-                if interval is None:
-                    interval = default_interval
-                try:
-                    last = account.get("last_synced")
-                    last_dt = datetime.fromisoformat(str(last)) if last else None
-                except Exception:  # pragma: no cover - defensive
-                    last_dt = None
-                name = account.get("account_name") or account.get("username")
-                if interval <= 0:
-                    logger.debug("Account %s has refresh disabled", name)
-                    continue
-                if last_dt and last_dt + timedelta(minutes=int(interval)) > now:
-                    logger.debug(
-                        "Skipping account %s; next run at %s",
-                        name,
-                        (last_dt + timedelta(minutes=int(interval))).isoformat(),
-                    )
-                    continue
-
-                server_type = (account.get("server_type") or "").lower()
-                batch = account.get("batch_limit")
-                batch_limit = None if batch in (None, "all") else int(batch)
-
-                if server_type == "imap":
-                    connector = IMAPConnector(
-                        host=account["server"],
-                        port=int(account["port"]),
-                        username=account["username"],
-                        password=account["password"],
-                        mailbox=account.get("mailbox") or "INBOX",
-                        batch_limit=batch_limit,
-                        use_ssl=bool(account.get("use_ssl", True)),
-                    )
-                elif server_type == "gmail":
-                    token_path = account.get("token_file") or account.get("token_path")
-                    if not token_path:
-                        logger.error(
-                            f"No token file configured for Gmail account {name}"
-                        )
-                        continue
+        elif server_type == "gmail":
+            token_path = account.get("token_file") or account.get("token_path")
+            if not token_path:
+                logger.error(f"No token file configured for Gmail account {name}")
+                return
+            try:
+                creds = Credentials.from_authorized_user_file(token_path)
+                if creds.expired and creds.refresh_token:
                     try:
-                        creds = Credentials.from_authorized_user_file(token_path)
-                        if creds.expired and creds.refresh_token:
-                            try:
-                                creds.refresh(Request())
-                                with open(token_path, "w") as fh:
-                                    fh.write(creds.to_json())
-                            except Exception as exc:  # pragma: no cover - defensive
-                                logger.warning(
-                                    "Failed to refresh Gmail token for %s: %s",
-                                    name,
-                                    exc,
-                                )
-                    except Exception as exc:
-                        logger.error(
-                            f"Failed to load Gmail credentials for {name}: {exc}"
-                        )
-                        continue
-                    connector = GmailConnector(
-                        credentials=creds,
-                        user_id=account.get("username") or "me",
-                        batch_limit=batch_limit,
-                    )
-                elif server_type == "exchange":
-                    connector = ExchangeConnector(
-                        server=account["server"],
-                        username=account["username"],
-                        password=account["password"],
-                        batch_limit=batch_limit,
-                    )
-                else:
-                    logger.warning("Unknown server type '%s' for %s", server_type, name)
-                    continue
-
-                logger.info("Syncing account %s using %s", name, server_type)
-
-                try:
-                    records = connector.fetch_emails()
-                    logger.info(
-                        "Fetched %d emails for account %s", len(records), name
-                    )
-                except Exception as exc:  # pragma: no cover - defensive
-                    logger.error("Email sync error for %s: %s", name, exc)
-
-                acct_id = account.get("id")
-                if acct_id and self.account_manager and hasattr(self.account_manager, "update_account"):
-                    try:
-                        self.account_manager.update_account(
-                            acct_id,
-                            {
-                                "last_synced": datetime.utcnow().isoformat(
-                                    sep=" ", timespec="seconds"
-                                )
-                            },
-                        )
+                        creds.refresh(Request())
+                        with open(token_path, "w") as fh:
+                            fh.write(creds.to_json())
                     except Exception as exc:  # pragma: no cover - defensive
-                        logger.error(
-                            "Failed to update last_synced for %s: %s", name, exc
+                        logger.warning(
+                            "Failed to refresh Gmail token for %s: %s", name, exc
                         )
-            logger.info(
-                "Email cycle %d complete; sleeping %d seconds", cycle, poll_interval
+            except Exception as exc:
+                logger.error(
+                    f"Failed to load Gmail credentials for {name}: {exc}"
+                )
+                return
+            connector = GmailConnector(
+                credentials=creds,
+                user_id=account.get("username") or "me",
+                batch_limit=batch_limit,
             )
-            cycle += 1
-            self._stop_event.wait(poll_interval)
+        elif server_type == "exchange":
+            connector = ExchangeConnector(
+                server=account["server"],
+                username=account["username"],
+                password=account["password"],
+                batch_limit=batch_limit,
+            )
+        else:
+            logger.warning("Unknown server type '%s' for %s", server_type, name)
+            return
 
-    def stop(self) -> None:
-        """Stop the background sync loop."""
-        self._stop_event.set()
-        if self._thread and self._thread.is_alive():
-            self._thread.join()
+        logger.info("Syncing account %s using %s", name, server_type)
+
+        try:
+            records = connector.fetch_emails()
+            logger.info("Fetched %d emails for account %s", len(records), name)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.error("Email sync error for %s: %s", name, exc)
+
+        acct_id = account.get("id")
+        if acct_id and self.account_manager and hasattr(self.account_manager, "update_account"):
+            try:
+                self.account_manager.update_account(
+                    acct_id,
+                    {
+                        "last_synced": datetime.utcnow().isoformat(
+                            sep=" ", timespec="seconds"
+                        )
+                    },
+                )
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.error(
+                    "Failed to update last_synced for %s: %s", name, exc
+                )
+
+    def run_cycle(self) -> bool:
+        """Refresh accounts and sync any that are due.
+
+        Returns True if at least one account was processed.
+        """
+        due_accounts = self.get_due_accounts()
+        if not due_accounts:
+            logger.debug("No email accounts due for sync")
+            return False
+        logger.info(
+            "Email sync cycle start: accounts=%d", len(due_accounts)
+        )
+        for account in due_accounts:
+            self.sync_account(account)
+        logger.info("Email sync cycle complete")
+        return True

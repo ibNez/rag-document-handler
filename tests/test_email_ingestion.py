@@ -284,22 +284,7 @@ def test_email_orchestrator_processes_multiple_accounts(monkeypatch: pytest.Monk
     orchestrator = orchestrator_module.EmailOrchestrator(
         DummyConfig(), account_manager=DummyAccountManager()
     )
-
-    class DummyEvent:
-        def __init__(self):
-            self.flag = False
-
-        def set(self):
-            self.flag = True
-
-        def is_set(self):
-            return self.flag
-
-        def wait(self, _):
-            self.flag = True
-
-    orchestrator._stop_event = DummyEvent()
-    orchestrator._run_loop()
+    orchestrator.run_cycle()
     assert processed == ["u1", "u2"]
 
 
@@ -430,20 +415,5 @@ def test_email_orchestrator_uses_gmail_connector(monkeypatch: pytest.MonkeyPatch
     orchestrator = orchestrator_module.EmailOrchestrator(
         DummyConfig(), account_manager=DummyAccountManager()
     )
-
-    class DummyEvent:
-        def __init__(self):
-            self.flag = False
-
-        def set(self):
-            self.flag = True
-
-        def is_set(self):
-            return self.flag
-
-        def wait(self, _):
-            self.flag = True
-
-    orchestrator._stop_event = DummyEvent()
-    orchestrator._run_loop()
+    orchestrator.run_cycle()
     assert used["gmail"] is True
