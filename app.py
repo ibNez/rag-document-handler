@@ -347,33 +347,43 @@ class URLManager:
 
     def upsert_document_metadata(self, filename: str, **fields) -> None:
         """Insert or update a documents row."""
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
-            # Build columns
-            col_names = ["filename"] + list(fields.keys())
-            placeholders = ["?"] * len(col_names)
-            values = [filename] + list(fields.values())
-            update_assignments = ", ".join([f"{k}=excluded.{k}" for k in fields.keys()])
-            sql = f"INSERT INTO documents ({', '.join(col_names)}) VALUES ({', '.join(placeholders)}) ON CONFLICT(filename) DO UPDATE SET {update_assignments}"
-            cursor.execute(sql, values)
-            conn.commit()
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                # Build columns
+                col_names = ["filename"] + list(fields.keys())
+                placeholders = ["?"] * len(col_names)
+                values = [filename] + list(fields.values())
+                update_assignments = ", ".join([f"{k}=excluded.{k}" for k in fields.keys()])
+                sql = f"INSERT INTO documents ({', '.join(col_names)}) VALUES ({', '.join(placeholders)}) ON CONFLICT(filename) DO UPDATE SET {update_assignments}"
+                cursor.execute(sql, values)
+                conn.commit()
+        except Exception:
+            logger.exception(f"Failed to upsert metadata for {filename}")
+            raise
 
     def get_document_metadata(self, filename: str) -> Optional[Dict[str, Any]]:
-        with sqlite3.connect(self.db_path) as conn:
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM documents WHERE filename = ?", (filename,))
-            row = cursor.fetchone()
-            if not row:
-                return None
-            d = dict(row)
-            # Parse keywords JSON
-            try:
-                if d.get('top_keywords'):
-                    d['top_keywords'] = json.loads(d['top_keywords'])
-            except Exception:
-                pass
-            return d
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM documents WHERE filename = ?", (filename,))
+                row = cursor.fetchone()
+                if not row:
+                    logger.info(f"Metadata lookup miss for {filename}")
+                    return None
+                d = dict(row)
+                # Parse keywords JSON
+                try:
+                    if d.get('top_keywords'):
+                        d['top_keywords'] = json.loads(d['top_keywords'])
+                except Exception:
+                    pass
+                logger.info(f"Metadata lookup succeeded for {filename}")
+                return d
+        except Exception:
+            logger.exception(f"Metadata lookup failed for {filename}")
+            return None
 
     def delete_document_metadata(self, filename: str) -> None:
         """Remove a document metadata row permanently.
@@ -385,9 +395,11 @@ class URLManager:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
                 cursor.execute("DELETE FROM documents WHERE filename = ?", (filename,))
+                removed = cursor.rowcount
                 conn.commit()
-        except Exception as e:
-            logger.warning(f"Failed to delete metadata row for {filename}: {e}")
+            logger.info(f"Metadata delete for {filename}; removed_row={removed > 0}")
+        except Exception:
+            logger.exception(f"Failed to delete metadata row for {filename}")
     
     def validate_url(self, url: str) -> bool:
         """
