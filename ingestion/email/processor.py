@@ -62,6 +62,7 @@ class EmailProcessor:
             chunk_size=chunk_size, chunk_overlap=chunk_overlap
         )
         self.manager = EmailManager(sqlite_conn)
+        self.skipped_messages = 0
         logger.info(
             "EmailProcessor initialized with embedding model %s",
             getattr(self.embedding_model, "model", self.embedding_model.__class__.__name__),
@@ -131,10 +132,19 @@ class EmailProcessor:
         self._store_metadata(record)
 
         if not body_text.strip():
+            logger.debug(
+                "Skipping message %s due to missing body text", message_id
+            )
+            self.skipped_messages += 1
             return
 
         chunks = [c for c in self.splitter.split_text(body_text) if c.strip()]
         if not chunks:
+            logger.debug(
+                "Skipping message %s because splitter produced no chunks",
+                message_id,
+            )
+            self.skipped_messages += 1
             return
         model_name = getattr(
             self.embedding_model, "model", self.embedding_model.__class__.__name__
