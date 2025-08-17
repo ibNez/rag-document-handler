@@ -10,6 +10,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence
 from bs4 import BeautifulSoup
 
 from .connector import EmailConnector, IMAPConnector
+from .email_manager import compute_header_hash
 from .processor import EmailProcessor
 
 CONTENT_HASH_RECIPE_VERSION = 1
@@ -67,6 +68,7 @@ def _normalize(record: Dict[str, Any]) -> Dict[str, Any]:
         participants.add(addr.lower())
     record["participants"] = sorted(participants)
     record["participants_hash"] = _participants_hash(record["participants"])
+    record["header_hash"] = compute_header_hash(record)
     record["content_hash"] = _content_hash(record)
     record.setdefault("ingested_at", datetime.utcnow().isoformat())
     return record
@@ -84,7 +86,7 @@ def run_email_ingestion(
 
     1. Fetch records via ``connector``.
     2. Normalize and compute hashes.
-    3. Dedupe by ``content_hash``.
+    3. Dedupe by ``header_hash`` and ``content_hash``.
     4. Chunk, embed and persist via ``processor``.
 
     Returns
@@ -98,6 +100,9 @@ def run_email_ingestion(
 
     processed = 0
     for rec in (_normalize(r) for r in records):
+        hh = rec.get("header_hash")
+        if hh and processor.manager.get_email_by_header_hash(hh):
+            continue
         ch = rec.get("content_hash")
         if ch and processor.manager.get_email_by_hash(ch):
             continue

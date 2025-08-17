@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """Helpers for persisting email metadata to SQLite."""
 
+import hashlib
 import json
 import logging
 from typing import Any, Dict, Optional
@@ -9,6 +10,23 @@ from typing import Any, Dict, Optional
 import sqlite3
 
 logger = logging.getLogger(__name__)
+
+
+def compute_header_hash(record: Dict[str, Any]) -> str:
+    """Return a deterministic hash of common email headers."""
+    from_addr = (record.get("from_addr") or "").lower()
+    to_addrs = record.get("to_addrs") or []
+    if isinstance(to_addrs, str):
+        try:
+            to_addrs = json.loads(to_addrs)
+        except Exception:
+            to_addrs = [to_addrs]
+    to_norm = ",".join(sorted(a.lower() for a in to_addrs if a))
+    subject = record.get("subject") or ""
+    date_utc = record.get("date_utc") or ""
+    message_id = record.get("message_id") or ""
+    payload = "\n".join([from_addr, to_norm, subject, date_utc, message_id])
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 class EmailManager:
@@ -58,10 +76,38 @@ class EmailManager:
                 direction TEXT,
                 participants TEXT,
                 participants_hash TEXT,
-                to_primary TEXT
+                to_primary TEXT,
+                header_hash TEXT
             )
             '''
         )
+        self.conn.commit()
+
+        cursor.execute("PRAGMA table_info(emails)")
+        cols = {row[1] for row in cursor.fetchall()}
+        if "header_hash" not in cols:
+            cursor.execute("ALTER TABLE emails ADD COLUMN header_hash TEXT")
+            self.conn.commit()
+            self._backfill_header_hash()
+
+    # ------------------------------------------------------------------
+    def _backfill_header_hash(self) -> None:
+        """Populate ``header_hash`` for existing rows."""
+        cur = self.conn.cursor()
+        cur.execute(
+            "SELECT id, from_addr, to_addrs, subject, date_utc, message_id FROM emails WHERE header_hash IS NULL"
+        )
+        rows = cur.fetchall()
+        for row in rows:
+            data = {
+                "from_addr": row[1],
+                "to_addrs": json.loads(row[2]) if row[2] else [],
+                "subject": row[3],
+                "date_utc": row[4],
+                "message_id": row[5],
+            }
+            hh = compute_header_hash(data)
+            cur.execute("UPDATE emails SET header_hash = ? WHERE id = ?", (hh, row[0]))
         self.conn.commit()
 
     # ------------------------------------------------------------------
@@ -111,6 +157,17 @@ class EmailManager:
         cur = self.conn.cursor()
         self.conn.row_factory = sqlite3.Row
         cur.execute("SELECT * FROM emails WHERE content_hash = ?", (content_hash,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        return self._row_to_dict(row)
+
+    # ------------------------------------------------------------------
+    def get_email_by_header_hash(self, header_hash: str) -> Optional[Dict[str, Any]]:
+        """Retrieve an email using its ``header_hash``."""
+        cur = self.conn.cursor()
+        self.conn.row_factory = sqlite3.Row
+        cur.execute("SELECT * FROM emails WHERE header_hash = ?", (header_hash,))
         row = cur.fetchone()
         if not row:
             return None
