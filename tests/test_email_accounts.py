@@ -16,6 +16,10 @@ sys.modules.setdefault("docx", types.SimpleNamespace(Document=lambda *a, **k: No
 sys.modules.setdefault("langchain_community.document_loaders", types.SimpleNamespace(PyPDFLoader=None))
 sys.modules.setdefault("langchain_unstructured", types.SimpleNamespace(UnstructuredLoader=None))
 sys.modules.setdefault("dotenv", types.SimpleNamespace(load_dotenv=lambda *a, **k: None))
+sys.modules.setdefault("google.oauth2.credentials", types.SimpleNamespace(Credentials=object))
+sys.modules.setdefault("googleapiclient.discovery", types.SimpleNamespace(build=lambda *a, **k: None))
+sys.modules.setdefault("googleapiclient.errors", types.SimpleNamespace(HttpError=Exception))
+sys.modules.setdefault("google.auth.transport.requests", types.SimpleNamespace(Request=object))
 
 
 class _DummySplitter:

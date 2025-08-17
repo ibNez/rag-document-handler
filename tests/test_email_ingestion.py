@@ -32,6 +32,11 @@ class _DummyEmbeddings:
 
 sys.modules.setdefault("langchain_text_splitters", types.SimpleNamespace(RecursiveCharacterTextSplitter=_DummySplitter))
 sys.modules.setdefault("langchain_ollama", types.SimpleNamespace(OllamaEmbeddings=_DummyEmbeddings))
+sys.modules.setdefault("google.oauth2.credentials", types.SimpleNamespace(Credentials=object))
+sys.modules.setdefault("googleapiclient.discovery", types.SimpleNamespace(build=lambda *a, **k: None))
+sys.modules.setdefault("googleapiclient.errors", types.SimpleNamespace(HttpError=Exception))
+sys.modules.setdefault("google.auth.transport.requests", types.SimpleNamespace(Request=object))
+sys.modules.setdefault("cryptography.fernet", types.SimpleNamespace(Fernet=object))
 
 from ingestion.email.ingest import _normalize, run_email_ingestion
 from ingestion.email.processor import EmailProcessor
@@ -341,3 +346,77 @@ def test_run_email_ingestion_header_hash_dedup(monkeypatch: pytest.MonkeyPatch) 
     assert processed == 1
     assert len(processor.processed) == 1
     assert manager.get_email_by_header_hash.call_count == 2
+
+def test_email_orchestrator_uses_gmail_connector(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Gmail accounts should invoke ``GmailConnector`` and not the IMAP connector."""
+
+    used = {"gmail": False}
+
+    class DummyGmailConnector:
+        def __init__(self, **kwargs: Any) -> None:  # pragma: no cover - simple data holder
+            used["gmail"] = True
+
+        def fetch_emails(self):
+            return []
+
+    class DummyIMAPConnector:
+        def __init__(self, **kwargs: Any) -> None:  # pragma: no cover - should not run
+            raise AssertionError("IMAPConnector should not be used for Gmail accounts")
+
+        def fetch_emails(self):
+            return []
+
+    class DummyCreds:
+        expired = False
+        refresh_token = None
+
+        def refresh(self, _):
+            pass
+
+        def to_json(self):  # pragma: no cover - stub
+            return "{}"
+
+    class DummyCredentials:
+        @staticmethod
+        def from_authorized_user_file(*args, **kwargs):
+            return DummyCreds()
+
+    monkeypatch.setattr(orchestrator_module, "GmailConnector", DummyGmailConnector)
+    monkeypatch.setattr(orchestrator_module, "IMAPConnector", DummyIMAPConnector)
+    monkeypatch.setattr(orchestrator_module, "Credentials", DummyCredentials)
+    monkeypatch.setattr(orchestrator_module, "Request", lambda: None)
+
+    class DummyAccountManager:
+        def list_accounts(self, include_password: bool = False):
+            return [
+                {
+                    "server_type": "gmail",
+                    "username": "user",
+                    "token_file": "/tmp/token.json",
+                }
+            ]
+
+    class DummyConfig:
+        EMAIL_ENABLED = True
+        EMAIL_SYNC_INTERVAL_SECONDS = 0
+
+    orchestrator = orchestrator_module.EmailOrchestrator(
+        DummyConfig(), account_manager=DummyAccountManager()
+    )
+
+    class DummyEvent:
+        def __init__(self):
+            self.flag = False
+
+        def set(self):
+            self.flag = True
+
+        def is_set(self):
+            return self.flag
+
+        def wait(self, _):
+            self.flag = True
+
+    orchestrator._stop_event = DummyEvent()
+    orchestrator._run_loop()
+    assert used["gmail"] is True
