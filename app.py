@@ -1424,7 +1424,11 @@ class RAGKnowledgebaseManager:
 
         # Start email orchestrator if enabled
         try:
-            self.email_orchestrator = EmailOrchestrator(self.config)
+            email_conn = sqlite3.connect(self.url_manager.db_path, check_same_thread=False)
+            self.email_account_manager = EmailAccountManager(email_conn)
+            self.email_orchestrator = EmailOrchestrator(
+                self.config, self.email_account_manager
+            )
             self.email_orchestrator.start()
         except Exception as e:
             logger.error(f"Failed to start email orchestrator: {e}")
