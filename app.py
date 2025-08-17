@@ -789,6 +789,10 @@ class DocumentProcessor:
 
         Returns dict with keys: global_keywords (list), per_page_keywords (dict page->list)
         """
+        logger.info(
+            f"Starting keyword extraction for {len(chunks)} chunks (max_keywords={max_keywords})"
+        )
+
         # Build page texts
         pages: Dict[int, List[str]] = {}
         for c in chunks:
@@ -813,6 +817,7 @@ class DocumentProcessor:
             ranked = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:8]
             kws = [k for k,_ in ranked]
             per_page_keywords[p] = kws
+            logger.debug(f"Page {p} keyword count: {len(kws)}")
             for k in kws:
                 global_counts[k] = global_counts.get(k,0)+1
 
@@ -853,6 +858,9 @@ class DocumentProcessor:
             if len(merged) >= max_keywords:
                 break
 
+        logger.info(
+            f"Keyword extraction complete: first keywords={merged[:5]}, llm_title_returned={llm_title is not None}"
+        )
         return {
             'global_keywords': merged,
             'per_page_keywords': per_page_keywords,
