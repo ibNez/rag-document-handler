@@ -1,6 +1,7 @@
-"""Tests for email account management routes."""
+"""Tests for email account management routes and manager CRUD."""
 
 import os
+import sqlite3
 import sys
 from typing import Any, Dict
 import types
@@ -8,11 +9,13 @@ import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-# Stub external dependencies used by app module to avoid heavy installs
+# Stub external dependencies used by ingestion and app modules to avoid heavy installs
 sys.modules.setdefault("pypdf", types.SimpleNamespace(PdfReader=lambda *a, **k: None))
 sys.modules.setdefault("docx", types.SimpleNamespace(Document=lambda *a, **k: None))
 sys.modules.setdefault("langchain_community.document_loaders", types.SimpleNamespace(PyPDFLoader=None))
 sys.modules.setdefault("langchain_unstructured", types.SimpleNamespace(UnstructuredLoader=None))
+sys.modules.setdefault("dotenv", types.SimpleNamespace(load_dotenv=lambda *a, **k: None))
+
 
 class _DummySplitter:
     def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -20,6 +23,7 @@ class _DummySplitter:
 
     def split_text(self, text: str) -> list[str]:
         return [text]
+
 
 sys.modules.setdefault(
     "langchain_text_splitters", types.SimpleNamespace(RecursiveCharacterTextSplitter=_DummySplitter)
@@ -47,8 +51,45 @@ sys.modules.setdefault(
 )
 sys.modules.setdefault("langchain_core.tools", types.SimpleNamespace(tool=lambda f: f))
 
+from ingestion.email.account_manager import EmailAccountManager
+
+
+@pytest.fixture
+def manager() -> EmailAccountManager:
+    """Return an ``EmailAccountManager`` backed by an in-memory database."""
+    conn = sqlite3.connect(":memory:")
+    return EmailAccountManager(conn)
+
+
+def test_email_account_manager_crud(manager: EmailAccountManager) -> None:
+    """CRUD operations on ``EmailAccountManager`` should persist changes."""
+    record = {
+        "account_name": "Work",
+        "server_type": "imap",
+        "server": "imap.example.com",
+        "port": 993,
+        "username": "user",
+        "password": "pass",
+        "mailbox": "INBOX",
+        "batch_limit": 10,
+        "use_ssl": 1,
+    }
+
+    account_id = manager.create_account(record)
+    accounts = manager.list_accounts()
+    assert len(accounts) == 1
+    assert accounts[0]["account_name"] == "Work"
+
+    manager.update_account(account_id, {"username": "new"})
+    accounts = manager.list_accounts()
+    assert accounts[0]["username"] == "new"
+
+    manager.delete_account(account_id)
+    assert manager.list_accounts() == []
+
 import app as app_module
 from app import RAGKnowledgebaseManager
+
 
 class DummyMilvusManager:
     """Lightweight stand-in for the real Milvus manager."""
@@ -65,6 +106,7 @@ class DummyMilvusManager:
     def delete_document(self, filename: str | None = None, document_id: str | None = None) -> Dict[str, Any]:
         return {"success": True}
 
+
 class DummyEmailOrchestrator:
     """Dummy email orchestrator used in tests."""
 
@@ -73,6 +115,7 @@ class DummyEmailOrchestrator:
 
     def start(self) -> None:  # pragma: no cover - simple stub
         return None
+
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
