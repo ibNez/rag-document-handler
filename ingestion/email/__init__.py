@@ -1,6 +1,6 @@
 """Email ingestion connectors and orchestration utilities."""
 
-from .connector import EmailConnector, IMAPConnector, GmailConnector
+from .connector import EmailConnector, IMAPConnector, GmailConnector, ExchangeConnector
 from .orchestrator import EmailOrchestrator
 from .email_manager import EmailManager
 from .account_manager import EmailAccountManager
@@ -10,6 +10,7 @@ __all__ = [
     "EmailConnector",
     "IMAPConnector",
     "GmailConnector",
+    "ExchangeConnector",
     "EmailOrchestrator",
     "EmailManager",
     "EmailAccountManager",

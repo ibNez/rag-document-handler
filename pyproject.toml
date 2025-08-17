@@ -43,6 +43,7 @@ dependencies = [
     "cryptography>=41.0.0",
     "google-api-python-client>=2.0.0",
     "google-auth>=2.0.0",
+    "exchangelib>=5.0.0",
 ]
 
 [project.optional-dependencies]

@@ -28,15 +28,15 @@ The application exposes a Flask web interface for managing documents and perform
 
 ## Managing Email Accounts
 
-The dashboard includes an **Email Accounts** section for configuring IMAP
-sources.
+The dashboard includes an **Email Accounts** section for configuring IMAP,
+Gmail, or Exchange sources.
 
 ### Adding Accounts
 
 1. Click **Add Email Account** to open the form.
 2. Complete all required fields:
    - **Display Name** – unique label for the account.
-   - **Server** – IMAP server hostname.
+   - **Server** – mail server hostname or EWS endpoint.
    - **Port** – connection port number.
    - **Username** – account login name.
    - **Password** – account password.

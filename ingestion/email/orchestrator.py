@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 
-from .connector import IMAPConnector, GmailConnector
+from .connector import IMAPConnector, GmailConnector, ExchangeConnector
 from .account_manager import EmailAccountManager
 
 logger = logging.getLogger(__name__)
@@ -111,6 +111,13 @@ class EmailOrchestrator:
                     connector = GmailConnector(
                         credentials=creds,
                         user_id=account.get("username") or "me",
+                        batch_limit=batch_limit,
+                    )
+                elif server_type == "exchange":
+                    connector = ExchangeConnector(
+                        server=account["server"],
+                        username=account["username"],
+                        password=account["password"],
                         batch_limit=batch_limit,
                     )
                 else:

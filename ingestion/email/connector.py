@@ -26,6 +26,10 @@ from typing import Any, Dict, Iterable, List, Optional
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+try:  # pragma: no cover - optional dependency
+    from exchangelib import Account, Configuration, Credentials as EWSCredentials, DELEGATE
+except Exception:  # pragma: no cover - optional dependency
+    Account = Configuration = EWSCredentials = DELEGATE = None  # type: ignore
 
 
 class EmailConnector(ABC):
@@ -309,6 +313,57 @@ class IMAPConnector(EmailConnector):
         if in_reply_to:
             return in_reply_to
         return message_id
+
+
+class ExchangeConnector(EmailConnector):
+    """Retrieve emails from an Exchange server using EWS."""
+
+    _decode_header_value = IMAPConnector._decode_header_value
+    _decode_part = IMAPConnector._decode_part
+    _derive_thread_id = IMAPConnector._derive_thread_id
+    _parse_email = IMAPConnector._parse_email
+
+    def __init__(
+        self,
+        server: str,
+        username: str,
+        password: str,
+        *,
+        batch_limit: Optional[int] = 50,
+    ) -> None:
+        if Account is None:
+            raise ImportError("exchangelib is required for ExchangeConnector")
+        creds = EWSCredentials(username=username, password=password)
+        config = Configuration(server=server, credentials=creds)
+        self.account = Account(
+            primary_smtp_address=username,
+            config=config,
+            autodiscover=False,
+            access_type=DELEGATE,
+        )
+        self.batch_limit = batch_limit
+        self.primary_mailbox = None
+
+    # ------------------------------------------------------------------
+    def fetch_emails(self, since_date: Optional[datetime] = None) -> List[Dict[str, Any]]:
+        """Fetch emails via Exchange Web Services and return canonical records."""
+
+        qs = self.account.inbox.all().order_by("-datetime_received")
+        if since_date is not None:
+            qs = qs.filter(datetime_received__gte=since_date)
+        if self.batch_limit is not None:
+            qs = qs[: self.batch_limit]
+
+        results: List[Dict[str, Any]] = []
+        for item in qs:
+            try:
+                msg = message_from_bytes(item.mime_content)
+                rec = self._parse_email(msg)
+                rec["server_type"] = "exchange"
+                results.append(rec)
+            except Exception:
+                continue
+        return results
 
 
 class GmailConnector(EmailConnector):
