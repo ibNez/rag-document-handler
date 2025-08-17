@@ -2577,12 +2577,22 @@ class RAGKnowledgebaseManager:
                     except Exception as exc:
                         logger.error(f"Failed to get due email accounts: {exc}")
                         due_accounts = []
+                    try:
+                        active_emails_total = (
+                            self.email_orchestrator.account_manager.get_account_count()
+                        )
+                    except Exception as exc:  # pragma: no cover - defensive
+                        logger.error(f"Failed to get email account count: {exc}")
+                        active_emails_total = 0
+                else:
+                    active_emails_total = 0
                 logger.info(
-                    "Scheduler cycle %s heartbeat: urls_due=%s emails_due=%s active_urls_total=%s",
+                    "Scheduler cycle %s heartbeat: urls_due=%s emails_due=%s active_urls_total=%s active_emails_total=%s",
                     cycle,
                     len(due_urls),
                     len(due_accounts),
                     self.url_manager.get_url_count(),
+                    active_emails_total,
                 )
                 started = 0
                 for rec in due_urls:
