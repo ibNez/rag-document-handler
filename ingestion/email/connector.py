@@ -14,6 +14,7 @@ extraction is intentionally deferred to downstream stages.
 
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
+import ssl
 from email import message_from_bytes
 from email.header import decode_header, make_header
 from email.message import Message
@@ -50,7 +51,13 @@ class EmailConnector(ABC):
 
 
 class IMAPConnector(EmailConnector):
-    """Retrieve emails from an IMAP server."""
+    """Retrieve emails from an IMAP server.
+
+    When ``use_ssl`` is ``False`` the connector will automatically attempt to
+    upgrade the connection using ``STARTTLS`` to avoid sending credentials in
+    plaintext. If the server does not support ``STARTTLS`` a ``RuntimeError`` is
+    raised.
+    """
 
     def __init__(
         self,
@@ -88,6 +95,16 @@ class IMAPConnector(EmailConnector):
             if self.use_ssl
             else imaplib.IMAP4(self.host, self.port)
         )
+        if not self.use_ssl:
+            try:
+                status, _ = conn.starttls(ssl_context=ssl.create_default_context())
+                if status != "OK":
+                    raise imaplib.IMAP4.error("STARTTLS failed")
+            except Exception as exc:  # pragma: no cover - defensive
+                conn.logout()
+                raise RuntimeError(
+                    "IMAP server requires a secure connection; STARTTLS negotiation failed"
+                ) from exc
         conn.login(self.username, self.password)
         conn.select(self.mailbox)
 
