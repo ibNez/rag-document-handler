@@ -1598,6 +1598,7 @@ class RAGKnowledgebaseManager:
                 url_processing_status=self.url_processing_status,
                 urls=enriched_urls,
                 email_accounts=email_accounts,
+                email_processing_status=self.email_processing_status,
                 config=self.config,
             )
         
@@ -1763,6 +1764,32 @@ class RAGKnowledgebaseManager:
             except Exception:
                 pass
             return jsonify({'status': 'not_found'})
+
+        @self.app.route('/email_status/<int:account_id>')
+        def get_email_status(account_id: int):
+            """Get processing status for an email account refresh.
+            When background status is gone, also return final DB state."""
+            status = self.email_processing_status.get(account_id)
+            if status:
+                return jsonify({
+                    'status': status.status,
+                    'progress': status.progress,
+                    'message': status.message,
+                    'error_details': status.error_details
+                })
+            try:
+                if self.email_account_manager:
+                    for acct in self.email_account_manager.list_accounts(include_password=False):
+                        if acct.get('id') == account_id:
+                            return jsonify({
+                                'status': 'not_found',
+                                'last_update_status': acct.get('last_update_status'),
+                                'last_synced': acct.get('last_synced'),
+                                'next_run': acct.get('next_run')
+                            })
+                return jsonify({'status': 'deleted'})
+            except Exception:
+                return jsonify({'status': 'not_found'})
         
         @self.app.route('/delete/<folder>/<filename>')
         def delete_file(folder, filename):
@@ -2331,10 +2358,10 @@ class RAGKnowledgebaseManager:
             # A TTL cleanup will purge it later via get_status.
             pass
 
-    def _refresh_email_account_background(self, account_id: int) -> None:
-        """Fetch emails for a specific account in a background thread."""
-        if not self.email_account_manager:
-            return
+        def _refresh_email_account_background(self, account_id: int) -> None:
+            """Fetch emails for a specific account in a background thread."""
+            if not self.email_account_manager:
+                return
         try:
             account = None
             for acct in self.email_account_manager.list_accounts(include_password=True):
@@ -2400,24 +2427,31 @@ class RAGKnowledgebaseManager:
                 logger.warning(f"Unknown server type '{server_type}' for account {account_id}")
                 return
 
+            status_text = None
             try:
                 processor = EmailProcessor(self.milvus_manager, sqlite3.connect(self.url_manager.db_path))
-                run_email_ingestion(connector, processor)
+                processed = run_email_ingestion(connector, processor)
+                status_text = 'updated' if processed else 'unchanged'
             except Exception as exc:
                 logger.error(f"Email ingestion failed for account {account.get('account_name')}: {exc}")
-
+                status_text = f"error: {exc}"
+                if st:
+                    st.status = 'error'; st.message = f'Refresh failed: {exc}'; st.error_details = str(exc); st.progress = 100; st.end_time = datetime.now()
             try:
                 self.email_account_manager.update_account(
                     account_id,
                     {
                         'last_synced': datetime.now(UTC).isoformat(
                             sep=' ', timespec='seconds'
-                        )
+                        ),
+                        'last_update_status': status_text,
                     },
                 )
             except Exception:
                 pass
-            if st:
+            if status_text and status_text.startswith('error'):
+                pass
+            elif st:
                 st.status = 'completed'; st.message = 'Email refresh complete'; st.progress = 100; st.end_time = datetime.now()
         except Exception as exc:
             logger.error(f"Email refresh error for account {account_id}: {exc}")
@@ -2429,6 +2463,7 @@ class RAGKnowledgebaseManager:
                 del self.email_processing_status[account_id]
             except Exception:
                 pass
+
 
     def _process_url_background(self, url_id: int) -> None:
         """Fetch, chunk, and index the content at a URL. Replace previous embeddings for that URL."""

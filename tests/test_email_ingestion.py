@@ -31,8 +31,8 @@ class _DummyEmbeddings:
         return [[0.0] * 1 for _ in docs]
 
 
-sys.modules.setdefault("langchain_text_splitters", types.SimpleNamespace(RecursiveCharacterTextSplitter=_DummySplitter))
-sys.modules.setdefault("langchain_ollama", types.SimpleNamespace(OllamaEmbeddings=_DummyEmbeddings))
+sys.modules["langchain_text_splitters"] = types.SimpleNamespace(RecursiveCharacterTextSplitter=_DummySplitter)
+sys.modules["langchain_ollama"] = types.SimpleNamespace(OllamaEmbeddings=_DummyEmbeddings)
 sys.modules.setdefault("google.oauth2.credentials", types.SimpleNamespace(Credentials=object))
 sys.modules.setdefault("googleapiclient.discovery", types.SimpleNamespace(build=lambda *a, **k: None))
 sys.modules.setdefault("googleapiclient.errors", types.SimpleNamespace(HttpError=Exception))
