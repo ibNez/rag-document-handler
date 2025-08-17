@@ -16,7 +16,6 @@ Features:
 """
 
 import os
-import sys
 import logging
 import threading
 import time
@@ -40,23 +39,16 @@ from urllib.robotparser import RobotFileParser
 # Flask and web components
 from flask import Flask, request, render_template, flash, redirect, url_for, jsonify, send_from_directory, abort
 from werkzeug.utils import secure_filename
-from werkzeug.datastructures import FileStorage
 
 # Document processing
-from pypdf import PdfReader
-from docx import Document as DocxDocument
-import chardet
-from langchain_community.document_loaders import PyPDFLoader
 from langchain_unstructured import UnstructuredLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 # Vector and ML components
 from pymilvus import connections, utility, Collection
 from langchain_ollama import OllamaEmbeddings, ChatOllama
 from langchain_community.vectorstores import Milvus as LC_Milvus
 from langchain_core.documents import Document
-from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
-from langchain_core.tools import tool
+from langchain_core.messages import SystemMessage, HumanMessage
 
 # Configuration
 from dotenv import load_dotenv
@@ -801,7 +793,7 @@ class DocumentProcessor:
         page_texts = {p: '\n'.join(txts) for p, txts in pages.items()}
 
         # Local frequency extraction
-        import re, math
+        import re
         stop = set(["the","and","of","to","a","in","for","on","is","with","by","an","be","this","that","are","as","at","from","it","or","was","were","which","can"])
         word_re = re.compile(r"[A-Za-z][A-Za-z0-9_-]{2,}")
         per_page_keywords: Dict[int, List[str]] = {}
