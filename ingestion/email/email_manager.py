@@ -12,6 +12,13 @@ import sqlite3
 logger = logging.getLogger(__name__)
 
 
+def _mask(value: Optional[str]) -> str:
+    """Return a masked representation of a sensitive value for logging."""
+    if not value:
+        return "N/A"
+    return f"{value[:8]}..."
+
+
 def compute_header_hash(record: Dict[str, Any]) -> str:
     """Return a deterministic hash of common email headers."""
     from_addr = (record.get("from_addr") or "").lower()
@@ -142,47 +149,93 @@ class EmailManager:
         cur = self.conn.cursor()
         cur.execute(sql, values)
         self.conn.commit()
-        logger.debug("Upserted email %s", record["message_id"])
+        logger.debug("Upserted email %s", _mask(record["message_id"]))
 
     # ------------------------------------------------------------------
     def get_email(self, message_id: str) -> Optional[Dict[str, Any]]:
         """Retrieve an email by ``message_id``."""
+        logger.info("Fetching email for message_id %s", _mask(message_id))
         cur = self.conn.cursor()
         self.conn.row_factory = sqlite3.Row
-        cur.execute("SELECT * FROM emails WHERE message_id = ?", (message_id,))
-        row = cur.fetchone()
+        try:
+            cur.execute("SELECT * FROM emails WHERE message_id = ?", (message_id,))
+            row = cur.fetchone()
+        except sqlite3.Error as exc:
+            logger.error(
+                "Database error when fetching email %s: %s",
+                _mask(message_id),
+                exc,
+            )
+            raise
         if not row:
+            logger.info("No email found for message_id %s", _mask(message_id))
             return None
+        logger.info("Email found for message_id %s", _mask(message_id))
         return self._row_to_dict(row)
 
     # ------------------------------------------------------------------
     def get_email_by_hash(self, content_hash: str) -> Optional[Dict[str, Any]]:
         """Retrieve an email using its ``content_hash``."""
+        logger.info("Fetching email for content_hash %s", _mask(content_hash))
         cur = self.conn.cursor()
         self.conn.row_factory = sqlite3.Row
-        cur.execute("SELECT * FROM emails WHERE content_hash = ?", (content_hash,))
-        row = cur.fetchone()
+        try:
+            cur.execute("SELECT * FROM emails WHERE content_hash = ?", (content_hash,))
+            row = cur.fetchone()
+        except sqlite3.Error as exc:
+            logger.error(
+                "Database error when fetching content_hash %s: %s",
+                _mask(content_hash),
+                exc,
+            )
+            raise
         if not row:
+            logger.info("No email found for content_hash %s", _mask(content_hash))
             return None
+        logger.info("Email found for content_hash %s", _mask(content_hash))
         return self._row_to_dict(row)
 
     # ------------------------------------------------------------------
     def get_email_by_header_hash(self, header_hash: str) -> Optional[Dict[str, Any]]:
         """Retrieve an email using its ``header_hash``."""
+        logger.info("Fetching email for header_hash %s", _mask(header_hash))
         cur = self.conn.cursor()
         self.conn.row_factory = sqlite3.Row
-        cur.execute("SELECT * FROM emails WHERE header_hash = ?", (header_hash,))
-        row = cur.fetchone()
+        try:
+            cur.execute("SELECT * FROM emails WHERE header_hash = ?", (header_hash,))
+            row = cur.fetchone()
+        except sqlite3.Error as exc:
+            logger.error(
+                "Database error when fetching header_hash %s: %s",
+                _mask(header_hash),
+                exc,
+            )
+            raise
         if not row:
+            logger.info("No email found for header_hash %s", _mask(header_hash))
             return None
+        logger.info("Email found for header_hash %s", _mask(header_hash))
         return self._row_to_dict(row)
 
     # ------------------------------------------------------------------
     def delete_email(self, message_id: str) -> None:
         """Delete an email by ``message_id``."""
+        logger.info("Deleting email for message_id %s", _mask(message_id))
         cur = self.conn.cursor()
-        cur.execute("DELETE FROM emails WHERE message_id = ?", (message_id,))
-        self.conn.commit()
+        try:
+            cur.execute("DELETE FROM emails WHERE message_id = ?", (message_id,))
+            self.conn.commit()
+        except sqlite3.Error as exc:
+            logger.error(
+                "Database error when deleting email %s: %s",
+                _mask(message_id),
+                exc,
+            )
+            raise
+        if cur.rowcount:
+            logger.info("Deleted email %s", _mask(message_id))
+        else:
+            logger.info("No email found to delete for message_id %s", _mask(message_id))
 
     # ------------------------------------------------------------------
     def _row_to_dict(self, row: sqlite3.Row) -> Dict[str, Any]:
