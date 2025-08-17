@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import logging
 import sqlite3
 from datetime import datetime, timedelta
 from typing import Any, Dict, Iterable, List, Optional, Sequence
@@ -14,6 +15,8 @@ from .email_manager import compute_header_hash
 from .processor import EmailProcessor
 
 CONTENT_HASH_RECIPE_VERSION = 1
+
+logger = logging.getLogger(__name__)
 
 
 def _participants_hash(participants: Sequence[str]) -> Optional[str]:
@@ -94,8 +97,13 @@ def run_email_ingestion(
     int
         Number of new emails processed.
     """
+    logger.info(
+        "Starting email ingestion using %s", connector.__class__.__name__
+    )
     records = connector.fetch_emails(since_date)
+    logger.info("Fetched %d emails", len(records))
     if not records:
+        logger.info("No emails retrieved; ending ingestion run")
         return 0
 
     processed = 0
@@ -108,6 +116,7 @@ def run_email_ingestion(
             continue
         processor.process(rec)
         processed += 1
+    logger.info("Email ingestion complete; processed %d new emails", processed)
     return processed
 
 

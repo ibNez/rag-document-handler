@@ -62,17 +62,25 @@ class EmailProcessor:
             chunk_size=chunk_size, chunk_overlap=chunk_overlap
         )
         self.manager = EmailManager(sqlite_conn)
+        logger.info(
+            "EmailProcessor initialized with embedding model %s",
+            getattr(self.embedding_model, "model", self.embedding_model.__class__.__name__),
+        )
 
     # ------------------------------------------------------------------
     def _store_metadata(self, record: Dict[str, Any]) -> None:
         """Persist an email record using :class:`EmailManager`."""
         self.manager.upsert_email(record)
+        logger.debug("Stored metadata for message %s", record.get("message_id"))
 
     # ------------------------------------------------------------------
     def _store_embeddings(
         self, message_id: str, chunks: List[str], embeddings: Iterable[List[float]], record: Dict[str, Any]
     ) -> None:
         """Insert embeddings into Milvus using the provided client."""
+        logger.debug(
+            "Storing %d embeddings for message %s", len(chunks), message_id
+        )
         metadatas = []
         ids = []
         for idx, _ in enumerate(chunks):
@@ -108,6 +116,8 @@ class EmailProcessor:
                 raise RuntimeError("Unsupported Milvus client interface")
         except Exception as exc:  # pragma: no cover - defensive
             logger.error("Milvus insertion failed for %s: %s", message_id, exc)
+        else:
+            logger.debug("Stored embeddings for message %s", message_id)
 
     # ------------------------------------------------------------------
     def process(self, record: Dict[str, Any]) -> None:
@@ -126,5 +136,15 @@ class EmailProcessor:
         chunks = [c for c in self.splitter.split_text(body_text) if c.strip()]
         if not chunks:
             return
+        model_name = getattr(
+            self.embedding_model, "model", self.embedding_model.__class__.__name__
+        )
+        logger.info(
+            "Generating embeddings for message %s with model %s", message_id, model_name
+        )
         embeddings = self.embedding_model.embed_documents(chunks)
+        logger.info(
+            "Generated %d embeddings for message %s", len(chunks), message_id
+        )
         self._store_embeddings(message_id, chunks, embeddings, record)
+        logger.debug("Finished processing message %s", message_id)

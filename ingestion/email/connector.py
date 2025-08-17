@@ -20,6 +20,7 @@ from email.message import Message
 from email.utils import getaddresses, parsedate_to_datetime
 import base64
 import imaplib
+import logging
 import quopri
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -30,6 +31,8 @@ try:  # pragma: no cover - optional dependency
     from exchangelib import Account, Configuration, Credentials as EWSCredentials, DELEGATE
 except Exception:  # pragma: no cover - optional dependency
     Account = Configuration = EWSCredentials = DELEGATE = None  # type: ignore
+
+logger = logging.getLogger(__name__)
 
 
 class EmailConnector(ABC):
@@ -73,7 +76,13 @@ class IMAPConnector(EmailConnector):
     # ------------------------------------------------------------------
     def fetch_emails(self, since_date: Optional[datetime] = None) -> List[Dict[str, Any]]:
         """Fetch emails via IMAP and return canonical records."""
-
+        logger.info(
+            "Connecting to IMAP server %s:%s mailbox=%s user=%s",
+            self.host,
+            self.port,
+            self.mailbox,
+            self.username,
+        )
         conn = (
             imaplib.IMAP4_SSL(self.host, self.port)
             if self.use_ssl
@@ -144,6 +153,12 @@ class IMAPConnector(EmailConnector):
                     }
                 )
         conn.logout()
+        logger.info(
+            "Retrieved %d emails from IMAP server %s for user %s",
+            len(results),
+            self.host,
+            self.username,
+        )
         return results
 
     # ------------------------------------------------------------------
@@ -343,11 +358,17 @@ class ExchangeConnector(EmailConnector):
         )
         self.batch_limit = batch_limit
         self.primary_mailbox = None
+        self.server = server
+        self.username = username
 
     # ------------------------------------------------------------------
     def fetch_emails(self, since_date: Optional[datetime] = None) -> List[Dict[str, Any]]:
         """Fetch emails via Exchange Web Services and return canonical records."""
-
+        logger.info(
+            "Fetching emails from Exchange server %s for user %s",
+            self.server,
+            self.username,
+        )
         qs = self.account.inbox.all().order_by("-datetime_received")
         if since_date is not None:
             qs = qs.filter(datetime_received__gte=since_date)
@@ -363,6 +384,12 @@ class ExchangeConnector(EmailConnector):
                 results.append(rec)
             except Exception:
                 continue
+        logger.info(
+            "Retrieved %d emails from Exchange server %s for user %s",
+            len(results),
+            self.server,
+            self.username,
+        )
         return results
 
 
@@ -394,7 +421,7 @@ class GmailConnector(EmailConnector):
     # ------------------------------------------------------------------
     def fetch_emails(self, since_date: Optional[datetime] = None) -> List[Dict[str, Any]]:
         """Fetch emails via Gmail API and return canonical records."""
-
+        logger.info("Fetching emails from Gmail for user %s", self.user_id)
         results: List[Dict[str, Any]] = []
         page_token: Optional[str] = None
         fetched = 0
@@ -438,4 +465,7 @@ class GmailConnector(EmailConnector):
                     break
         except HttpError:
             pass
+        logger.info(
+            "Retrieved %d emails from Gmail for user %s", len(results), self.user_id
+        )
         return results
