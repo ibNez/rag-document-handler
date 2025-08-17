@@ -22,42 +22,55 @@ class EmailAccountManager:
     # ------------------------------------------------------------------
     def _ensure_table(self) -> None:
         """Create the ``email_accounts`` table if it does not exist."""
-        cur = self.conn.cursor()
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS email_accounts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                account_name TEXT UNIQUE NOT NULL,
-                server_type TEXT NOT NULL,
-                server TEXT NOT NULL,
-                port INTEGER NOT NULL,
-                username TEXT NOT NULL,
-                password TEXT NOT NULL,
-                mailbox TEXT,
-                batch_limit INTEGER,
-                use_ssl INTEGER,
-                refresh_interval_minutes INTEGER,
-                last_synced TIMESTAMP,
-                last_update_status TEXT
-            )
-            """
-        )
-        # Add missing columns for upgrades
-        cur.execute("PRAGMA table_info(email_accounts)")
-        existing = {row[1] for row in cur.fetchall()}
-        if "refresh_interval_minutes" not in existing:
+        try:
+            cur = self.conn.cursor()
             cur.execute(
-                "ALTER TABLE email_accounts ADD COLUMN refresh_interval_minutes INTEGER"
+                """
+                CREATE TABLE IF NOT EXISTS email_accounts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    account_name TEXT UNIQUE NOT NULL,
+                    server_type TEXT NOT NULL,
+                    server TEXT NOT NULL,
+                    port INTEGER NOT NULL,
+                    username TEXT NOT NULL,
+                    password TEXT NOT NULL,
+                    mailbox TEXT,
+                    batch_limit INTEGER,
+                    use_ssl INTEGER,
+                    refresh_interval_minutes INTEGER,
+                    last_synced TIMESTAMP,
+                    last_update_status TEXT
+                )
+                """
             )
-        if "last_synced" not in existing:
-            cur.execute(
-                "ALTER TABLE email_accounts ADD COLUMN last_synced TIMESTAMP"
-            )
-        if "last_update_status" not in existing:
-            cur.execute(
-                "ALTER TABLE email_accounts ADD COLUMN last_update_status TEXT"
-            )
-        self.conn.commit()
+            # Add missing columns for upgrades
+            cur.execute("PRAGMA table_info(email_accounts)")
+            existing = {row[1] for row in cur.fetchall()}
+            if "refresh_interval_minutes" not in existing:
+                cur.execute(
+                    "ALTER TABLE email_accounts ADD COLUMN refresh_interval_minutes INTEGER"
+                )
+                logger.info(
+                    "Added missing column refresh_interval_minutes to email_accounts table"
+                )
+            if "last_synced" not in existing:
+                cur.execute(
+                    "ALTER TABLE email_accounts ADD COLUMN last_synced TIMESTAMP"
+                )
+                logger.info(
+                    "Added missing column last_synced to email_accounts table"
+                )
+            if "last_update_status" not in existing:
+                cur.execute(
+                    "ALTER TABLE email_accounts ADD COLUMN last_update_status TEXT"
+                )
+                logger.info(
+                    "Added missing column last_update_status to email_accounts table"
+                )
+            self.conn.commit()
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.error("Failed to ensure email_accounts table: %s", exc)
+            raise
 
     # ------------------------------------------------------------------
     def create_account(self, record: Dict[str, Any]) -> int:
@@ -102,12 +115,24 @@ class EmailAccountManager:
         cols = list(record.keys())
         placeholders = ",".join(["?"] * len(cols))
         sql = f"INSERT INTO email_accounts ({','.join(cols)}) VALUES ({placeholders})"
-        cur = self.conn.cursor()
-        cur.execute(sql, [record[c] for c in cols])
-        self.conn.commit()
-        account_id = cur.lastrowid
-        logger.info("Created email account %s (%s)", account_id, record.get("account_name"))
-        return account_id
+        try:
+            cur = self.conn.cursor()
+            cur.execute(sql, [record[c] for c in cols])
+            self.conn.commit()
+            account_id = cur.lastrowid
+            logger.info(
+                "Created email account %s (%s)",
+                account_id,
+                record.get("account_name"),
+            )
+            return account_id
+        except Exception as exc:
+            logger.error(
+                "Failed to create email account '%s': %s",
+                record.get("account_name"),
+                exc,
+            )
+            raise
 
     # ------------------------------------------------------------------
     def list_accounts(self, include_password: bool = False) -> List[Dict[str, Any]]:
@@ -121,34 +146,43 @@ class EmailAccountManager:
             omitted entirely so sensitive data is not exposed to templates or
             API responses.
         """
-        self.conn.row_factory = sqlite3.Row
-        cur = self.conn.cursor()
-        cur.execute(
-            """
-            SELECT
-                *,
-                CASE
-                    WHEN refresh_interval_minutes IS NOT NULL AND refresh_interval_minutes > 0 AND last_synced IS NOT NULL
-                    THEN datetime(last_synced, '+' || refresh_interval_minutes || ' minutes')
-                    ELSE NULL
-                END AS next_run
-            FROM email_accounts
-            """
-        )
-        rows = cur.fetchall()
+        try:
+            self.conn.row_factory = sqlite3.Row
+            cur = self.conn.cursor()
+            cur.execute(
+                """
+                SELECT
+                    *,
+                    CASE
+                        WHEN refresh_interval_minutes IS NOT NULL AND refresh_interval_minutes > 0 AND last_synced IS NOT NULL
+                        THEN datetime(last_synced, '+' || refresh_interval_minutes || ' minutes')
+                        ELSE NULL
+                    END AS next_run
+                FROM email_accounts
+                """
+            )
+            rows = cur.fetchall()
 
-        accounts: List[Dict[str, Any]] = []
-        for row in rows:
-            data = self._row_to_dict(row)
-            if include_password and "password" in data:
-                try:
-                    data["password"] = decrypt(data["password"])
-                except Exception:
-                    data["password"] = ""
-            else:
-                data.pop("password", None)
-            accounts.append(data)
-        return accounts
+            accounts: List[Dict[str, Any]] = []
+            for row in rows:
+                data = self._row_to_dict(row)
+                if include_password and "password" in data:
+                    try:
+                        data["password"] = decrypt(data["password"])
+                    except Exception:
+                        data["password"] = ""
+                else:
+                    data.pop("password", None)
+                accounts.append(data)
+            logger.info(
+                "Retrieved %d email accounts (%s passwords)",
+                len(accounts),
+                "including" if include_password else "excluding",
+            )
+            return accounts
+        except Exception as exc:
+            logger.error("Failed to list email accounts: %s", exc)
+            return []
 
     # ------------------------------------------------------------------
     def update_account(self, account_id: int, updates: Dict[str, Any]) -> None:
@@ -170,21 +204,29 @@ class EmailAccountManager:
 
         assignments = ", ".join([f"{col} = ?" for col in params])
         values = list(params.values()) + [account_id]
-        cur = self.conn.cursor()
-        cur.execute(
-            f"UPDATE email_accounts SET {assignments} WHERE id = ?",
-            values,
-        )
-        self.conn.commit()
-        logger.debug("Updated email account %s", account_id)
+        try:
+            cur = self.conn.cursor()
+            cur.execute(
+                f"UPDATE email_accounts SET {assignments} WHERE id = ?",
+                values,
+            )
+            self.conn.commit()
+            logger.info("Updated email account %s", account_id)
+        except Exception as exc:
+            logger.error("Failed to update email account %s: %s", account_id, exc)
+            raise
 
     # ------------------------------------------------------------------
     def delete_account(self, account_id: int) -> None:
         """Delete an email account record."""
-        cur = self.conn.cursor()
-        cur.execute("DELETE FROM email_accounts WHERE id = ?", (account_id,))
-        self.conn.commit()
-        logger.debug("Deleted email account %s", account_id)
+        try:
+            cur = self.conn.cursor()
+            cur.execute("DELETE FROM email_accounts WHERE id = ?", (account_id,))
+            self.conn.commit()
+            logger.info("Deleted email account %s", account_id)
+        except Exception as exc:
+            logger.error("Failed to delete email account %s: %s", account_id, exc)
+            raise
 
     # ------------------------------------------------------------------
     def get_account_count(self) -> int:
