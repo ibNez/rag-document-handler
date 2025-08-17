@@ -20,6 +20,17 @@ cd rag-document-handler
 
 The setup script installs dependencies, prepares Milvus, and initializes the local SQLite database (`knowledgebase.db`). The start script launches Milvus (if needed) and runs the web application.
 
+## Docker Compose Deployment
+
+The repository includes a `docker-compose.yml` for running the web application together with a Milvus vector database.
+
+```bash
+cp .env.example .env  # optional configuration
+docker compose up -d
+```
+
+This builds the application image, starts Milvus, and exposes the web interface on [http://localhost:3000](http://localhost:3000).
+
 ## Manual Installation
 
 1. **Create virtual environment**
@@ -29,9 +40,8 @@ The setup script installs dependencies, prepares Milvus, and initializes the loc
    ```
 2. **Install Python dependencies**
    ```bash
-   pip install -e .
+   pip install rag-document-handler
    ```
-   > TODO: Publish an official package so users can run `pip install rag-document-handler`.
 3. **Run Milvus**
    ```bash
    docker run -d --name milvus -p 19530:19530 milvusdb/milvus:latest
@@ -78,7 +88,3 @@ export EMAIL_ENCRYPTION_KEY="<output-from-command>"
 Keep this value secret and **do not** commit it to version control. If the key
 is rotated, previously stored passwords will need to be re-entered.
 
-## TODOs
-
-- [ ] Provide Docker Compose configuration for full-stack deployment.
-- [ ] Publish package on PyPI for `pip install rag-document-handler`.
