@@ -41,9 +41,8 @@ sys.modules.setdefault(
         Collection=lambda *a, **k: None,
     ),
 )
-sys.modules.setdefault(
-    "langchain_ollama",
-    types.SimpleNamespace(OllamaEmbeddings=lambda *a, **k: None, ChatOllama=lambda *a, **k: None),
+sys.modules["langchain_ollama"] = types.SimpleNamespace(
+    OllamaEmbeddings=lambda *a, **k: None, ChatOllama=lambda *a, **k: None
 )
 sys.modules.setdefault(
     "langchain_community.vectorstores",
@@ -87,6 +86,8 @@ def test_email_account_manager_crud(manager: EmailAccountManager) -> None:
     assert len(accounts) == 1
     assert accounts[0]["account_name"] == "Work"
     assert accounts[0]["refresh_interval_minutes"] == 5
+    assert "last_update_status" in accounts[0]
+    assert accounts[0]["last_update_status"] is None
 
     # Password should not be returned by default
     assert "password" not in accounts[0]
@@ -131,8 +132,8 @@ class DummyMilvusManager:
 class DummyEmailOrchestrator:
     """Dummy email orchestrator used in tests."""
 
-    def __init__(self, config: Any) -> None:
-        self.config = config
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        self.config = args[0] if args else None
 
     def start(self) -> None:  # pragma: no cover - simple stub
         return None
@@ -179,6 +180,8 @@ def test_email_account_crud(client):
     account_id = accounts[0]["id"]
     assert "password" not in accounts[0]
     assert accounts[0]["refresh_interval_minutes"] == 5
+    assert "last_update_status" in accounts[0]
+    assert accounts[0]["last_update_status"] is None
 
     response = client.post(f"/email_accounts/{account_id}", data={"username": "new"})
     assert response.status_code == 302
@@ -192,3 +195,25 @@ def test_email_account_crud(client):
 
     list_resp = client.get("/email_accounts")
     assert list_resp.get_json() == []
+
+def test_email_status_endpoint(client):
+    response = client.post(
+        "/email_accounts",
+        data={
+            "account_name": "Work",
+            "server_type": "imap",
+            "server": "imap.example.com",
+            "username": "user",
+            "password": "pass",
+            "port": "993",
+        },
+    )
+    assert response.status_code == 302
+
+    list_resp = client.get("/email_accounts")
+    account_id = list_resp.get_json()[0]["id"]
+
+    status_resp = client.get(f"/email_status/{account_id}")
+    data = status_resp.get_json()
+    assert data["status"] == "not_found"
+    assert data.get("last_update_status") is None

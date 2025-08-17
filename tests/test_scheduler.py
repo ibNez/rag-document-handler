@@ -29,7 +29,7 @@ sys.modules.setdefault("chardet", types.SimpleNamespace(detect=lambda *a, **k: {
 _ollama = types.ModuleType("langchain_ollama")
 _ollama.OllamaEmbeddings = lambda *a, **k: None
 _ollama.ChatOllama = lambda *a, **k: None
-sys.modules.setdefault("langchain_ollama", _ollama)
+sys.modules["langchain_ollama"] = _ollama
 sys.modules.setdefault(
     "langchain_community.vectorstores",
     types.SimpleNamespace(Milvus=types.SimpleNamespace(from_texts=lambda *a, **k: None)),

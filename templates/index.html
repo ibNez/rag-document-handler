@@ -488,6 +488,7 @@
                                             <th>Server</th>
                                             <th>Username</th>
                                             <th>Schedule / Time</th>
+                                            <th>Status</th>
                                             <th class="text-end">Actions</th>
                                         </tr>
                                     </thead>
@@ -502,6 +503,26 @@
                                                 <div>Every {{ acct.refresh_interval_minutes or config.EMAIL_DEFAULT_REFRESH_MINUTES }} min</div>
                                                 <div class="text-muted">Last: {{ (acct.last_synced or '')[:16] if acct.last_synced else '—' }}</div>
                                                 <div class="text-muted">Next: {{ (acct.next_run or '')[:16] if acct.next_run else '—' }}</div>
+                                            </td>
+                                            <td>
+                                                {% set up = email_processing_status.get(acct.id) if email_processing_status else None %}
+                                                {% if up %}
+                                                    <div class="small mb-1">
+                                                        <span class="badge bg-info" title="{{ up.message }}">{{ up.status.title() }}</span>
+                                                    </div>
+                                                    <div class="progress progress-custom">
+                                                        <div class="progress-bar bg-success progress-animated"
+                                                             role="progressbar" aria-valuemin="0" aria-valuemax="100"
+                                                             data-email-id="{{ acct.id }}"
+                                                             data-initial-progress="{{ up.progress or 0 }}"
+                                                             style="width: 0%"></div>
+                                                    </div>
+                                                {% elif acct.last_update_status %}
+                                                    {% set status_text = acct.last_update_status %}
+                                                    <span class="badge {% if status_text.startswith('error') %}bg-light text-dark{% else %}bg-success{% endif %}">{{ status_text }}</span>
+                                                {% else %}
+                                                    <span class="text-muted small">—</span>
+                                                {% endif %}
                                             </td>
                                             <td class="text-end">
                                                 <div class="btn-group btn-group-sm" role="group">
@@ -965,6 +986,69 @@
                 setInterval(refreshUrlStatuses, 1500);
                 // Initialize URL bars
                 refreshUrlStatuses();
+
+                function refreshEmailStatuses() {
+                    document.querySelectorAll('.progress-bar[data-email-id]').forEach(pb => {
+                        const acctId = pb.getAttribute('data-email-id');
+                        fetch(`/email_status/${acctId}`)
+                            .then(r => r.json())
+                            .then(data => {
+                                if (!data) return;
+                                if (data.status === 'deleted') {
+                                    const row = pb.closest('tr');
+                                    if (row) {
+                                        row.style.transition = 'opacity 200ms ease';
+                                        row.style.opacity = '0';
+                                        setTimeout(() => row.remove(), 220);
+                                    }
+                                    return;
+                                }
+                                if (data.status === 'not_found') {
+                                    try {
+                                        const td = pb.closest('td');
+                                        if (td) {
+                                            const statusText = data.last_update_status || '—';
+                                            const cls = statusText.startsWith('error') ? 'bg-light text-dark' : 'bg-success';
+                                            td.innerHTML = `<span class="badge ${cls}">${statusText}</span>`;
+                                        }
+                                        const row = td ? td.closest('tr') : null;
+                                        if (row) {
+                                            const timesCell = row.children[4];
+                                            if (timesCell) {
+                                                const lines = timesCell.querySelectorAll('div');
+                                                if (lines && lines.length >= 3) {
+                                                    const lastVal = data.last_synced ? String(data.last_synced).slice(0,16) : '—';
+                                                    lines[1].textContent = `Last: ${lastVal}`;
+                                                    const nextVal = data.next_run ? String(data.next_run).slice(0,16) : '—';
+                                                    lines[2].textContent = `Next: ${nextVal}`;
+                                                }
+                                            }
+                                        }
+                                    } catch (e) { /* no-op */ }
+                                    return;
+                                }
+                                const pct = typeof data.progress === 'number' ? data.progress : 0;
+                                pb.style.width = `${pct}%`;
+                                pb.setAttribute('aria-valuenow', String(pct));
+                                if (["queued","processing","chunking","embedding","storing"].includes(data.status)) {
+                                    pb.classList.add('progress-animated');
+                                } else {
+                                    pb.classList.remove('progress-animated');
+                                }
+                                if (data.status === 'completed' || data.status === 'error') {
+                                    const td = pb.closest('td');
+                                    if (td) {
+                                        const s = data.status === 'completed' ? (data.last_update_status || 'updated') : `error`;
+                                        const cls = s.startsWith('error') ? 'bg-light text-dark' : 'bg-success';
+                                        td.innerHTML = `<span class="badge ${cls}">${s}</span>`;
+                                    }
+                                }
+                            })
+                            .catch(() => {});
+                    });
+                }
+                setInterval(refreshEmailStatuses, 1500);
+                refreshEmailStatuses();
             pb.style.width = `${init}%`;
             pb.setAttribute('aria-valuenow', String(init));
             if (init >= 100) {

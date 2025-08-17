@@ -37,7 +37,8 @@ class EmailAccountManager:
                 batch_limit INTEGER,
                 use_ssl INTEGER,
                 refresh_interval_minutes INTEGER,
-                last_synced TIMESTAMP
+                last_synced TIMESTAMP,
+                last_update_status TEXT
             )
             """
         )
@@ -51,6 +52,10 @@ class EmailAccountManager:
         if "last_synced" not in existing:
             cur.execute(
                 "ALTER TABLE email_accounts ADD COLUMN last_synced TIMESTAMP"
+            )
+        if "last_update_status" not in existing:
+            cur.execute(
+                "ALTER TABLE email_accounts ADD COLUMN last_update_status TEXT"
             )
         self.conn.commit()
 
