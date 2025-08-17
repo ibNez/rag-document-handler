@@ -85,6 +85,15 @@ class EmailAccountManager:
         if "password" in record:
             record["password"] = encrypt(str(record["password"]))
 
+        logger.info(
+            "Creating email account '%s' (%s) on %s:%s for user %s",
+            record.get("account_name"),
+            record.get("server_type"),
+            record.get("server"),
+            record.get("port"),
+            record.get("username"),
+        )
+
         cols = list(record.keys())
         placeholders = ",".join(["?"] * len(cols))
         sql = f"INSERT INTO email_accounts ({','.join(cols)}) VALUES ({placeholders})"
@@ -92,7 +101,7 @@ class EmailAccountManager:
         cur.execute(sql, [record[c] for c in cols])
         self.conn.commit()
         account_id = cur.lastrowid
-        logger.debug("Created email account %s", account_id)
+        logger.info("Created email account %s (%s)", account_id, record.get("account_name"))
         return account_id
 
     # ------------------------------------------------------------------

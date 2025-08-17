@@ -1854,6 +1854,14 @@ class RAGKnowledgebaseManager:
             refresh_raw = request.form.get('refresh_interval_minutes', '').strip()
             use_ssl = request.form.get('use_ssl', '0') == '1'
 
+            logger.info(
+                "Request to add email account '%s' (%s) on %s by user %s",
+                account_name,
+                server_type,
+                server,
+                username,
+            )
+
             if not all([account_name, server, username, password, port_str]):
                 flash('Missing required fields', 'error')
                 return redirect(url_for('index'))
@@ -1883,8 +1891,12 @@ class RAGKnowledgebaseManager:
                 with sqlite3.connect(self.url_manager.db_path) as conn:
                     manager = EmailAccountManager(conn)
                     manager.create_account(record)
+                logger.info("Email account '%s' added successfully", account_name)
                 flash('Email account added successfully', 'success')
             except Exception as e:
+                logger.exception(
+                    "Failed to add email account '%s': %s", account_name, e
+                )
                 flash(f'Failed to add email account: {e}', 'error')
 
             return redirect(url_for('index'))
