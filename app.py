@@ -2392,9 +2392,9 @@ class RAGKnowledgebaseManager:
 
                     cfg = _Cfg()
                 orchestrator = EmailOrchestrator(cfg, self.email_account_manager)
-            except Exception as exc:
-                logger.error(
-                    f"Failed to initialize email orchestrator for account {account_id}: {exc}"
+            except Exception:
+                logger.exception(
+                    "Failed to initialize email orchestrator for account %s", account_id
                 )
                 return
         if orchestrator is None:
@@ -2426,7 +2426,7 @@ class RAGKnowledgebaseManager:
                 st.progress = 100
                 st.end_time = datetime.now()
         except Exception as exc:
-            logger.error(f"Email refresh error for account {account_id}: {exc}")
+            logger.exception("Email refresh error for account %s", account_id)
             st = self.email_processing_status.get(account_id)
             if st:
                 st.status = "error"
@@ -2434,6 +2434,7 @@ class RAGKnowledgebaseManager:
                 st.error_details = str(exc)
                 st.progress = 100
                 st.end_time = datetime.now()
+            raise
         finally:
             try:
                 del self.email_processing_status[account_id]
@@ -2441,9 +2442,9 @@ class RAGKnowledgebaseManager:
                 logger.warning(
                     f"No processing status found for account {account_id} during cleanup"
                 )
-            except Exception as exc:
-                logger.error(
-                    f"Unexpected error cleaning up status for account {account_id}: {exc}"
+            except Exception:
+                logger.exception(
+                    "Unexpected error cleaning up status for account %s", account_id
                 )
 
 

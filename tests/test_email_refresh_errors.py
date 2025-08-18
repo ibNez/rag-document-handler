@@ -119,16 +119,21 @@ def test_update_account_failure_logs(monkeypatch, caplog):
                 }
             ]
 
-        def update_account(self, account_id, data):
+    class FailingOrchestrator:
+        def __init__(self, *a, **k):
+            pass
+
+        def run(self, account_id):
             raise RuntimeError("db fail")
 
-    mgr = _make_manager(DummyAccountManager())
+    monkeypatch.setattr(app, "EmailOrchestrator", FailingOrchestrator)
 
-    with caplog.at_level(logging.ERROR):
+    mgr = _make_manager(DummyAccountManager())
+    with caplog.at_level(logging.ERROR), pytest.raises(RuntimeError, match="db fail"):
         mgr._refresh_email_account_background(1)
 
     messages = [r.getMessage() for r in caplog.records]
-    assert any("Failed to update account" in m for m in messages)
+    assert any("Email refresh error" in m for m in messages)
     assert 1 not in mgr.email_processing_status
 
 
@@ -161,3 +166,23 @@ def test_cleanup_failure_logs_warning(monkeypatch, caplog):
 
     messages = [r.getMessage() for r in caplog.records]
     assert any("No processing status found for account" in m for m in messages)
+
+
+def test_orchestrator_init_failure_logs(monkeypatch, caplog):
+    class DummyAccountManager:
+        def list_accounts(self, include_password=False):
+            return []
+
+    def raising_orchestrator(*a, **k):
+        raise RuntimeError("init fail")
+
+    monkeypatch.setattr(app, "EmailOrchestrator", raising_orchestrator)
+
+    mgr = _make_manager(DummyAccountManager())
+
+    with caplog.at_level(logging.ERROR):
+        mgr._refresh_email_account_background(1)
+
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("Failed to initialize email orchestrator" in m for m in messages)
+    assert 1 not in mgr.email_processing_status
