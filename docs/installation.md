@@ -5,31 +5,64 @@ This guide covers setting up the RAG Document Handler in a development environme
 ## Prerequisites
 
 - Python 3.8 or higher
-- Docker (for Milvus vector database)
+- Docker and Docker Compose
 - Git
-- SQLite (bundled with Python) for metadata storage
 
-## Quick Setup
+## Quick Setup Options
 
+### Interactive Setup (Recommended)
 ```bash
 git clone <repository-url>
 cd rag-document-handler
 ./setup.sh
-./start.sh
 ```
 
-The setup script installs dependencies, prepares Milvus, and initializes the local SQLite database (`knowledgebase.db`). The start script launches Milvus (if needed) and runs the web application.
+### Automated Setup
+```bash
+./setup.sh --all        # Install everything without prompts
+./setup.sh --dev        # Development mode (skip webui container)
+./setup.sh --help       # Show installation options
+```
+
+### Development Mode
+For active development where you want to run the Flask app locally:
+```bash
+./setup.sh --dev        # Start only infrastructure containers
+source .venv/bin/activate
+python app.py           # Run application locally
+```
+
+The setup script will:
+- Create Python virtual environment
+- Install all dependencies (including PostgreSQL drivers)
+- Create directory structure
+- Start Docker containers (Milvus + PostgreSQL)
+- Test database connections
+- Configure environment files
 
 ## Docker Compose Deployment
 
-The repository includes a `docker-compose.yml` for running the web application together with a Milvus vector database.
+The repository includes a `docker-compose.yml` for running the complete application stack.
 
+### Full Stack (Production-like)
 ```bash
-cp .env.example .env  # optional configuration
+cp .env.example .env  # Configure as needed
 docker compose up -d
 ```
 
-This builds the application image, starts Milvus, and exposes the web interface on [http://localhost:3000](http://localhost:3000).
+### Infrastructure Only (Development)
+```bash
+./setup.sh --dev     # Recommended for development
+# OR manually:
+docker compose up postgres milvus -d
+source .venv/bin/activate
+python app.py
+```
+
+This starts the infrastructure containers (PostgreSQL + Milvus) and exposes:
+- Web interface: [http://localhost:3000](http://localhost:3000)
+- PostgreSQL: `localhost:5432`
+- Milvus: `localhost:19530`
 
 ## Manual Installation
 
@@ -42,24 +75,49 @@ This builds the application image, starts Milvus, and exposes the web interface 
    ```bash
    pip install rag-document-handler
    ```
-3. **Run Milvus**
+3. **Start infrastructure services**
    ```bash
-   docker run -d --name milvus -p 19530:19530 milvusdb/milvus:latest
+   docker compose up postgres milvus -d
    ```
 4. **Start the application**
    ```bash
    python app.py
    ```
 
+## Uninstallation
+
+### Safe Removal
+```bash
+./uninstall.sh          # Interactive removal
+./uninstall.sh --dry-run # Preview what would be removed
+./uninstall.sh --help   # Show removal options
+```
+
+The uninstall script safely removes only project-specific resources:
+- RAG Document Handler containers and volumes
+- Project virtual environment (.venv)
+- Database files and logs
+- Uploaded/staging files
+- Temporary files
+
+Other Docker containers and system files are preserved.
+
 ## Next Steps
 
-- Configure environment variables via `.env` (see root `README.md`).
-- Visit [Usage Guide](usage.md) to interact with the application.
-- The `knowledgebase.db` SQLite database is created on first run to store URL and future email metadata.
+- Configure environment variables via `.env` (see root `README.md`)
+- Visit [Usage Guide](usage.md) to interact with the application  
+- PostgreSQL database stores metadata with JSONB for flexible attributes
+- Milvus vector database handles embeddings and similarity search
 
-## Email ingestion configuration
+## Database Architecture
 
-The application can optionally synchronise an IMAP inbox. Define the following environment variables in your `.env` file to enable and configure this behaviour:
+The application uses a dual database architecture:
+- **PostgreSQL**: Document metadata, URLs, email data, analytics
+- **Milvus**: Vector embeddings and similarity search
+
+## Email Integration Configuration
+
+The application can optionally synchronize IMAP inboxes. Define the following environment variables in your `.env` file:
 
 | Variable | Default | Description |
 | --- | --- | --- |

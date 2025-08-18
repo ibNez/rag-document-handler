@@ -1,17 +1,39 @@
 # RAG Document Handler Documentation
 
-Welcome to the documentation hub for the **RAG Document Handler** project. This directory contains supplementary guides that expand on the root `README.md`.
-The application forms a RAG-focused data lake using Milvus for vector embeddings and a single SQLite database (`knowledgebase.db`) for structured metadata like URLs and emails.
+Welcome to the documentation hub for the **RAG Document Handler** project. This directory contains comprehensive guides that expand on the root `README.md`.
+
+The application provides a complete RAG solution using a dual database architecture:
+- **PostgreSQL**: Document metadata, URLs, emails, and analytics with JSONB flexibility
+- **Milvus**: Vector embeddings and similarity search for semantic retrieval
+
+## Quick Start
+
+```bash
+git clone <repository-url>
+cd rag-document-handler
+./setup.sh --dev        # Development setup
+source .venv/bin/activate
+python app.py           # Start local development server
+```
 
 ## Table of Contents
 
-- [Installation](installation.md)
-- [Usage Guide](usage.md)
-- [System Architecture](architecture.md)
-- [Contributing](contributing.md)
-- [Gmail Email Ingestion](gmail_ingestion.md)
-- [Exchange Email Ingestion](exchange_ingestion.md)
-- [Roadmap](roadmap.md)
-- [Realm Tiles Prompt](realm_tiles_prompt.md)
+- [Installation](installation.md) - Setup options, development mode, and deployment
+- [Usage Guide](usage.md) - Web interface walkthrough and features
+- [System Architecture](architecture.md) - Database design and component overview
+- [Contributing](contributing.md) - Development workflow and standards
+- [Gmail Email Ingestion](gmail_ingestion.md) - Gmail integration setup
+- [Exchange Email Ingestion](exchange_ingestion.md) - Exchange server integration
+- [Roadmap](roadmap.md) - Future features and enhancements
+- [Realm Tiles Prompt](realm_tiles_prompt.md) - AI prompt engineering guide
 
-Each document describes the current state of the project and notes areas that still need to be built.
+## Management Commands
+
+| Command | Purpose |
+|---------|---------|
+| `./setup.sh --all` | Automated production setup |
+| `./setup.sh --dev` | Development environment setup |
+| `./uninstall.sh --dry-run` | Preview removal (safe testing) |
+| `./status.sh` | System health and connectivity check |
+
+Each document reflects the current project state and highlights areas for future development.

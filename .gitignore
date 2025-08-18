@@ -67,6 +67,10 @@ logs/
 *.db
 *.sqlite3
 
+# Database directories (Docker volumes)
+databases/milvus/
+databases/postgres/
+
 # Temporary files
 *.tmp
 *.temp

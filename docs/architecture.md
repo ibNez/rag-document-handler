@@ -1,29 +1,110 @@
 # System Architecture
 
-The project currently consists of a single Flask application (`app.py`) that ties together document processing, Milvus vector storage, a SQLite metadata store (`knowledgebase.db`), and a web interface.
+The RAG Document Handler uses a dual database architecture with Flask web application, PostgreSQL for metadata, and Milvus for vector embeddings.
 
 ## Components
 
 | Component | Description |
 |-----------|-------------|
-| `app.py` | Contains the `RAGDocumentHandler` class implementing upload, URL management, embedding generation, and search. |
-| `templates/` | Jinja2 templates for the web UI. |
-| `static/` | Static assets (CSS, JS, images) used by the templates. |
-| `examples/` | Sample data and scripts demonstrating usage. |
-| `setup.sh` / `start.sh` | Helper scripts for installing dependencies and running the project. |
+| `app.py` | Main Flask application with `RAGDocumentHandler` class implementing upload, URL management, embedding generation, and search |
+| `ingestion/` | Database management modules for PostgreSQL and Milvus integration |
+| `templates/` | Jinja2 templates for the responsive web UI |
+| `static/` | Static assets (CSS, JS, images) used by the templates |
+| `setup.sh` | Enhanced setup script with `--all`, `--dev`, and `--help` flags |
+| `uninstall.sh` | Safe removal script with `--dry-run` and project-specific cleanup |
+| `docker-compose.yml` | Container orchestration for PostgreSQL and Milvus |
+
+## Database Architecture
+
+### PostgreSQL (Metadata Storage)
+- **Documents**: File metadata, processing statistics, ingestion timestamps
+- **URLs**: Web page management, title extraction, refresh scheduling  
+- **Emails**: Account management, message processing, duplicate detection
+- **JSONB Fields**: Flexible attribute storage for extensibility
+- **Full-text Search**: Built-in PostgreSQL search capabilities
+
+### Milvus (Vector Storage)
+- **Collections**: Organized by content type (documents, urls, emails)
+- **Embeddings**: High-dimensional vectors from Ollama embeddings
+- **Similarity Search**: Efficient nearest neighbor retrieval
+- **Metadata**: Associated document IDs and chunk information
 
 ## Data Flow
 
-1. Users upload documents or submit URLs through the web interface. Email ingestion is planned.
-2. Text is extracted and embedded using SentenceTransformers.
-3. Metadata such as URLs and emails is stored in a local SQLite database (`knowledgebase.db`).
-4. Embeddings are stored in Milvus for retrieval.
-5. Search and RAG chat retrieve embeddings from Milvus and combine them with metadata from SQLite to generate answers using an LLM.
+1. **Content Ingestion**: Users upload documents or submit URLs through web interface
+2. **Text Processing**: Content extracted and chunked for optimal embedding
+3. **Metadata Storage**: Document information stored in PostgreSQL with JSONB attributes
+4. **Vector Generation**: Text embedded using Ollama (mxbai-embed-large model)
+5. **Vector Storage**: Embeddings stored in Milvus with metadata references
+6. **Retrieval**: Search queries use both PostgreSQL metadata and Milvus similarity search
+7. **RAG Generation**: Retrieved context combined with LLM for intelligent responses
 
-## TODOs
+## Development Architecture
 
-- [ ] Split `app.py` into smaller modules for maintainability.
-- [ ] Add a dedicated configuration module (`config.py`).
-- [ ] Provide sequence diagrams describing data flow.
-- [ ] Document Milvus schema and indexing strategy.
-- [ ] Document SQLite schema for URL and email metadata.
+### Development Mode (`./setup.sh --dev`)
+```
+┌─────────────────┐    ┌─────────────────┐
+│   PostgreSQL    │    │     Milvus      │
+│   Container     │    │   Container     │
+│  (localhost:    │    │ (localhost:     │
+│     5432)       │    │    19530)       │
+└─────────────────┘    └─────────────────┘
+         │                       │
+         └───────┬───────────────┘
+                 │
+         ┌─────────────────┐
+         │  Flask App      │
+         │  (Local Dev)    │
+         │ (localhost:3000)│
+         └─────────────────┘
+```
+
+### Production Mode (`./setup.sh --all`)
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   PostgreSQL    │    │     Milvus      │    │     WebUI       │
+│   Container     │    │   Container     │    │   Container     │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+```
+
+## Management Scripts
+
+### Setup Script (`./setup.sh`)
+- **`--all`**: Automated installation without prompts
+- **`--dev`**: Development mode (infrastructure only, run app locally)  
+- **`--help`**: Display installation options and usage
+
+### Uninstall Script (`./uninstall.sh`)
+- **`--dry-run`**: Preview removal without making changes
+- **`--help`**: Display removal options
+- **Project-safe**: Only removes RAG-specific containers and files
+
+### Status Script (`./status.sh`)
+- Environment validation
+- Container health checks
+- Database connectivity testing
+- Directory structure verification
+
+## Security Considerations
+
+- **Environment Variables**: Sensitive data stored in `.env` file
+- **Database Isolation**: Project-specific database names and users
+- **Container Security**: Non-root user execution where possible
+- **Network Isolation**: Services communicate through Docker networks
+
+## Scalability Notes
+
+- **Horizontal Scaling**: Milvus supports clustering for large datasets
+- **Database Optimization**: PostgreSQL JSONB indexes for metadata queries
+- **Embedding Models**: Ollama provides local inference without API dependencies
+- **Caching**: Future implementation of Redis for session and query caching
+
+## Future Enhancements
+
+- [ ] Split `app.py` into smaller modules for maintainability
+- [ ] Add dedicated configuration module (`config.py`)
+- [ ] Implement Redis caching layer
+- [ ] Add Milvus clustering support
+- [ ] Provide sequence diagrams describing data flow
+- [ ] Document Milvus schema and indexing strategy
+- [ ] Add monitoring and logging infrastructure

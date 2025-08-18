@@ -1,6 +1,6 @@
 # RAG Document Handler
 
-A comprehensive document management system for storing and retrieving document embeddings in a Milvus vector database and related metadata in a local SQLite database (`knowledgebase.db`) for use with RAG (Retrieval-Augmented Generation) applications.
+A comprehensive document management system for storing and retrieving document embeddings in a Milvus vector database and metadata in PostgreSQL for use with RAG (Retrieval-Augmented Generation) applications.
 
 For extended guides and architecture notes, see the [documentation directory](docs/README.md).
 
@@ -8,9 +8,11 @@ For extended guides and architecture notes, see the [documentation directory](do
 
 - **Document Upload & Management**: Upload documents to a staging area with support for multiple file formats: PDF, DOCX, DOC, TXT, and Markdown files
 - **Smart URL Management**: Store and organize important URLs with automatic title extraction from web pages
-- **Vector Embeddings**: Automatic text extraction and embedding generation using SentenceTransformers all-MiniLM-L6-v2 model
-- **Milvus Integration**: Store and retrieve document embeddings in Milvus vector database
-- **SQLite Integration**: Persist URL and email metadata in a local SQLite database (`knowledgebase.db`)
+- **Vector Embeddings**: Automatic text extraction and embedding generation using Ollama embeddings
+- **Dual Database Architecture**: 
+  - **Milvus**: Vector embeddings and similarity search
+  - **PostgreSQL**: Document metadata, analytics, and full-text search
+- **Email Integration**: Smart batch processing with duplicate detection and complete mailbox coverage
 - **Conversational AI**: RAG-powered chat interface using Ollama for intelligent document querying
 - **Semantic Search**: Find relevant documents using natural language queries
 - **Web Interface**: Clean, responsive Flask web application with Bootstrap UI
@@ -20,78 +22,179 @@ For extended guides and architecture notes, see the [documentation directory](do
 ## 📋 How It Works
 
 1. **Content Processing**: Documents (PDFs, text files, etc.) are uploaded and processed for text extraction
-2. **URL & Email Processing**: URLs are automatically scraped to extract page titles and stored in `knowledgebase.db`; email ingestion will likewise persist messages and headers in the same database
+2. **Metadata Storage**: Document metadata, URLs, and email data stored in PostgreSQL with JSONB for flexible attributes
 3. **Vector Embedding**: The embedding model transforms text content into numerical vectors representing semantic meaning
 4. **Vector Storage**: Generated embeddings are stored in a Milvus vector database optimized for high-dimensional vectors
-5. **Semantic Retrieval**: Applications can query the database for semantic search and content recommendation
+5. **Semantic Retrieval**: Applications can query both databases for comprehensive search and content recommendation
 6. **Conversational AI**: RAG system combines retrieved documents with LLM to provide intelligent responses
 
 ## 🛠️ Technology Stack
 
-- **Backend**: Python 3.8+ with Flask web framework (Single interface)
+- **Backend**: Python 3.8+ with Flask web framework
 - **Vector Database**: Milvus for efficient vector storage and retrieval
-- **Relational Storage**: SQLite database (`knowledgebase.db`) for URL management and future email metadata
+- **Metadata Database**: PostgreSQL with JSONB for flexible document metadata
 - **Web Scraping**: BeautifulSoup4 and Requests for automatic URL title extraction
-- **AI Integration**: Ollama for conversational RAG functionality
-- **ML Framework**: SentenceTransformers for document embeddings
-- **Embedding Model**: SentenceTransformers all-MiniLM-L6-v2 (configurable)
+- **AI Integration**: Ollama for embeddings and conversational RAG functionality
+- **ML Framework**: Ollama embeddings (mxbai-embed-large)
 - **Frontend**: Bootstrap 5 with responsive design
 - **File Processing**: pypdf, python-docx for document parsing
 - **Background Processing**: Threading for UI responsiveness
+- **Containerization**: Docker Compose for easy deployment
 
-## 📦 Installation
+## 📦 Installation & Management
 
 ### Prerequisites
 
 - Python 3.8 or higher
-- Docker (for running Milvus)
+- Docker and Docker Compose
 - Git
 
-### Quick Setup
+### 🚀 Complete Installation
 
-1. **Clone the repository**:
-   ```bash
-   git clone <repository-url>
-   cd "RAG Document Handler"
-   ```
+**Interactive Setup (Recommended):**
+```bash
+git clone <repository-url>
+cd rag-document-handler
+./setup.sh
+```
 
-2. **Run the setup script**:
-   ```bash
-   ./setup.sh
-   ```
+**Automated Setup Options:**
+```bash
+./setup.sh --all        # Install everything without prompts
+./setup.sh --dev        # Development mode (skip webui container)
+./setup.sh --help       # Show installation help
+```
 
-3. **Start the application**:
-   ```bash
-   ./start.sh
-   ```
+The setup script will:
+- Create Python virtual environment
+- Install all dependencies (including PostgreSQL drivers)
+- Create directory structure
+- Start Docker containers (Milvus + PostgreSQL)
+- Test database connections
+- Configure environment files
 
-   This will:
-   - Start Milvus database (if not running)
-   - Activate the virtual environment
-   - Launch the web application
+**Development Mode:**
+```bash
+./setup.sh --dev        # Start only infrastructure containers
+source .venv/bin/activate
+python app.py           # Run application locally for development
+```
 
-### Manual Installation
+**Start the Application:**
+```bash
+source .venv/bin/activate
+python app.py
+```
+Visit: http://localhost:3000
 
-1. **Create virtual environment**:
-   ```bash
-   python3 -m venv .venv
-   source .venv/bin/activate
-   ```
+### 🗑️ Complete Uninstallation
 
-2. **Install dependencies**:
-   ```bash
-   pip install flask pymilvus sentence-transformers werkzeug python-dotenv pypdf python-docx chardet requests beautifulsoup4 google-api-python-client google-auth
-   ```
+**Safe Removal:**
+```bash
+./uninstall.sh          # Interactive removal
+./uninstall.sh --dry-run # Preview what would be removed
+./uninstall.sh --help   # Show uninstall help
+```
 
-3. **Start Milvus database**:
-   ```bash
-   docker run -d --name milvus -p 19530:19530 milvusdb/milvus:latest
-   ```
+The uninstall script will:
+- Stop and remove RAG Document Handler containers and volumes
+- Remove Python virtual environment (.venv)
+- Clean up all database files and logs
+- Remove uploaded/staging files
+- Clean temporary and cache files
+- Preserve other Docker containers and system files
 
-4. **Run the application**:
-   ```bash
-   python app.py
-   ```
+**Reinstall:**
+```bash
+./setup.sh  # Start fresh installation
+```
+
+### 🐳 Docker Services
+
+**Individual Service Management:**
+```bash
+# Start specific services
+docker compose up postgres -d  # PostgreSQL metadata database
+docker compose up milvus -d    # Milvus vector database
+
+# Start all services
+docker compose up -d
+
+# Stop services
+docker compose down
+
+# Remove with volumes
+docker compose down --volumes
+```
+
+### 🧪 Testing & Validation
+
+**Test Database Connections:**
+```bash
+python test_postgres.py  # Test PostgreSQL connectivity
+```
+
+**Check Service Status:**
+```bash
+docker compose ps         # View running containers
+docker compose logs       # View container logs
+```
+
+## 📚 Quick Reference
+
+### 🔄 Project Management Commands
+
+| Action | Command | Description |
+|--------|---------|-------------|
+| **Install** | `./setup.sh` | Complete interactive setup |
+| **Install All** | `./setup.sh --all` | Automated setup without prompts |
+| **Dev Setup** | `./setup.sh --dev` | Development mode (local app) |
+| **Start** | `python app.py` | Start the web application |
+| **Test** | `python test_postgres.py` | Test database connectivity |
+| **Preview** | `./uninstall.sh --dry-run` | Preview removal without changes |
+| **Uninstall** | `./uninstall.sh` | Safe project removal |
+| **Services** | `docker compose up -d` | Start all database services |
+| **Stop** | `docker compose down` | Stop all services |
+| **Clean** | `docker compose down --volumes` | Stop and remove data |
+
+### 🗃️ Database Architecture
+
+```
+┌─────────────────┬─────────────────┐
+│   PostgreSQL    │     Milvus      │
+│   (Metadata)    │   (Vectors)     │
+├─────────────────┼─────────────────┤
+│ • Documents     │ • Embeddings    │
+│ • URLs          │ • Similarity    │ 
+│ • Emails        │   Search        │
+│ • Accounts      │ • Collections   │
+│ • Analytics     │                 │
+└─────────────────┴─────────────────┘
+```
+
+### 🌐 Default Endpoints
+
+- **Web Application**: http://localhost:3000
+- **PostgreSQL**: localhost:5432
+- **Milvus**: localhost:19530
+
+### 📁 Directory Structure
+
+```
+rag-document-handler/
+├── app.py                 # Main application
+├── setup.sh              # Installation script  
+├── uninstall.sh          # Cleanup script
+├── test_postgres.py      # Database test
+├── docker-compose.yml    # Container configuration
+├── databases/            # Database files
+│   ├── postgres/         # PostgreSQL data
+│   └── milvus/          # Milvus data
+├── logs/                 # Application logs
+├── staging/              # File upload staging
+├── uploaded/             # Processed files
+└── ingestion/            # Database modules
+```
 
 ## 🔧 Configuration
 
