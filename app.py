@@ -54,6 +54,8 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from dotenv import load_dotenv
 from ingestion.email import EmailOrchestrator, EmailAccountManager
 from ingestion.email.processor import EmailProcessor
+from ingestion.database_manager import RAGDatabaseManager, DocumentMetadata
+from ingestion.postgres_manager import PostgreSQLConfig
 
 # Load environment variables
 load_dotenv()
@@ -64,7 +66,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler('rag_document_handler.log')
+        logging.FileHandler('logs/rag_document_handler.log')
     ]
 )
 logger = logging.getLogger(__name__)
@@ -115,6 +117,13 @@ class Config:
     CHAT_MODEL: str = os.getenv('CHAT_MODEL', 'mistral:latest')
     CHAT_BASE_URL: str = os.getenv('CHAT_BASE_URL', f"http://{os.getenv('OLLAMA_CHAT_HOST','localhost')}:{os.getenv('OLLAMA_PORT','11434')}")
     CHAT_TEMPERATURE: float = float(os.getenv('CHAT_TEMPERATURE', '0.1'))
+    
+    # PostgreSQL Configuration
+    POSTGRES_HOST: str = os.getenv("POSTGRES_HOST", "localhost")
+    POSTGRES_PORT: int = int(os.getenv("POSTGRES_PORT", "5432"))
+    POSTGRES_DB: str = os.getenv("POSTGRES_DB", "rag_metadata")
+    POSTGRES_USER: str = os.getenv("POSTGRES_USER", "rag_user")
+    POSTGRES_PASSWORD: str = os.getenv("POSTGRES_PASSWORD", "secure_password")
     
     # Unstructured chunking
     UNSTRUCTURED_CHUNKING_STRATEGY: str = os.getenv('UNSTRUCTURED_CHUNKING_STRATEGY', 'basic')
@@ -916,14 +925,33 @@ class DocumentProcessor:
 class MilvusManager:
     """
     Manages Milvus database operations using LangChain's Milvus VectorStore.
+    Now integrated with PostgreSQL for metadata management.
     """
     
     def __init__(self, config: Config):
-        """Initialize Milvus manager."""
+        """Initialize Milvus manager with PostgreSQL integration."""
         self.config = config
         self.collection_name = config.COLLECTION_NAME
         self.connection_args = {"host": config.MILVUS_HOST, "port": config.MILVUS_PORT}
-        # Establish connection (idempotent)
+        
+        # Initialize PostgreSQL configuration
+        self.postgres_config = PostgreSQLConfig(
+            host=config.POSTGRES_HOST,
+            port=config.POSTGRES_PORT,
+            database=config.POSTGRES_DB,
+            user=config.POSTGRES_USER,
+            password=config.POSTGRES_PASSWORD
+        )
+        
+        # Initialize database manager
+        try:
+            self.db_manager = RAGDatabaseManager(postgres_config=self.postgres_config)
+            logger.info("PostgreSQL integration initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize PostgreSQL: {e}")
+            self.db_manager = None
+        
+        # Establish Milvus connection (idempotent)
         try:
             connections.connect(alias="default", **self.connection_args)
         except Exception:
