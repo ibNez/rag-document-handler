@@ -52,6 +52,9 @@ def _normalize(record: Dict[str, Any]) -> Dict[str, Any]:
     are stripped by removing any content following the conventional ``"--"``
     separator.
     """
+    # Remove the processed field if it exists (no longer used)
+    record.pop("processed", None)
+    
     body_text = record.get("body_text")
     body_html = record.get("body_html")
     if not body_text and body_html:

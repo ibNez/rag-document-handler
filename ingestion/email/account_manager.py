@@ -43,45 +43,6 @@ class EmailAccountManager:
                 )
                 """
             )
-            # Add missing columns for upgrades
-            cur.execute("PRAGMA table_info(email_accounts)")
-            existing = {row[1] for row in cur.fetchall()}
-            if "email_address" not in existing:
-                if "username" in existing:
-                    cur.execute(
-                        "ALTER TABLE email_accounts RENAME COLUMN username TO email_address"
-                    )
-                    logger.info(
-                        "Renamed column username to email_address in email_accounts table"
-                    )
-                else:
-                    cur.execute(
-                        "ALTER TABLE email_accounts ADD COLUMN email_address TEXT"
-                    )
-                    logger.info(
-                        "Added missing column email_address to email_accounts table"
-                    )
-            if "refresh_interval_minutes" not in existing:
-                cur.execute(
-                    "ALTER TABLE email_accounts ADD COLUMN refresh_interval_minutes INTEGER"
-                )
-                logger.info(
-                    "Added missing column refresh_interval_minutes to email_accounts table"
-                )
-            if "last_synced" not in existing:
-                cur.execute(
-                    "ALTER TABLE email_accounts ADD COLUMN last_synced TIMESTAMP"
-                )
-                logger.info(
-                    "Added missing column last_synced to email_accounts table"
-                )
-            if "last_update_status" not in existing:
-                cur.execute(
-                    "ALTER TABLE email_accounts ADD COLUMN last_update_status TEXT"
-                )
-                logger.info(
-                    "Added missing column last_update_status to email_accounts table"
-                )
             self.conn.commit()
         except Exception as exc:  # pragma: no cover - defensive
             logger.error("Failed to ensure email_accounts table: %s", exc)

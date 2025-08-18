@@ -167,7 +167,6 @@ class IMAPConnector(EmailConnector):
                             "language": None,
                             "has_attachments": 0,
                             "attachment_manifest": [],
-                            "processed": 0,
                             "ingested_at": None,
                             "updated_at": None,
                             "content_hash": None,
@@ -319,7 +318,6 @@ class IMAPConnector(EmailConnector):
             "language": None,
             "has_attachments": has_attachments,
             "attachment_manifest": attachment_manifest,
-            "processed": 0,
             "ingested_at": None,
             "updated_at": None,
             "content_hash": None,
@@ -366,6 +364,241 @@ class IMAPConnector(EmailConnector):
         if in_reply_to:
             return in_reply_to
         return message_id
+
+    # ------------------------------------------------------------------
+    def fetch_smart_batch(
+        self,
+        email_manager,
+        since_date: Optional[datetime] = None,
+        start_offset: int = 0
+    ) -> tuple[List[Dict[str, Any]], bool]:
+        """Fetch emails with intelligent duplicate detection and replacement.
+        
+        Implements the exact workflow specified:
+        1. Fetch batch of emails equal to server's batch limit
+        2. Check header_hash against database for each email
+        3. Remove duplicates, process new emails
+        4. Fetch additional emails equal to duplicates skipped to maintain batch size
+        5. Repeat until batch size reached or end of mailbox
+        
+        Returns a tuple of (emails, has_more) where:
+        - emails: List of unique email records not already in database
+        - has_more: Boolean indicating if more emails are available
+        
+        Parameters
+        ----------
+        email_manager:
+            EmailManager instance for database operations
+        since_date:
+            Optional datetime to filter emails from
+        start_offset:
+            Number of emails to skip from the beginning
+        """
+        logger.info(
+            "Fetching smart batch from IMAP server %s:%s mailbox=%s email=%s offset=%d",
+            self.host,
+            self.port,
+            self.mailbox,
+            self.email_address,
+            start_offset,
+        )
+        
+        conn = (
+            imaplib.IMAP4_SSL(self.host, self.port)
+            if self.use_ssl
+            else imaplib.IMAP4(self.host, self.port)
+        )
+        
+        try:
+            # Setup connection (same as fetch_emails)
+            if not self.use_ssl:
+                try:
+                    status, _ = conn.starttls(ssl_context=ssl.create_default_context())
+                    if status != "OK":
+                        raise imaplib.IMAP4.error("STARTTLS failed")
+                except Exception as exc:
+                    raise RuntimeError(
+                        "IMAP server requires a secure connection; STARTTLS negotiation failed"
+                    ) from exc
+
+            status, _ = conn.login(self.email_address, self.password)
+            if status != "OK":
+                logger.warning(
+                    "IMAP login failed for %s: status=%s", self.email_address, status
+                )
+                return [], False
+
+            status, _ = conn.select(self.mailbox)
+            if status != "OK":
+                logger.warning(
+                    "IMAP select failed for mailbox %s: status=%s", self.mailbox, status
+                )
+                return [], False
+
+            # Search for emails
+            criteria: List[str] = []
+            if since_date is not None:
+                criteria.append(f'SINCE "{since_date.strftime("%d-%b-%Y")}"')
+            search_query = "ALL" if not criteria else " ".join(criteria)
+            status, messages = conn.search(None, search_query)
+            if status != "OK":
+                logger.warning("IMAP search failed: status=%s", status)
+                return [], False
+                
+            email_ids = messages[0].split()
+            total_emails = len(email_ids)
+            target_batch_size = self.batch_limit or 50
+            
+            logger.info(
+                "Found %d total emails, target batch size: %d, start offset: %d",
+                total_emails,
+                target_batch_size,
+                start_offset
+            )
+            
+            # Check if we've reached the end
+            if start_offset >= total_emails:
+                logger.info("Reached end of mailbox at offset %d", start_offset)
+                return [], False
+            
+            unique_emails: List[Dict[str, Any]] = []
+            current_offset = start_offset
+            
+            # Keep fetching until we have enough unique emails or reach end of mailbox
+            while len(unique_emails) < target_batch_size and current_offset < total_emails:
+                # Calculate how many more emails we need
+                emails_needed = target_batch_size - len(unique_emails)
+                
+                # Fetch next batch of email IDs
+                end_offset = min(current_offset + emails_needed, total_emails)
+                batch_ids = email_ids[current_offset:end_offset]
+                
+                logger.debug(
+                    "Fetching emails %d to %d (%d emails) to fill remaining %d slots",
+                    current_offset,
+                    end_offset - 1,
+                    len(batch_ids),
+                    emails_needed
+                )
+                
+                # Process this batch
+                batch_unique_count = 0
+                batch_duplicate_count = 0
+                
+                for eid in batch_ids:
+                    status, msg_data = conn.fetch(eid, "(RFC822)")
+                    if status != "OK" or not msg_data or not msg_data[0]:
+                        continue
+                        
+                    try:
+                        msg_data_content = msg_data[0][1]
+                        if isinstance(msg_data_content, bytes):
+                            msg = message_from_bytes(msg_data_content)
+                            rec = self._parse_email(msg)
+                            rec["server_type"] = "imap"
+                            
+                            # Generate header hash for duplicate detection
+                            header_hash = self._generate_header_hash(rec)
+                            rec["header_hash"] = header_hash
+                            
+                            # Check if email already exists in database
+                            if not self._email_exists_in_database(email_manager, header_hash):
+                                unique_emails.append(rec)
+                                batch_unique_count += 1
+                                logger.debug("Added unique email %s", rec.get("message_id", "unknown"))
+                            else:
+                                batch_duplicate_count += 1
+                                logger.debug("Skipped duplicate email %s", rec.get("message_id", "unknown"))
+                        else:
+                            logger.warning("Invalid message data type for email %s", eid)
+                            
+                    except Exception as exc:
+                        decoded_eid = eid.decode() if isinstance(eid, bytes) else str(eid)
+                        logger.warning("Failed to parse message %s: %s", decoded_eid, exc)
+                
+                # Move offset forward by the number of emails we processed
+                current_offset = end_offset
+                
+                logger.debug(
+                    "Batch complete: %d unique, %d duplicates, total unique so far: %d",
+                    batch_unique_count,
+                    batch_duplicate_count,
+                    len(unique_emails)
+                )
+                
+                # If we found no unique emails in this batch and we're not at the end,
+                # we might be in a section with all duplicates - continue to next batch
+                if batch_unique_count == 0 and current_offset < total_emails:
+                    logger.debug("No unique emails in batch, continuing to next batch")
+                    continue
+                    
+                # If we got unique emails but still need more, continue
+                if len(unique_emails) < target_batch_size and current_offset < total_emails:
+                    logger.debug("Need %d more unique emails, continuing", target_batch_size - len(unique_emails))
+                    continue
+                    
+                # We either have enough emails or reached the end
+                break
+            
+            # Determine if there are more emails available
+            has_more = current_offset < total_emails
+            
+            logger.info(
+                "Smart batch complete: %d unique emails collected, processed up to offset %d/%d, has_more: %s",
+                len(unique_emails),
+                current_offset,
+                total_emails,
+                has_more
+            )
+            
+            return unique_emails, has_more
+            
+        finally:
+            try:
+                conn.logout()
+            except Exception as exc:
+                logger.warning("Error during IMAP logout: %s", exc)
+
+    # ------------------------------------------------------------------
+    def _email_exists_in_database(self, email_manager, header_hash: str) -> bool:
+        """Check if email with given header_hash already exists in database.
+        
+        Parameters
+        ----------
+        email_manager:
+            EmailManager instance for database operations
+        header_hash:
+            SHA256 hash of email headers for duplicate detection
+            
+        Returns
+        -------
+        bool:
+            True if email exists in database, False otherwise
+        """
+        try:
+            existing_email = email_manager.get_email_by_header_hash(header_hash)
+            return existing_email is not None
+        except Exception as exc:
+            logger.warning("Error checking email existence for hash %s: %s", header_hash[:8], exc)
+            return False
+
+    # ------------------------------------------------------------------
+    def _generate_header_hash(self, record: Dict[str, Any]) -> str:
+        """Generate consistent SHA256 hash from email headers for duplicate detection.
+        
+        Parameters
+        ----------
+        record:
+            Email record dictionary
+            
+        Returns
+        -------
+        str:
+            SHA256 hash of normalized email headers
+        """
+        # Import compute_header_hash from email_manager to maintain consistency
+        from .email_manager import compute_header_hash
+        return compute_header_hash(record)
 
 
 class ExchangeConnector(EmailConnector):
