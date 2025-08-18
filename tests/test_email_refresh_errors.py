@@ -114,7 +114,7 @@ def test_update_account_failure_logs(monkeypatch, caplog):
                     "server_type": "imap",
                     "server": "srv",
                     "port": 993,
-                    "username": "u",
+                    "email_address": "u",
                     "password": "p",
                 }
             ]
@@ -147,7 +147,7 @@ def test_cleanup_failure_logs_warning(monkeypatch, caplog):
                     "server_type": "imap",
                     "server": "srv",
                     "port": 993,
-                    "username": "u",
+                    "email_address": "u",
                     "password": "p",
                 }
             ]

@@ -75,7 +75,7 @@ class EmailOrchestrator:
         self, account: Dict[str, Any], processor: Optional[EmailProcessor] = None
     ) -> None:
         """Fetch and process emails for a single account and update its last_synced timestamp."""
-        name = account.get("account_name") or account.get("username")
+        name = account.get("account_name") or account.get("email_address")
         server_type = (account.get("server_type") or "").lower()
         batch = account.get("batch_limit")
         batch_limit = None if batch in (None, "all") else int(batch)
@@ -84,7 +84,7 @@ class EmailOrchestrator:
             connector = IMAPConnector(
                 host=account["server"],
                 port=int(account["port"]),
-                username=account["username"],
+                email_address=account["email_address"],
                 password=account["password"],
                 mailbox=account.get("mailbox") or "INBOX",
                 batch_limit=batch_limit,
@@ -113,13 +113,13 @@ class EmailOrchestrator:
                 return
             connector = GmailConnector(
                 credentials=creds,
-                user_id=account.get("username") or "me",
+                user_id=account.get("email_address") or "me",
                 batch_limit=batch_limit,
             )
         elif server_type == "exchange":
             connector = ExchangeConnector(
                 server=account["server"],
-                username=account["username"],
+                email_address=account["email_address"],
                 password=account["password"],
                 batch_limit=batch_limit,
             )

@@ -486,7 +486,7 @@
                                             <th>Display Name</th>
                                             <th>Server Type</th>
                                             <th>Server</th>
-                                            <th>Username</th>
+                                            <th>Email Address</th>
                                             <th>Schedule / Time</th>
                                             <th>Status</th>
                                             <th class="text-end">Actions</th>
@@ -498,7 +498,7 @@
                                             <td>{{ acct.account_name }}</td>
                                             <td>{{ {'imap': 'IMAP', 'gmail': 'Gmail', 'exchange': 'Exchange'}.get(acct.server_type, acct.server_type) }}</td>
                                             <td>{{ acct.server }}:{{ acct.port }}</td>
-                                            <td>{{ acct.username }}</td>
+                                            <td>{{ acct.email_address }}</td>
                                             <td class="small">
                                                 <div>Every {{ acct.refresh_interval_minutes or config.EMAIL_DEFAULT_REFRESH_MINUTES }} min</div>
                                                 <div class="text-muted">Last: {{ (acct.last_synced or '')[:16] if acct.last_synced else '—' }}</div>
@@ -532,7 +532,7 @@
                                                             data-id="{{ acct.id }}"
                                                             data-name="{{ acct.account_name }}"
                                                             data-server="{{ acct.server }}"
-                                                            data-username="{{ acct.username }}"
+                                                            data-email="{{ acct.email_address }}"
                                                             data-port="{{ acct.port }}"
                                                             data-mailbox="{{ acct.mailbox or '' }}"
                                                             data-batch="{{ acct.batch_limit or '' }}"
@@ -599,8 +599,8 @@
                                 <input type="text" class="form-control" name="server" required>
                             </div>
                             <div class="mb-3">
-                                <label class="form-label">Username</label>
-                                <input type="text" class="form-control" name="username" required>
+                                <label class="form-label">Email Address</label>
+                                <input type="text" class="form-control" name="email_address" required>
                             </div>
                             <div class="mb-3">
                                 <label class="form-label">Password</label>
@@ -668,8 +668,8 @@
                                 <input type="text" class="form-control" name="server" id="editServer" required>
                             </div>
                             <div class="mb-3">
-                                <label class="form-label">Username</label>
-                                <input type="text" class="form-control" name="username" id="editUsername" required>
+                                <label class="form-label">Email Address</label>
+                                <input type="text" class="form-control" name="email_address" id="editEmailAddress" required>
                             </div>
                             <div class="mb-3">
                                 <label class="form-label">Password (leave blank to keep current)</label>
@@ -1102,7 +1102,7 @@
                     document.getElementById('editAccountId').value = btn.dataset.id || '';
                     document.getElementById('editAccountName').value = btn.dataset.name || '';
                     document.getElementById('editServer').value = btn.dataset.server || '';
-                    document.getElementById('editUsername').value = btn.dataset.username || '';
+                    document.getElementById('editEmailAddress').value = btn.dataset.email || '';
                     document.getElementById('editPassword').value = '';
                     document.getElementById('editPort').value = btn.dataset.port || '';
                     document.getElementById('editMailbox').value = btn.dataset.mailbox || '';

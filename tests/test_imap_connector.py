@@ -71,7 +71,7 @@ def test_imap_connector_uses_starttls(patch_imap: DummyIMAP4) -> None:
     """Connector should upgrade plain connections using ``STARTTLS``."""
     connector = IMAPConnector(
         host="host",
-        username="user",
+        email_address="user",
         password="pw",
         use_ssl=False,
     )
@@ -90,7 +90,7 @@ def test_imap_connector_starttls_failure(monkeypatch: pytest.MonkeyPatch) -> Non
     )
     connector = IMAPConnector(
         host="host",
-        username="user",
+        email_address="user",
         password="pw",
         use_ssl=False,
     )

@@ -5,7 +5,7 @@ This guide covers how to ingest emails from an Exchange server into RAG Document
 ## Prerequisites
 
 1. **Exchange credentials**
-   - Obtain the server URL, username, and password for the Exchange account.
+   - Obtain the server URL, email address, and password for the Exchange account.
    - The connector uses the [exchangelib](https://github.com/ecederstrand/exchangelib) library and connects via Exchange Web Services (EWS).
 2. **Configure RAG Document Handler**
    - Set `EMAIL_ENABLED=true` in your environment to activate email ingestion.
@@ -13,7 +13,7 @@ This guide covers how to ingest emails from an Exchange server into RAG Document
    - Add an Exchange account to the `email_accounts` table (via UI or SQL) with the following fields:
      - `server_type`: `exchange`
      - `server`: the EWS server hostname
-     - `username`: your account's primary email address
+     - `email_address`: your account's primary email address
      - `password`: the account password
      - Optional: `batch_limit` to cap messages fetched per sync
 
@@ -28,7 +28,7 @@ from ingestion.email.connector import ExchangeConnector
 creds = Credentials(username="user@example.com", password="password")
 connector = ExchangeConnector(
     server="exchange.example.com",
-    username="user@example.com",
+    email_address="user@example.com",
     password="password",
 )
 
