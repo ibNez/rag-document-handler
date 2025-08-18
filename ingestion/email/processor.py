@@ -56,7 +56,8 @@ class EmailProcessor:
         self.milvus = milvus
         self.sqlite_conn = sqlite_conn
         self.embedding_model = embedding_model or OllamaEmbeddings(
-            model=os.getenv("EMBEDDING_MODEL", "mxbai-embed-large")
+            model=os.getenv("EMBEDDING_MODEL", "mxbai-embed-large"),
+            base_url=f"http://{os.getenv('OLLAMA_EMBEDDING_HOST', 'localhost')}:{os.getenv('OLLAMA_EMBEDDING_PORT', '11434')}"
         )
         self.splitter = RecursiveCharacterTextSplitter(
             chunk_size=chunk_size, chunk_overlap=chunk_overlap
