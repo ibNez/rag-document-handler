@@ -70,7 +70,7 @@ def test_exchange_fetch_emails_returns_canonical_records(monkeypatch: pytest.Mon
 
     connector = ExchangeConnector(
         server="ex.example.com",
-        username="user@example.com",
+        email_address="user@example.com",
         password="pass",
         batch_limit=10,
     )

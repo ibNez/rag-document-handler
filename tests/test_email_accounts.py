@@ -73,7 +73,7 @@ def test_email_account_manager_crud(manager: EmailAccountManager) -> None:
         "server_type": "imap",
         "server": "imap.example.com",
         "port": 993,
-        "username": "user",
+        "email_address": "user",
         "password": "pass",
         "mailbox": "INBOX",
         "batch_limit": 10,
@@ -102,9 +102,9 @@ def test_email_account_manager_crud(manager: EmailAccountManager) -> None:
     stored = cur.fetchone()[0]
     assert stored != "pass"
 
-    manager.update_account(account_id, {"username": "new"})
+    manager.update_account(account_id, {"email_address": "new"})
     accounts = manager.list_accounts(include_password=True)
-    assert accounts[0]["username"] == "new"
+    assert accounts[0]["email_address"] == "new"
 
     manager.delete_account(account_id)
     assert manager.list_accounts() == []
@@ -162,7 +162,7 @@ def test_email_account_crud(client):
             "account_name": "Work",
             "server_type": "imap",
             "server": "imap.example.com",
-            "username": "user",
+            "email_address": "user",
             "password": "pass",
             "port": "993",
             "mailbox": "INBOX",
@@ -184,12 +184,12 @@ def test_email_account_crud(client):
     assert "last_update_status" in accounts[0]
     assert accounts[0]["last_update_status"] is None
 
-    response = client.post(f"/email_accounts/{account_id}", data={"username": "new"})
+    response = client.post(f"/email_accounts/{account_id}", data={"email_address": "new"})
     assert response.status_code == 302
 
     list_resp = client.get("/email_accounts")
     accounts = list_resp.get_json()
-    assert accounts[0]["username"] == "new"
+    assert accounts[0]["email_address"] == "new"
 
     response = client.post(f"/email_accounts/{account_id}/delete")
     assert response.status_code == 302
@@ -204,7 +204,7 @@ def test_email_status_endpoint(client):
             "account_name": "Work",
             "server_type": "imap",
             "server": "imap.example.com",
-            "username": "user",
+            "email_address": "user",
             "password": "pass",
             "port": "993",
         },

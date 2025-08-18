@@ -20,7 +20,7 @@ This guide covers how to ingest emails from Gmail into RAG Document Handler.
    - Configure `EMAIL_SYNC_INTERVAL_SECONDS` to control how often accounts are synchronized (default `300`).
    - Add a Gmail account to the `email_accounts` table (via UI or SQL) with the following fields:
      - `server_type`: `gmail`
-     - `username`: your Gmail address
+     - `email_address`: your Gmail address
      - `token_file`: path to the `token.json` generated above
      - Optional: `batch_limit` to cap messages fetched per sync
 

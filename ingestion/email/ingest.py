@@ -139,7 +139,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run email ingestion pipeline")
     parser.add_argument("--imap-host", required=True)
     parser.add_argument("--imap-port", type=int, default=993)
-    parser.add_argument("--imap-username", required=True)
+    parser.add_argument("--imap-email", required=True)
     parser.add_argument("--imap-password", required=True)
     parser.add_argument("--mailbox", default="INBOX")
     parser.add_argument("--since-days", type=int, default=1)
@@ -149,7 +149,7 @@ def main() -> None:
     connector = IMAPConnector(
         host=args.imap_host,
         port=args.imap_port,
-        username=args.imap_username,
+        email_address=args.imap_email,
         password=args.imap_password,
         mailbox=args.mailbox,
     )

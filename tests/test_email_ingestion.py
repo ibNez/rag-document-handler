@@ -350,10 +350,10 @@ def test_email_orchestrator_processes_multiple_accounts(monkeypatch: pytest.Monk
 
     class DummyIMAPConnector:
         def __init__(self, **kwargs: Any) -> None:
-            self.username = kwargs.get("username")
+            self.email_address = kwargs.get("email_address")
 
         def fetch_emails(self):
-            processed.append(self.username)
+            processed.append(self.email_address)
             return []
 
     class DummyGmailConnector:
@@ -391,13 +391,13 @@ def test_email_orchestrator_processes_multiple_accounts(monkeypatch: pytest.Monk
                     "server_type": "imap",
                     "server": "s1",
                     "port": 1,
-                    "username": "u1",
+                    "email_address": "u1",
                     "password": "p",
                     "use_ssl": 1,
                 },
                 {
                     "server_type": "gmail",
-                    "username": "u2",
+                    "email_address": "u2",
                     "token_file": "/tmp/token.json",
                 },
             ]
@@ -438,7 +438,7 @@ def test_email_orchestrator_processes_and_persists(
                     "server_type": "imap",
                     "server": "s1",
                     "port": 993,
-                    "username": "u1",
+                    "email_address": "u1",
                     "password": "p",
                     "use_ssl": 1,
                 }
@@ -586,7 +586,7 @@ def test_email_orchestrator_uses_gmail_connector(monkeypatch: pytest.MonkeyPatch
             return [
                 {
                     "server_type": "gmail",
-                    "username": "user",
+                    "email_address": "user",
                     "token_file": "/tmp/token.json",
                 }
             ]

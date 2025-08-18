@@ -1899,7 +1899,7 @@ class RAGKnowledgebaseManager:
             account_name = request.form.get('account_name', '').strip()
             server_type = request.form.get('server_type', 'imap').strip().lower() or 'imap'
             server = request.form.get('server', '').strip()
-            username = request.form.get('username', '').strip()
+            email_address = request.form.get('email_address', '').strip()
             password = request.form.get('password', '').strip()
             port_str = request.form.get('port', '').strip()
             mailbox = request.form.get('mailbox', '').strip() or None
@@ -1908,14 +1908,14 @@ class RAGKnowledgebaseManager:
             use_ssl = request.form.get('use_ssl') in ('1', 'on')
 
             logger.info(
-                "Request to add email account '%s' (%s) on %s by user %s",
+                "Request to add email account '%s' (%s) on %s for %s",
                 account_name,
                 server_type,
                 server,
-                username,
+                email_address,
             )
 
-            if not all([account_name, server, username, password, port_str]):
+            if not all([account_name, server, email_address, password, port_str]):
                 flash('Missing required fields', 'error')
                 return redirect(url_for('index'))
 
@@ -1932,7 +1932,7 @@ class RAGKnowledgebaseManager:
                 'server_type': server_type,
                 'server': server,
                 'port': port,
-                'username': username,
+                'email_address': email_address,
                 'password': password,
                 'mailbox': mailbox,
                 'batch_limit': batch_limit,
@@ -1959,7 +1959,7 @@ class RAGKnowledgebaseManager:
             """Update an existing email account configuration."""
             account_name = request.form.get('account_name', '').strip()
             server = request.form.get('server', '').strip()
-            username = request.form.get('username', '').strip()
+            email_address = request.form.get('email_address', '').strip()
             password = request.form.get('password', '').strip()
             port_str = request.form.get('port', '').strip()
             mailbox = request.form.get('mailbox', '').strip() or None
@@ -1975,8 +1975,8 @@ class RAGKnowledgebaseManager:
                 updates['server'] = server
             if server_type:
                 updates['server_type'] = server_type.lower()
-            if username:
-                updates['username'] = username
+            if email_address:
+                updates['email_address'] = email_address
             if password:
                 updates['password'] = password
             if mailbox is not None:
@@ -2408,7 +2408,7 @@ class RAGKnowledgebaseManager:
                     if acct.get("id") == account_id:
                         st = ProcessingStatus(
                             filename=acct.get("account_name")
-                            or acct.get("username")
+                            or acct.get("email_address")
                         )
                         self.email_processing_status[account_id] = st
                         break
@@ -2629,7 +2629,7 @@ class RAGKnowledgebaseManager:
                     acct_id = account.get('id')
                     if acct_id is None or acct_id in self.email_processing_status:
                         continue
-                    self.email_processing_status[acct_id] = ProcessingStatus(filename=account.get('account_name') or account.get('username'))
+                    self.email_processing_status[acct_id] = ProcessingStatus(filename=account.get('account_name') or account.get('email_address'))
                     t = threading.Thread(target=self._refresh_email_account_background, args=(acct_id,))
                     t.daemon = True
                     t.start()

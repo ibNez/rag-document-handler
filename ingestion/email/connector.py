@@ -62,7 +62,7 @@ class IMAPConnector(EmailConnector):
     def __init__(
         self,
         host: str,
-        username: str,
+        email_address: str,
         password: str,
         mailbox: str = "INBOX",
         *,
@@ -73,7 +73,7 @@ class IMAPConnector(EmailConnector):
     ) -> None:
         self.host = host
         self.port = port
-        self.username = username
+        self.email_address = email_address
         self.password = password
         self.mailbox = mailbox
         self.batch_limit = batch_limit
@@ -84,11 +84,11 @@ class IMAPConnector(EmailConnector):
     def fetch_emails(self, since_date: Optional[datetime] = None) -> List[Dict[str, Any]]:
         """Fetch emails via IMAP and return canonical records."""
         logger.info(
-            "Connecting to IMAP server %s:%s mailbox=%s user=%s",
+            "Connecting to IMAP server %s:%s mailbox=%s email=%s",
             self.host,
             self.port,
             self.mailbox,
-            self.username,
+            self.email_address,
         )
         conn = (
             imaplib.IMAP4_SSL(self.host, self.port)
@@ -106,10 +106,10 @@ class IMAPConnector(EmailConnector):
                         "IMAP server requires a secure connection; STARTTLS negotiation failed"
                     ) from exc
 
-            status, _ = conn.login(self.username, self.password)
+            status, _ = conn.login(self.email_address, self.password)
             if status != "OK":
                 logger.warning(
-                    "IMAP login failed for user %s: status=%s", self.username, status
+                    "IMAP login failed for %s: status=%s", self.email_address, status
                 )
                 return []
 
@@ -187,10 +187,10 @@ class IMAPConnector(EmailConnector):
                     )
 
             logger.info(
-                "Retrieved %d emails from IMAP server %s for user %s",
+                "Retrieved %d emails from IMAP server %s for %s",
                 len(results),
                 self.host,
-                self.username,
+                self.email_address,
             )
             return results
         finally:
@@ -379,17 +379,17 @@ class ExchangeConnector(EmailConnector):
     def __init__(
         self,
         server: str,
-        username: str,
+        email_address: str,
         password: str,
         *,
         batch_limit: Optional[int] = 50,
     ) -> None:
         if Account is None:
             raise ImportError("exchangelib is required for ExchangeConnector")
-        creds = EWSCredentials(username=username, password=password)
+        creds = EWSCredentials(username=email_address, password=password)
         config = Configuration(server=server, credentials=creds)
         self.account = Account(
-            primary_smtp_address=username,
+            primary_smtp_address=email_address,
             config=config,
             autodiscover=False,
             access_type=DELEGATE,
@@ -397,15 +397,15 @@ class ExchangeConnector(EmailConnector):
         self.batch_limit = batch_limit
         self.primary_mailbox = None
         self.server = server
-        self.username = username
+        self.email_address = email_address
 
     # ------------------------------------------------------------------
     def fetch_emails(self, since_date: Optional[datetime] = None) -> List[Dict[str, Any]]:
         """Fetch emails via Exchange Web Services and return canonical records."""
         logger.info(
-            "Fetching emails from Exchange server %s for user %s",
+            "Fetching emails from Exchange server %s for %s",
             self.server,
-            self.username,
+            self.email_address,
         )
         qs = self.account.inbox.all().order_by("-datetime_received")
         if since_date is not None:
@@ -423,10 +423,10 @@ class ExchangeConnector(EmailConnector):
             except Exception:
                 continue
         logger.info(
-            "Retrieved %d emails from Exchange server %s for user %s",
+            "Retrieved %d emails from Exchange server %s for %s",
             len(results),
             self.server,
-            self.username,
+            self.email_address,
         )
         return results
 

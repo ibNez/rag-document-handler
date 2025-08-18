@@ -32,7 +32,7 @@ class EmailAccountManager:
                     server_type TEXT NOT NULL,
                     server TEXT NOT NULL,
                     port INTEGER NOT NULL,
-                    username TEXT NOT NULL,
+                    email_address TEXT NOT NULL,
                     password TEXT NOT NULL,
                     mailbox TEXT,
                     batch_limit INTEGER,
@@ -46,6 +46,21 @@ class EmailAccountManager:
             # Add missing columns for upgrades
             cur.execute("PRAGMA table_info(email_accounts)")
             existing = {row[1] for row in cur.fetchall()}
+            if "email_address" not in existing:
+                if "username" in existing:
+                    cur.execute(
+                        "ALTER TABLE email_accounts RENAME COLUMN username TO email_address"
+                    )
+                    logger.info(
+                        "Renamed column username to email_address in email_accounts table"
+                    )
+                else:
+                    cur.execute(
+                        "ALTER TABLE email_accounts ADD COLUMN email_address TEXT"
+                    )
+                    logger.info(
+                        "Added missing column email_address to email_accounts table"
+                    )
             if "refresh_interval_minutes" not in existing:
                 cur.execute(
                     "ALTER TABLE email_accounts ADD COLUMN refresh_interval_minutes INTEGER"
@@ -91,7 +106,7 @@ class EmailAccountManager:
             "server_type",
             "server",
             "port",
-            "username",
+            "email_address",
             "password",
         }
         missing = required - record.keys()
@@ -104,12 +119,12 @@ class EmailAccountManager:
             record["password"] = encrypt(str(record["password"]))
 
         logger.info(
-            "Creating email account '%s' (%s) on %s:%s for user %s",
+            "Creating email account '%s' (%s) on %s:%s for %s",
             record.get("account_name"),
             record.get("server_type"),
             record.get("server"),
             record.get("port"),
-            record.get("username"),
+            record.get("email_address"),
         )
 
         cols = list(record.keys())
