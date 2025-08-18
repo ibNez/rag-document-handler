@@ -613,17 +613,17 @@
                                 </div>
                                 <div class="col-md-6 mb-3">
                                     <label class="form-label">Mailbox</label>
-                                    <input type="text" class="form-control" name="mailbox">
+                                    <input type="text" class="form-control" name="mailbox" required>
                                 </div>
                             </div>
                             <div class="row">
                                 <div class="col-md-6 mb-3">
                                     <label class="form-label">Batch Limit</label>
-                                    <input type="number" class="form-control" name="batch_limit">
+                                    <input type="number" class="form-control" name="batch_limit" required>
                                 </div>
                                 <div class="col-md-6 mb-3">
                                     <label class="form-label">Refresh interval (minutes)</label>
-                                    <input type="number" class="form-control" name="refresh_interval_minutes" value="{{ config.EMAIL_DEFAULT_REFRESH_MINUTES }}">
+                                    <input type="number" class="form-control" name="refresh_interval_minutes" value="{{ config.EMAIL_DEFAULT_REFRESH_MINUTES }}" required>
                                 </div>
                             </div>
                             <div class="mb-3 form-check form-switch">
@@ -682,17 +682,17 @@
                                 </div>
                                 <div class="col-md-6 mb-3">
                                     <label class="form-label">Mailbox</label>
-                                    <input type="text" class="form-control" name="mailbox" id="editMailbox">
+                                    <input type="text" class="form-control" name="mailbox" id="editMailbox" required>
                                 </div>
                             </div>
                             <div class="row">
                                 <div class="col-md-6 mb-3">
                                     <label class="form-label">Batch Limit</label>
-                                    <input type="number" class="form-control" name="batch_limit" id="editBatchLimit">
+                                    <input type="number" class="form-control" name="batch_limit" id="editBatchLimit" required>
                                 </div>
                                 <div class="col-md-6 mb-3">
                                     <label class="form-label">Refresh interval (minutes)</label>
-                                    <input type="number" class="form-control" name="refresh_interval_minutes" id="editRefreshInterval">
+                                    <input type="number" class="form-control" name="refresh_interval_minutes" id="editRefreshInterval" required>
                                 </div>
                             </div>
                             <div class="mb-3 form-check form-switch">
