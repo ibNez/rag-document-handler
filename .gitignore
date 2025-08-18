@@ -54,6 +54,7 @@ Thumbs.db
 # Staging and uploaded folder contents (keep folders, ignore files)
 staging/
 uploaded/
+deleted/
 
 # Backup folder (ignore completely)
 backup/

@@ -41,17 +41,17 @@ class EmailOrchestrator:
 
     def get_due_accounts(self) -> List[Dict[str, Any]]:
         """Return accounts that need a refresh based on their schedule."""
-        if not self.config.EMAIL_ENABLED or not self.account_manager:
+        if not self.account_manager:
             return []
         # Refresh accounts to ensure we operate on latest configuration
         self.refresh_accounts()
-        default_interval = getattr(self.config, "EMAIL_DEFAULT_REFRESH_MINUTES", 5)
         now = datetime.now(UTC)
         due: List[Dict[str, Any]] = []
         for account in self.accounts:
             interval = account.get("refresh_interval_minutes")
             if interval is None:
-                interval = default_interval
+                logger.warning(f"Email account {account.get('account_name')} missing refresh_interval_minutes, using 60 minutes default")
+                interval = 60  # Default to 1 hour if missing
             try:
                 last = account.get("last_synced")
                 last_dt = datetime.fromisoformat(str(last)) if last else None
