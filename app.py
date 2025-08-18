@@ -2381,108 +2381,59 @@ class RAGKnowledgebaseManager:
 
     def _refresh_email_account_background(self, account_id: int) -> None:
         """Fetch emails for a specific account in a background thread."""
-        if not self.email_account_manager:
-            return
-        try:
-            account = None
-            for acct in self.email_account_manager.list_accounts(include_password=True):
-                if acct.get('id') == account_id:
-                    account = acct
-                    break
-            if not account:
-                return
-
-            st = self.email_processing_status.get(account_id)
-            if st is None:
-                st = ProcessingStatus(filename=account.get('account_name') or account.get('username'))
-                self.email_processing_status[account_id] = st
-            st.status = 'processing'; st.message = 'Starting email refresh...'; st.progress = 5; st.start_time = datetime.now()
-
-            from ingestion.email.connector import IMAPConnector, GmailConnector, ExchangeConnector
-            from ingestion.email.processor import EmailProcessor
-            from ingestion.email.ingest import run_email_ingestion
-            from google.oauth2.credentials import Credentials
-            from google.auth.transport.requests import Request
-
-            server_type = (account.get('server_type') or '').lower()
-            batch = account.get('batch_limit')
-            batch_limit = None if batch in (None, 'all') else int(batch)
-
-            connector = None
-            if server_type == 'imap':
-                connector = IMAPConnector(
-                    host=account['server'],
-                    port=int(account['port']),
-                    username=account['username'],
-                    password=account['password'],
-                    mailbox=account.get('mailbox') or 'INBOX',
-                    batch_limit=batch_limit,
-                    use_ssl=bool(account.get('use_ssl', True)),
-                )
-            elif server_type == 'gmail':
-                token_path = account.get('token_file') or account.get('token_path')
-                if not token_path:
-                    logger.error(f"No token file configured for Gmail account {account.get('account_name')}")
-                    return
-                creds = Credentials.from_authorized_user_file(token_path)
-                if getattr(creds, 'expired', False) and getattr(creds, 'refresh_token', None):
-                    try:
-                        creds.refresh(Request())
-                        with open(token_path, 'w') as fh:
-                            fh.write(creds.to_json())
-                    except Exception as exc:
-                        logger.warning(f"Failed to refresh Gmail token for {account.get('account_name')}: {exc}")
-                connector = GmailConnector(
-                    credentials=creds,
-                    user_id=account.get('username') or 'me',
-                    batch_limit=batch_limit,
-                )
-                
-            elif server_type == 'exchange':
-                connector = ExchangeConnector(
-                    server=account['server'],
-                    username=account['username'],
-                    password=account['password'],
-                    batch_limit=batch_limit,
-                )
-            else:
-                logger.warning(f"Unknown server type '{server_type}' for account {account_id}")
-                return
-
-            status_text = None
+        orchestrator = getattr(self, "email_orchestrator", None)
+        if orchestrator is None and getattr(self, "email_account_manager", None):
             try:
-                processor = EmailProcessor(self.milvus_manager, sqlite3.connect(self.url_manager.db_path))
-                processed = run_email_ingestion(connector, processor)
-                status_text = 'updated' if processed else 'unchanged'
-            except Exception as exc:
-                logger.error(f"Email ingestion failed for account {account.get('account_name')}: {exc}")
-                status_text = f"error: {exc}"
-                if st:
-                    st.status = 'error'; st.message = f'Refresh failed: {exc}'; st.error_details = str(exc); st.progress = 100; st.end_time = datetime.now()
-            try:
-                self.email_account_manager.update_account(
-                    account_id,
-                    {
-                        'last_synced': datetime.now(UTC).isoformat(
-                            sep=' ', timespec='seconds'
-                        ),
-                        'last_update_status': status_text,
-                    },
-                )
+                cfg = getattr(self, "config", None)
+                if cfg is None:
+                    class _Cfg:
+                        EMAIL_ENABLED = True
+                        EMAIL_DEFAULT_REFRESH_MINUTES = 5
+
+                    cfg = _Cfg()
+                orchestrator = EmailOrchestrator(cfg, self.email_account_manager)
             except Exception as exc:
                 logger.error(
-                    f"Failed to update account {account_id} after email refresh: {exc}"
+                    f"Failed to initialize email orchestrator for account {account_id}: {exc}"
                 )
-                raise
-            if status_text and status_text.startswith('error'):
-                pass
-            elif st:
-                st.status = 'completed'; st.message = 'Email refresh complete'; st.progress = 100; st.end_time = datetime.now()
+                return
+        if orchestrator is None:
+            return
+        try:
+            st = self.email_processing_status.get(account_id)
+            if st is None and self.email_account_manager:
+                for acct in self.email_account_manager.list_accounts(
+                    include_password=False
+                ):
+                    if acct.get("id") == account_id:
+                        st = ProcessingStatus(
+                            filename=acct.get("account_name")
+                            or acct.get("username")
+                        )
+                        self.email_processing_status[account_id] = st
+                        break
+            if st:
+                st.status = "processing"
+                st.message = "Starting email refresh..."
+                st.progress = 5
+                st.start_time = datetime.now()
+
+            orchestrator.run(account_id=account_id)
+
+            if st:
+                st.status = "completed"
+                st.message = "Email refresh complete"
+                st.progress = 100
+                st.end_time = datetime.now()
         except Exception as exc:
             logger.error(f"Email refresh error for account {account_id}: {exc}")
             st = self.email_processing_status.get(account_id)
             if st:
-                st.status = 'error'; st.message = f'Refresh failed: {exc}'; st.error_details = str(exc); st.progress = 100; st.end_time = datetime.now()
+                st.status = "error"
+                st.message = f"Refresh failed: {exc}"
+                st.error_details = str(exc)
+                st.progress = 100
+                st.end_time = datetime.now()
         finally:
             try:
                 del self.email_processing_status[account_id]
@@ -2494,7 +2445,6 @@ class RAGKnowledgebaseManager:
                 logger.error(
                     f"Unexpected error cleaning up status for account {account_id}: {exc}"
                 )
-                raise
 
 
     def _process_url_background(self, url_id: int) -> None:
