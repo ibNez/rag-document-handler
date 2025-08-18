@@ -103,6 +103,8 @@ class Config:
     CLASSIFICATION_MODEL: str = os.getenv("CLASSIFICATION_MODEL", "mistral")
 
     # Ollama Configuration
+    OLLAMA_EMBEDDING_HOST: str = os.getenv("OLLAMA_EMBEDDING_HOST", "localhost")
+    OLLAMA_EMBEDDING_PORT: int = int(os.getenv("OLLAMA_EMBEDDING_PORT", "11434"))
     OLLAMA_CLASSIFICATION_HOST: str = os.getenv("OLLAMA_CLASSIFICATION_HOST", "localhost")
     CLASSIFICATION_BASE_URL: str = os.getenv('CHAT_CLASSIFICATIONBASE_URL', f"http://{os.getenv('OLLAMA_CLASSIFICATION_HOST','localhost')}:{os.getenv('OLLAMA_PORT','11434')}")
     OLLAMA_CHAT_HOST: str = os.getenv("OLLAMA_CHAT_HOST", "localhost")
@@ -717,7 +719,7 @@ class DocumentProcessor:
         self.config = config
         self.embedding_provider = OllamaEmbeddings(
             model=self.config.EMBEDDING_MODEL, 
-            base_url=f"http://{self.config.CLASSIFICATION_BASE_URL}"
+            base_url=f"http://{self.config.OLLAMA_EMBEDDING_HOST}:{self.config.OLLAMA_EMBEDDING_PORT}"
         )
         logger.info(f"DocumentProcessor initialized with {self.config.EMBEDDING_MODEL}")
     
@@ -958,7 +960,7 @@ class MilvusManager:
             # Create a dedicated embeddings instance (mirrors DocumentProcessor usage)
             self.langchain_embeddings = OllamaEmbeddings(
                 model=self.config.EMBEDDING_MODEL,
-                base_url=f"http://{self.config.OLLAMA_CHAT_HOST}:{self.config.OLLAMA_PORT}"
+                base_url=f"http://{self.config.OLLAMA_EMBEDDING_HOST}:{self.config.OLLAMA_EMBEDDING_PORT}"
             )
         except Exception as e:
             logger.error(f"Failed to initialize embeddings for MilvusManager: {e}")
