@@ -54,7 +54,14 @@ class EmailOrchestrator:
                 interval = 60  # Default to 1 hour if missing
             try:
                 last = account.get("last_synced")
-                last_dt = datetime.fromisoformat(str(last)) if last else None
+                if last:
+                    last_dt = datetime.fromisoformat(str(last))
+                    # Ensure timezone-aware datetime for comparison
+                    if last_dt.tzinfo is None:
+                        # Assume UTC if no timezone info
+                        last_dt = last_dt.replace(tzinfo=UTC)
+                else:
+                    last_dt = None
             except Exception:  # pragma: no cover - defensive
                 last_dt = None
 

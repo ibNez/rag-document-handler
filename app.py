@@ -1608,6 +1608,84 @@ class RAGKnowledgebaseManager:
             except Exception as e:
                 logger.warning(f"Failed to load email accounts: {e}")
 
+            # Aggregate email statistics
+            email_meta = {
+                'total_accounts': 0,
+                'active_accounts': 0,
+                'total_emails': 0,
+                'processed_emails': 0,
+                'unprocessed_emails': 0,
+                'emails_with_attachments': 0,
+                'never_synced': 0,
+                'due_now': 0,
+                'avg_emails_per_account': 0,
+                'latest_email_date': None,
+                'most_active_account': None
+            }
+            try:
+                with sqlite3.connect(self.url_manager.db_path) as conn:
+                    conn.row_factory = sqlite3.Row
+                    cur = conn.cursor()
+                    
+                    # Account statistics
+                    cur.execute("""
+                        SELECT 
+                            COUNT(*) as total_accounts,
+                            SUM(CASE WHEN refresh_interval_minutes IS NOT NULL AND refresh_interval_minutes > 0 THEN 1 ELSE 0 END) as active_accounts,
+                            SUM(CASE WHEN last_synced IS NULL THEN 1 ELSE 0 END) as never_synced,
+                            SUM(CASE 
+                                WHEN refresh_interval_minutes IS NOT NULL AND refresh_interval_minutes > 0 AND (
+                                    (last_synced IS NOT NULL AND datetime(last_synced, '+' || refresh_interval_minutes || ' minutes') <= datetime('now'))
+                                    OR (last_synced IS NULL)
+                                )
+                                THEN 1 ELSE 0 END) as due_now
+                        FROM email_accounts
+                    """)
+                    row = cur.fetchone()
+                    if row:
+                        email_meta['total_accounts'] = int(row['total_accounts'] or 0)
+                        email_meta['active_accounts'] = int(row['active_accounts'] or 0)
+                        email_meta['never_synced'] = int(row['never_synced'] or 0)
+                        email_meta['due_now'] = int(row['due_now'] or 0)
+                    
+                    # Email content statistics
+                    cur.execute("""
+                        SELECT 
+                            COUNT(*) as total_emails,
+                            SUM(CASE WHEN processed = 1 THEN 1 ELSE 0 END) as processed_emails,
+                            SUM(CASE WHEN processed = 0 THEN 1 ELSE 0 END) as unprocessed_emails,
+                            SUM(CASE WHEN has_attachments = 1 THEN 1 ELSE 0 END) as emails_with_attachments,
+                            MAX(date_utc) as latest_email_date
+                        FROM emails
+                    """)
+                    row = cur.fetchone()
+                    if row:
+                        email_meta['total_emails'] = int(row['total_emails'] or 0)
+                        email_meta['processed_emails'] = int(row['processed_emails'] or 0)
+                        email_meta['unprocessed_emails'] = int(row['unprocessed_emails'] or 0)
+                        email_meta['emails_with_attachments'] = int(row['emails_with_attachments'] or 0)
+                        email_meta['latest_email_date'] = row['latest_email_date']
+                    
+                    # Calculate average emails per account
+                    if email_meta['total_accounts'] > 0:
+                        email_meta['avg_emails_per_account'] = round(email_meta['total_emails'] / email_meta['total_accounts'], 1)
+                    
+                    # Find most active account (by email count)
+                    cur.execute("""
+                        SELECT ea.account_name, COUNT(e.id) as email_count
+                        FROM email_accounts ea
+                        LEFT JOIN emails e ON ea.email_address = e.from_addr OR ea.email_address = e.to_primary
+                        GROUP BY ea.id, ea.account_name
+                        ORDER BY email_count DESC
+                        LIMIT 1
+                    """)
+                    row = cur.fetchone()
+                    if row and row['email_count'] > 0:
+                        email_meta['most_active_account'] = row['account_name']
+                        
+            except Exception as e:
+                logger.warning(f"Email meta aggregation failed: {e}")
+
             return render_template(
                 'index.html',
                 staging_files=staging_files,
@@ -1617,6 +1695,7 @@ class RAGKnowledgebaseManager:
                 milvus_status=milvus_status,
                 kb_meta=kb_meta,
                 url_meta=url_meta,
+                email_meta=email_meta,
                 processing_status=self.processing_status,
                 url_processing_status=self.url_processing_status,
                 urls=enriched_urls,
