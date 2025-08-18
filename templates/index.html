@@ -105,7 +105,7 @@
                             .keyword-pill { background:rgba(255,255,255,0.10); border:1px solid rgba(255,255,255,0.18); border-radius:2rem; padding:.2rem .6rem; font-size:.6rem; }
                         </style>
                         <div class="row g-3">
-                            <div class="col-12 col-lg-4">
+                            <div class="col-12 col-lg-6">
                                 <div class="kb-section-title">Connections</div>
                                 <div class="metric-grid">
                                     <div class="metric-tile">
@@ -135,7 +135,7 @@
                                     </div>
                                 </div>
                             </div>
-                            <div class="col-12 col-lg-4">
+                            <div class="col-12 col-lg-6">
                                 <div class="kb-section-title">Documents</div>
                                 <div class="metric-grid">
                                     <div class="metric-tile"><div class="metric-label">Total Docs</div><div class="metric-value">{{ kb_meta.documents_total }}</div></div>
@@ -154,7 +154,7 @@
                                 </div>
                                 {% endif %}
                             </div>
-                            <div class="col-12 col-lg-4">
+                            <div class="col-12 col-lg-6">
                                 <div class="kb-section-title">URLs</div>
                                 <div class="metric-grid">
                                     <div class="metric-tile"><div class="metric-label">Total URLs</div><div class="metric-value">{{ url_meta.total or 0 }}</div></div>
@@ -165,6 +165,30 @@
                                     <div class="metric-tile"><div class="metric-label">Never Scraped</div><div class="metric-value">{{ url_meta.never_scraped or 0 }}</div></div>
                                     <div class="metric-tile"><div class="metric-label">Due Now</div><div class="metric-value">{{ url_meta.due_now or 0 }}</div></div>
                                 </div>
+                            </div>
+                            <div class="col-12 col-lg-6">
+                                <div class="kb-section-title">Emails</div>
+                                <div class="metric-grid">
+                                    <div class="metric-tile"><div class="metric-label">Total Accounts</div><div class="metric-value">{{ email_meta.total_accounts or 0 }}</div></div>
+                                    <div class="metric-tile"><div class="metric-label">Due Now</div><div class="metric-value">{{ email_meta.due_now or 0 }}</div></div>
+                                    <div class="metric-tile"><div class="metric-label">Never Synced</div><div class="metric-value">{{ email_meta.never_synced or 0 }}</div></div>
+                                    <div class="metric-tile"><div class="metric-label">Total Emails</div><div class="metric-value">{{ email_meta.total_emails or 0 }}</div></div>
+                                    <div class="metric-tile"><div class="metric-label">Processed</div><div class="metric-value">{{ email_meta.processed_emails or 0 }}</div></div>
+                                    <div class="metric-tile"><div class="metric-label">With Attachments</div><div class="metric-value">{{ email_meta.emails_with_attachments or 0 }}</div></div>
+                                    {% if email_meta.avg_emails_per_account > 0 %}
+                                    <div class="metric-tile"><div class="metric-label">Avg per Account</div><div class="metric-value">{{ email_meta.avg_emails_per_account }}</div></div>
+                                    {% endif %}
+                                </div>
+                                {% if email_meta.most_active_account %}
+                                <div class="kb-section-title mt-3">Most Active Account</div>
+                                <div class="keywords-wrap">
+                                    <span class="keyword-pill">{{ email_meta.most_active_account }}</span>
+                                </div>
+                                {% endif %}
+                                {% if email_meta.latest_email_date %}
+                                <div class="kb-section-title mt-3">Latest Email</div>
+                                <div class="metric-sub">{{ email_meta.latest_email_date }}</div>
+                                {% endif %}
                             </div>
                         </div>
                     </div>
