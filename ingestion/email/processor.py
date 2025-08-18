@@ -73,7 +73,7 @@ class EmailProcessor:
     def _store_metadata(self, record: Dict[str, Any]) -> None:
         """Persist an email record using :class:`EmailManager`."""
         self.manager.upsert_email(record)
-        logger.debug("Stored metadata for message %s", record.get("message_id"))
+        logger.info("Stored metadata for message %s", record.get("message_id"))
 
     # ------------------------------------------------------------------
     def _store_embeddings(
@@ -114,8 +114,11 @@ class EmailProcessor:
                 # pymilvus.Collection style
                 entities = [ids, list(embeddings), chunks, metadatas]
                 self.milvus.insert(entities)
+            elif self.milvus is None:
+                logger.warning("Milvus client is None, skipping embedding storage for %s", message_id)
+                return
             else:
-                raise RuntimeError("Unsupported Milvus client interface")
+                raise RuntimeError(f"Unsupported Milvus client interface: {type(self.milvus)}")
         except Exception as exc:  # pragma: no cover - defensive
             logger.error("Milvus insertion failed for %s: %s", message_id, exc)
         else:
@@ -159,3 +162,122 @@ class EmailProcessor:
         )
         self._store_embeddings(message_id, chunks, embeddings, record)
         logger.debug("Finished processing message %s", message_id)
+
+    # ------------------------------------------------------------------
+    def process_smart_batch(
+        self,
+        connector,
+        since_date: Optional[Any] = None,
+        max_batches: Optional[int] = None
+    ) -> Dict[str, int]:
+        """Process emails using smart batching to avoid duplicates.
+        
+        Parameters
+        ----------
+        connector:
+            Email connector with fetch_smart_batch method
+        since_date:
+            Optional datetime to filter emails from
+        max_batches:
+            Maximum number of batches to process (None for unlimited)
+            
+        Returns
+        -------
+        Dict[str, int]:
+            Statistics about the processing session
+        """
+        logger.info("Starting smart batch processing")
+        
+        stats = {
+            "total_emails_processed": 0,
+            "total_batches": 0,
+            "skipped_duplicates": 0,
+            "successful_embeddings": 0,
+            "errors": 0
+        }
+        
+        # The connector handles offset tracking internally
+        start_offset = 0
+        batch_count = 0
+        
+        while True:
+            # Check batch limit
+            if max_batches and batch_count >= max_batches:
+                logger.info("Reached maximum batch limit of %d", max_batches)
+                break
+                
+            # Fetch next smart batch - connector manages offset internally
+            try:
+                emails, has_more = connector.fetch_smart_batch(
+                    email_manager=self.manager,
+                    since_date=since_date,
+                    start_offset=start_offset
+                )
+                
+                if not emails:
+                    if has_more:
+                        # This shouldn't happen with our new implementation,
+                        # but handle it just in case
+                        logger.warning("No unique emails returned but has_more=True - this may indicate an issue")
+                        start_offset += connector.batch_limit or 50
+                        continue
+                    else:
+                        # No emails and no more available - we're done
+                        logger.info("No more emails to process")
+                        break
+                        
+                batch_count += 1
+                stats["total_batches"] = batch_count
+                
+                logger.info(
+                    "Processing batch %d: %d unique emails (has_more: %s)",
+                    batch_count,
+                    len(emails),
+                    has_more
+                )
+                
+                # Process each email in the batch
+                batch_successes = 0
+                for email in emails:
+                    try:
+                        self.process(email)
+                        stats["total_emails_processed"] += 1
+                        stats["successful_embeddings"] += 1
+                        batch_successes += 1
+                    except Exception as exc:
+                        logger.error(
+                            "Error processing email %s: %s",
+                            email.get("message_id", "unknown"),
+                            exc
+                        )
+                        stats["errors"] += 1
+                        
+                logger.info(
+                    "Batch %d complete: %d/%d emails processed successfully",
+                    batch_count,
+                    batch_successes,
+                    len(emails)
+                )
+                
+                # Update offset based on what the connector processed
+                # The connector tells us how far it got through the mailbox
+                start_offset += len(emails)
+                
+                # Break if no more emails available
+                if not has_more:
+                    logger.info("Processed all available emails")
+                    break
+                    
+            except Exception as exc:
+                logger.error("Error in smart batch processing: %s", exc)
+                stats["errors"] += 1
+                break
+                
+        logger.info(
+            "Smart batch processing complete: %d batches, %d emails processed, %d errors",
+            stats["total_batches"],
+            stats["total_emails_processed"],
+            stats["errors"]
+        )
+        
+        return stats

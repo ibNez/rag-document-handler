@@ -53,6 +53,7 @@ from langchain_core.messages import SystemMessage, HumanMessage
 # Configuration
 from dotenv import load_dotenv
 from ingestion.email import EmailOrchestrator, EmailAccountManager
+from ingestion.email.processor import EmailProcessor
 
 # Load environment variables
 load_dotenv()
@@ -276,33 +277,6 @@ class URLManager:
                     to_primary TEXT
                 )
             ''')
-            # Lightweight migration: ensure required columns exist (idempotent)
-            try:
-                cursor.execute("PRAGMA table_info(urls)")
-                existing = {row[1] for row in cursor.fetchall()}
-                required = {
-                    'last_content_hash': "ALTER TABLE urls ADD COLUMN last_content_hash TEXT",
-                    'last_update_status': "ALTER TABLE urls ADD COLUMN last_update_status TEXT",
-                    'refreshing': "ALTER TABLE urls ADD COLUMN refreshing INTEGER DEFAULT 0",
-                    'last_refresh_started': "ALTER TABLE urls ADD COLUMN last_refresh_started TIMESTAMP"
-                }
-                for col, ddl in required.items():
-                    if col not in existing:
-                        try:
-                            cursor.execute(ddl)
-                            logger.info(f"Added missing column to urls: {col}")
-                        except Exception as _e:
-                            logger.warning(f"Failed adding column {col}: {_e}")
-                cursor.execute("PRAGMA table_info(url_pages)")
-                page_existing = {row[1] for row in cursor.fetchall()}
-                if 'last_content_hash' not in page_existing:
-                    try:
-                        cursor.execute("ALTER TABLE url_pages ADD COLUMN last_content_hash TEXT")
-                        logger.info("Added missing column to url_pages: last_content_hash")
-                    except Exception as _pe:
-                        logger.warning(f"Failed adding last_content_hash to url_pages: {_pe}")
-            except Exception as _mig:
-                logger.warning(f"URL schema migration check failed: {_mig}")
             conn.commit()
             logger.info("URL database initialized")
 
@@ -1451,8 +1425,19 @@ class RAGKnowledgebaseManager:
         try:
             email_conn = sqlite3.connect(self.url_manager.db_path, check_same_thread=False)
             self.email_account_manager = EmailAccountManager(email_conn)
+            
+            # Ensure vector store is initialized before passing to EmailProcessor
+            self.milvus_manager._ensure_vector_store()
+            
+            # Create EmailProcessor with persistent database and vector store
+            email_processor = EmailProcessor(
+                milvus=self.milvus_manager.vector_store,
+                sqlite_conn=email_conn,
+                embedding_model=self.milvus_manager.langchain_embeddings
+            )
+            
             self.email_orchestrator = EmailOrchestrator(
-                self.config, self.email_account_manager
+                self.config, self.email_account_manager, email_processor
             )
         except Exception as e:
             logger.error(f"Failed to start email orchestrator: {e}")
@@ -1652,19 +1637,19 @@ class RAGKnowledgebaseManager:
                     cur.execute("""
                         SELECT 
                             COUNT(*) as total_emails,
-                            SUM(CASE WHEN processed = 1 THEN 1 ELSE 0 END) as processed_emails,
-                            SUM(CASE WHEN processed = 0 THEN 1 ELSE 0 END) as unprocessed_emails,
+                            COUNT(DISTINCT from_addr) as unique_senders,
                             SUM(CASE WHEN has_attachments = 1 THEN 1 ELSE 0 END) as emails_with_attachments,
-                            MAX(date_utc) as latest_email_date
+                            MAX(date_utc) as latest_email_date,
+                            AVG(raw_size_bytes) as avg_email_size
                         FROM emails
                     """)
                     row = cur.fetchone()
                     if row:
                         email_meta['total_emails'] = int(row['total_emails'] or 0)
-                        email_meta['processed_emails'] = int(row['processed_emails'] or 0)
-                        email_meta['unprocessed_emails'] = int(row['unprocessed_emails'] or 0)
+                        email_meta['unique_senders'] = int(row['unique_senders'] or 0)
                         email_meta['emails_with_attachments'] = int(row['emails_with_attachments'] or 0)
                         email_meta['latest_email_date'] = row['latest_email_date']
+                        email_meta['avg_email_size'] = round(float(row['avg_email_size'] or 0), 1)
                     
                     # Calculate average emails per account
                     if email_meta['total_accounts'] > 0:
@@ -2472,7 +2457,16 @@ class RAGKnowledgebaseManager:
                         EMAIL_DEFAULT_REFRESH_MINUTES = 5
 
                     cfg = _Cfg()
-                orchestrator = EmailOrchestrator(cfg, self.email_account_manager)
+                
+                # Create EmailProcessor with persistent database and vector store
+                email_conn = sqlite3.connect(self.url_manager.db_path, check_same_thread=False)
+                email_processor = EmailProcessor(
+                    milvus=self.milvus_manager.vector_store,
+                    sqlite_conn=email_conn,
+                    embedding_model=self.milvus_manager.langchain_embeddings
+                )
+                
+                orchestrator = EmailOrchestrator(cfg, self.email_account_manager, email_processor)
             except Exception:
                 logger.exception(
                     "Failed to initialize email orchestrator for account %s", account_id

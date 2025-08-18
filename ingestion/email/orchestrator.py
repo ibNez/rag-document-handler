@@ -149,24 +149,41 @@ class EmailOrchestrator:
                 processor = None
 
         try:
-            records = connector.fetch_emails()
-            logger.info("Fetched %d emails for account %s", len(records), name)
-            if processor:
-                for rec in records:
-                    try:
-                        norm = _normalize(rec)
-                        hh = norm.get("header_hash")
-                        if hh and processor.manager.get_email_by_header_hash(hh):
-                            continue
-                        ch = norm.get("content_hash")
-                        if ch and processor.manager.get_email_by_hash(ch):
-                            continue
-                        processor.process(norm)
-                    except Exception as exc:  # pragma: no cover - defensive
-                        mid = rec.get("message_id")
-                        logger.error(
-                            "Failed to process email %s for %s: %s", mid, name, exc
-                        )
+            # Use smart batch processing for complete mailbox coverage
+            if (processor and hasattr(processor, 'process_smart_batch') and 
+                hasattr(connector, 'fetch_smart_batch')):
+                logger.info("Using smart batch processing for account %s", name)
+                stats = processor.process_smart_batch(
+                    connector=connector,
+                    since_date=None,  # Process all emails
+                    max_batches=None  # No limit on batches
+                )
+                logger.info(
+                    "Smart batch processing complete for %s: %d emails processed, %d batches, %d errors",
+                    name, stats.get('total_emails_processed', 0), 
+                    stats.get('total_batches', 0), stats.get('errors', 0)
+                )
+            else:
+                # Fallback to traditional processing (legacy mode)
+                logger.warning("Smart batch processing not available, using legacy mode for %s", name)
+                records = connector.fetch_emails()
+                logger.info("Fetched %d emails for account %s", len(records), name)
+                if processor:
+                    for rec in records:
+                        try:
+                            norm = _normalize(rec)
+                            hh = norm.get("header_hash")
+                            if hh and processor.manager.get_email_by_header_hash(hh):
+                                continue
+                            ch = norm.get("content_hash")
+                            if ch and processor.manager.get_email_by_hash(ch):
+                                continue
+                            processor.process(norm)
+                        except Exception as exc:  # pragma: no cover - defensive
+                            mid = rec.get("message_id")
+                            logger.error(
+                                "Failed to process email %s for %s: %s", mid, name, exc
+                            )
         except Exception as exc:  # pragma: no cover - defensive
             logger.error("Email sync error for %s: %s", name, exc)
 

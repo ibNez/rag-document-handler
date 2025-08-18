@@ -69,7 +69,6 @@ class EmailManager:
                 language TEXT,
                 has_attachments INTEGER,
                 attachment_manifest TEXT,
-                processed INTEGER DEFAULT 0,
                 ingested_at TEXT,
                 updated_at TEXT,
                 content_hash TEXT,
@@ -91,36 +90,6 @@ class EmailManager:
         )
         self.conn.commit()
 
-        cursor.execute("PRAGMA table_info(emails)")
-        cols = {row[1] for row in cursor.fetchall()}
-        if "header_hash" not in cols:
-            cursor.execute("ALTER TABLE emails ADD COLUMN header_hash TEXT")
-            self.conn.commit()
-            self._backfill_header_hash()
-        if "server_type" not in cols:
-            cursor.execute("ALTER TABLE emails ADD COLUMN server_type TEXT")
-            self.conn.commit()
-
-    # ------------------------------------------------------------------
-    def _backfill_header_hash(self) -> None:
-        """Populate ``header_hash`` for existing rows."""
-        cur = self.conn.cursor()
-        cur.execute(
-            "SELECT id, from_addr, to_addrs, subject, date_utc, message_id FROM emails WHERE header_hash IS NULL"
-        )
-        rows = cur.fetchall()
-        for row in rows:
-            data = {
-                "from_addr": row[1],
-                "to_addrs": json.loads(row[2]) if row[2] else [],
-                "subject": row[3],
-                "date_utc": row[4],
-                "message_id": row[5],
-            }
-            hh = compute_header_hash(data)
-            cur.execute("UPDATE emails SET header_hash = ? WHERE id = ?", (hh, row[0]))
-        self.conn.commit()
-
     # ------------------------------------------------------------------
     def upsert_email(self, record: Dict[str, Any]) -> None:
         """Insert or update an email record.
@@ -133,7 +102,8 @@ class EmailManager:
         if "message_id" not in record or not record["message_id"]:
             raise ValueError("record missing message_id")
 
-        cols = list(record.keys())
+        # Filter out processed field since it was removed from database schema
+        cols = [k for k in record.keys() if k != "processed"]
         placeholders = ",".join(["?"] * len(cols))
         updates = ", ".join([f"{c}=excluded.{c}" for c in cols if c != "message_id"])
         sql = f"INSERT INTO emails ({','.join(cols)}) VALUES ({placeholders}) ON CONFLICT(message_id) DO UPDATE SET {updates}"
@@ -149,7 +119,7 @@ class EmailManager:
         cur = self.conn.cursor()
         cur.execute(sql, values)
         self.conn.commit()
-        logger.debug("Upserted email %s", _mask(record["message_id"]))
+        logger.info("Upserted email %s", _mask(record["message_id"]))
 
     # ------------------------------------------------------------------
     def get_email(self, message_id: str) -> Optional[Dict[str, Any]]:
