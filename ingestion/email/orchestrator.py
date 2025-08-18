@@ -164,7 +164,9 @@ class EmailOrchestrator:
             logger.error("Email sync error for %s: %s", name, exc)
 
         acct_id = account.get("id")
-        if acct_id and self.account_manager and hasattr(self.account_manager, "update_account"):
+        if acct_id and self.account_manager and hasattr(
+            self.account_manager, "update_account"
+        ):
             try:
                 self.account_manager.update_account(
                     acct_id,
@@ -176,7 +178,7 @@ class EmailOrchestrator:
                 )
             except Exception as exc:  # pragma: no cover - defensive
                 logger.error(
-                    "Failed to update last_synced for %s: %s", name, exc
+                    "Failed to update account %s after sync: %s", name, exc
                 )
 
     def run_cycle(self) -> bool:
@@ -195,3 +197,29 @@ class EmailOrchestrator:
             self.sync_account(account, processor=self.processor)
         logger.info("Email sync cycle complete")
         return True
+
+    def run(self, account_id: Optional[int] = None) -> bool:
+        """Public entry point for email synchronization.
+
+        If ``account_id`` is provided, only that account will be synced.
+        Otherwise, a full cycle is executed for any accounts that are due.
+
+        Returns ``True`` if at least one account was processed.
+        """
+        if account_id is not None:
+            if not self.account_manager:
+                return False
+            try:
+                account = next(
+                    acct
+                    for acct in self.account_manager.list_accounts(
+                        include_password=True
+                    )
+                    if acct.get("id") == account_id
+                )
+            except StopIteration:
+                logger.error("No email account found for id %s", account_id)
+                return False
+            self.sync_account(account, processor=self.processor)
+            return True
+        return self.run_cycle()
