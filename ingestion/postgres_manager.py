@@ -306,6 +306,30 @@ class PostgreSQLManager:
                 result = cur.fetchone()
                 return result['analytics'] if result else {}
     
+    def get_version_info(self) -> Dict[str, Any]:
+        """Get PostgreSQL version and connection info."""
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT version()")
+                    version_result = cur.fetchone()
+                    version_str = version_result['version'] if version_result else "Unknown"
+                    
+                    # Extract just the version number (e.g., "PostgreSQL 15.4")
+                    version_short = version_str.split(' on ')[0] if ' on ' in version_str else version_str
+                    
+                    return {
+                        "connected": True,
+                        "version": version_short,
+                        "full_version": version_str
+                    }
+        except Exception as e:
+            logger.error(f"Failed to get PostgreSQL version: {e}")
+            return {
+                "connected": False,
+                "error": str(e)
+            }
+    
     def close(self) -> None:
         """Close connection pool."""
         if self.pool:

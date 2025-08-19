@@ -1566,16 +1566,29 @@ class RAGKnowledgebaseManager:
             collection_stats = self.milvus_manager.get_collection_stats()
 
             # Connection health statuses
-            # SQL (SQLite)
+            # Database (PostgreSQL or SQLite)
             try:
-                with sqlite3.connect(self.url_manager.db_path) as _c:
-                    _cur = _c.cursor()
-                    _cur.execute("SELECT sqlite_version()")
-                    ver_row = _cur.fetchone()
-                    ver = ver_row[0] if ver_row else None
-                sql_status = {"connected": True, "version": ver}
+                if Config.USE_POSTGRESQL_URL_MANAGER:
+                    # Get PostgreSQL status
+                    if hasattr(self, 'database_manager') and hasattr(self.database_manager, 'postgresql_manager'):
+                        sql_status = self.database_manager.postgresql_manager.get_version_info()
+                    else:
+                        # Fallback - create a temporary PostgreSQL manager to get version
+                        from ingestion.postgres_manager import PostgreSQLManager
+                        temp_pg_manager = PostgreSQLManager()
+                        sql_status = temp_pg_manager.get_version_info()
+                        temp_pg_manager.close()
+                else:
+                    # Get SQLite status
+                    with sqlite3.connect(self.url_manager.db_path) as _c:
+                        _cur = _c.cursor()
+                        _cur.execute("SELECT sqlite_version()")
+                        ver_row = _cur.fetchone()
+                        ver = f"SQLite {ver_row[0]}" if ver_row else "SQLite Unknown"
+                    sql_status = {"connected": True, "version": ver}
             except Exception as _e_sql:
-                sql_status = {"connected": False, "error": str(_e_sql)}
+                database_type = "PostgreSQL" if Config.USE_POSTGRESQL_URL_MANAGER else "SQLite"
+                sql_status = {"connected": False, "error": f"{database_type}: {str(_e_sql)}"}
 
             # Milvus
             milvus_status = self.milvus_manager.check_connection()
