@@ -21,6 +21,8 @@ python app.py           # Start local development server
 - [Installation](installation.md) - Setup options, development mode, and deployment
 - [Usage Guide](usage.md) - Web interface walkthrough and features
 - [System Architecture](architecture.md) - Database design and component overview
+- [Database Schema](database-schema.md) - Complete database field documentation
+- [Email Processing](email-processing.md) - Email ingestion pipeline and troubleshooting
 - [Contributing](contributing.md) - Development workflow and standards
 - [Gmail Email Ingestion](gmail_ingestion.md) - Gmail integration setup
 - [Exchange Email Ingestion](exchange_ingestion.md) - Exchange server integration

@@ -88,32 +88,39 @@ class EmailProcessor:
         for idx, _ in enumerate(chunks):
             cid = f"{message_id}:{idx}"
             ids.append(cid)
+            # Map email metadata to document schema fields
+            subject = record.get("subject", "")
+            from_addr = record.get("from_addr", "")
+            date_utc = record.get("date_utc", "")
+            
             meta = {
-                "message_id": message_id,
+                "document_id": message_id,  # Use message_id as document_id
+                "source": f"email:{from_addr}",  # Use from_addr as source
+                "page": idx,  # Use chunk index as page number
                 "chunk_id": cid,
-                "subject": record.get("subject"),
-                "from_addr": record.get("from_addr"),
+                "topic": subject,  # Use subject as topic
+                "category": "email",  # Fixed category for emails
+                "content_hash": f"email_{message_id}_{idx}",  # Generate content hash
+                "content_length": len(chunks[idx]) if idx < len(chunks) else 0,
+                # Keep original email fields for backward compatibility
+                "message_id": message_id,
+                "subject": subject,
+                "from_addr": from_addr,
                 "to_addrs": record.get("to_addrs"),
-                "date_utc": record.get("date_utc"),
+                "date_utc": date_utc,
                 "server_type": record.get("server_type"),
             }
             metadatas.append(meta)
 
         try:
-            if hasattr(self.milvus, "add_embeddings"):
+            if hasattr(self.milvus, "add_texts"):
+                # Preferred: Use LangChain interface which handles schema mapping
+                self.milvus.add_texts(texts=chunks, metadatas=metadatas, ids=ids)
+            elif hasattr(self.milvus, "add_embeddings"):
+                # Fallback: Use embeddings if available
                 self.milvus.add_embeddings(
                     embeddings=list(embeddings), ids=ids, metadatas=metadatas
                 )
-            elif hasattr(self.milvus, "add_texts"):
-                # When add_texts is available we assume the vector store will
-                # handle embedding generation. However, embeddings are already
-                # computed so we call add_embeddings if present; otherwise fall
-                # back to add_texts with raw chunks.
-                self.milvus.add_texts(texts=chunks, metadatas=metadatas, ids=ids)
-            elif hasattr(self.milvus, "insert"):
-                # pymilvus.Collection style
-                entities = [ids, list(embeddings), chunks, metadatas]
-                self.milvus.insert(entities)
             elif self.milvus is None:
                 logger.warning("Milvus client is None, skipping embedding storage for %s", message_id)
                 return
