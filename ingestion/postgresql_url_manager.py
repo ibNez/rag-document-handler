@@ -4,6 +4,7 @@ Uses existing PostgreSQL schema from postgres_manager.py
 """
 
 import logging
+import os
 import urllib.parse
 import requests
 import json
@@ -81,10 +82,12 @@ class PostgreSQLURLManager:
         try:
             with self.postgres.get_connection() as conn:
                 with conn.cursor() as cursor:
+                    # Determine default per-URL snapshot flag from environment
+                    default_snapshot_enabled = os.getenv('SNAPSHOT_DEFAULT_ENABLED', 'false').lower() == 'true'
                     cursor.execute(
-                        """INSERT INTO urls (url, title, description, status, refresh_interval_minutes, crawl_domain, ignore_robots)
-                           VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""",
-                        (url, title, description, 'active', 1440, False, False)
+                        """INSERT INTO urls (url, title, description, status, refresh_interval_minutes, crawl_domain, ignore_robots, snapshot_enabled)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+                        (url, title, description, 'active', 1440, False, False, default_snapshot_enabled)
                     )
                     url_id = cursor.fetchone()['id']
                     conn.commit()
@@ -103,8 +106,9 @@ class PostgreSQLURLManager:
                 with conn.cursor() as cursor:
                     cursor.execute(
                         """
-                        SELECT id, url, title, description, status, refresh_interval_minutes, 
-                               crawl_domain, ignore_robots, last_crawled, metadata, created_at, updated_at,
+               SELECT id, url, title, description, status, refresh_interval_minutes, 
+                   crawl_domain, ignore_robots, snapshot_enabled, snapshot_retention_days, snapshot_max_snapshots,
+                   last_crawled, metadata, created_at, updated_at,
                             CASE 
                                 WHEN refresh_interval_minutes IS NOT NULL 
                                      AND refresh_interval_minutes > 0 
@@ -130,6 +134,8 @@ class PostgreSQLURLManager:
                         # Map PostgreSQL columns to SQLite equivalents
                         url_dict['added_date'] = url_dict['created_at']
                         url_dict['last_scraped'] = url_dict['last_crawled']
+                        # Normalize snapshot flags
+                        url_dict['snapshot_enabled'] = 1 if url_dict.get('snapshot_enabled') else 0
                         
                         # Convert datetime objects to strings for JSON serialization
                         for key, value in url_dict.items():
@@ -192,13 +198,10 @@ class PostgreSQLURLManager:
                         url_dict = dict(row)
                         url_dict['id'] = str(url_dict['id'])
                         
-                        # Parse metadata for SQLite compatibility
-                        if url_dict.get('metadata'):
-                            metadata = url_dict['metadata']
-                            url_dict['description'] = metadata.get('description')
-                            url_dict['refresh_interval_minutes'] = metadata.get('refresh_interval_minutes', 1440)
-                            url_dict['crawl_domain'] = 1 if metadata.get('crawl_domain') else 0
-                            url_dict['ignore_robots'] = 1 if metadata.get('ignore_robots') else 0
+                        # Normalize booleans for UI compatibility
+                        url_dict['crawl_domain'] = 1 if url_dict.get('crawl_domain') else 0
+                        url_dict['ignore_robots'] = 1 if url_dict.get('ignore_robots') else 0
+                        url_dict['snapshot_enabled'] = 1 if url_dict.get('snapshot_enabled') else 0
                         
                         # Map PostgreSQL columns to SQLite equivalents
                         url_dict['added_date'] = url_dict['created_at']
@@ -216,7 +219,8 @@ class PostgreSQLURLManager:
 
     def update_url_metadata(self, url_id: int, title: Optional[str], description: Optional[str], 
                            refresh_interval_minutes: Optional[int], crawl_domain: Optional[int], 
-                           ignore_robots: Optional[int]) -> Dict[str, Any]:
+                           ignore_robots: Optional[int], snapshot_enabled: Optional[int] = None,
+                           snapshot_retention_days: Optional[int] = None, snapshot_max_snapshots: Optional[int] = None) -> Dict[str, Any]:
         """Update URL metadata."""
         try:
             with self.postgres.get_connection() as conn:
@@ -234,10 +238,20 @@ class PostgreSQLURLManager:
                            description = %s, 
                            refresh_interval_minutes = %s, 
                            crawl_domain = %s, 
-                           ignore_robots = %s, 
+                           ignore_robots = %s,
+                           snapshot_enabled = COALESCE(%s, snapshot_enabled),
+                           snapshot_retention_days = %s,
+                           snapshot_max_snapshots = %s,
                            updated_at = NOW() 
                            WHERE id = %s""",
-                        (title, description, refresh_interval_minutes, bool(crawl_domain) if crawl_domain is not None else None, bool(ignore_robots) if ignore_robots is not None else None, str(url_id))
+                        (
+                            title, description, refresh_interval_minutes,
+                            bool(crawl_domain) if crawl_domain is not None else None,
+                            bool(ignore_robots) if ignore_robots is not None else None,
+                            bool(snapshot_enabled) if snapshot_enabled is not None else None,
+                            snapshot_retention_days, snapshot_max_snapshots,
+                            str(url_id)
+                        )
                     )
                     conn.commit()
                     return {"success": cursor.rowcount > 0}

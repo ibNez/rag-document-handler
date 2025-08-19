@@ -133,6 +133,9 @@ class PostgreSQLManager:
             refresh_interval_minutes INTEGER DEFAULT 1440,
             crawl_domain BOOLEAN DEFAULT FALSE,
             ignore_robots BOOLEAN DEFAULT FALSE,
+            snapshot_enabled BOOLEAN DEFAULT FALSE,
+            snapshot_retention_days INTEGER,
+            snapshot_max_snapshots INTEGER,
             metadata JSONB DEFAULT '{}',
             created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
             updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
