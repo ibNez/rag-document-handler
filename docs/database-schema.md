@@ -69,6 +69,9 @@ CREATE TABLE urls (
     refresh_interval_minutes INTEGER DEFAULT 1440,
     crawl_domain BOOLEAN DEFAULT FALSE,
     ignore_robots BOOLEAN DEFAULT FALSE,
+    snapshot_enabled BOOLEAN DEFAULT FALSE,
+    snapshot_retention_days INTEGER,
+    snapshot_max_snapshots INTEGER,
     metadata JSONB DEFAULT '{}',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -91,9 +94,45 @@ CREATE TABLE urls (
 | `refresh_interval_minutes` | INTEGER | Refresh frequency in minutes | DEFAULT 1440 (24 hours) |
 | `crawl_domain` | BOOLEAN | Whether to crawl entire domain | DEFAULT FALSE |
 | `ignore_robots` | BOOLEAN | Whether to ignore robots.txt | DEFAULT FALSE |
+| `snapshot_enabled` | BOOLEAN | Enable point-in-time snapshots for this URL | DEFAULT FALSE |
+| `snapshot_retention_days` | INTEGER | Retain snapshots for N days (NULL = unlimited) | Optional |
+| `snapshot_max_snapshots` | INTEGER | Max number of snapshots to keep (NULL = unlimited) | Optional |
 | `metadata` | JSONB | Additional extensible metadata | DEFAULT '{}' |
 | `created_at` | TIMESTAMP | Record creation time | DEFAULT CURRENT_TIMESTAMP |
 | `updated_at` | TIMESTAMP | Last record update | DEFAULT CURRENT_TIMESTAMP |
+
+### URL Snapshots Table
+
+Stores point-in-time captures for crawled URLs and links to stored artifacts.
+
+```sql
+CREATE TABLE url_snapshots (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    url_id UUID NOT NULL REFERENCES urls(id) ON DELETE CASCADE,
+    snapshot_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    pdf_document_id VARCHAR,
+    mhtml_document_id VARCHAR,
+    sha256 TEXT,
+    notes TEXT
+);
+```
+
+#### Field Descriptions
+
+| Field | Type | Description | Constraints |
+|-------|------|-------------|-------------|
+| `id` | UUID | Snapshot identifier | PRIMARY KEY, DEFAULT gen_random_uuid() |
+| `url_id` | UUID | Associated URL | NOT NULL, FK → urls.id |
+| `snapshot_ts` | TIMESTAMP | Capture timestamp (UTC) | DEFAULT CURRENT_TIMESTAMP |
+| `pdf_document_id` | VARCHAR | Reference to PDF in documents | Optional |
+| `mhtml_document_id` | VARCHAR | Reference to MHTML in documents | Optional |
+| `sha256` | TEXT | Hash of canonical page text used for embeddings | Optional |
+| `notes` | TEXT | Additional capture details | Optional |
+
+Notes:
+- Artifact binaries (PDF/MHTML) are stored on disk; `documents` table tracks metadata and paths.
+- Milvus `document_id` for URL embeddings should be set to `url_snapshots.id` to ensure point-in-time traceability.
+- Snapshot capture is controlled per-URL via `urls.snapshot_enabled`; retention can be enforced via `snapshot_retention_days` and/or `snapshot_max_snapshots`.
 
 ### Email Accounts Table
 
@@ -250,7 +289,23 @@ index_params = {
 ```
 
 ### URL Crawl → Milvus
+When `urls.snapshot_enabled = true`, use the snapshot id to ensure point-in-time traceability; otherwise fall back to the URL id.
+
 ```python
+# If snapshots enabled for this URL
+{
+    "document_id": snapshot_id,  # from url_snapshots.id
+    "source": url,
+    "page": chunk_index,
+    "chunk_id": f"{snapshot_id}:{chunk_index}",
+    "topic": page_title,
+    "category": "url",
+    "content_hash": f"url_{snapshot_id}_{chunk_index}",
+    "content_length": len(text_chunk),
+    "text": text_chunk
+}
+
+# If snapshots disabled for this URL
 {
     "document_id": url_id,
     "source": url,

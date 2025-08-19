@@ -383,6 +383,15 @@
                                                                 <span class="badge rounded-pill bg-secondary ms-1" title="Crawl-delay from robots.txt">Delay {{ '%.1f'|format(url.robots_crawl_delay) }}s</span>
                                                             {% endif %}
                                                         {% endif %}
+                                                        {% if url.snapshot_enabled %}
+                                                            <span class="badge rounded-pill bg-primary ms-1" title="Snapshots enabled for this URL"><i class="fas fa-camera me-1"></i>Snapshots On</span>
+                                                            {% if url.snapshot_retention_days is not none %}
+                                                                <span class="badge rounded-pill bg-light text-dark ms-1" title="Retention days">{{ url.snapshot_retention_days }}d</span>
+                                                            {% endif %}
+                                                            {% if url.snapshot_max_snapshots is not none %}
+                                                                <span class="badge rounded-pill bg-light text-dark ms-1" title="Max snapshots">{{ url.snapshot_max_snapshots }} max</span>
+                                                            {% endif %}
+                                                        {% endif %}
                                                     </div>
                                                 </td>
                                                 <td class="small">
@@ -465,6 +474,29 @@
                                                                 Ignore robots.txt for this URL
                                                             </label>
                                                             <div class="form-text text-warning">Use with caution. This may violate site policies; ensure you have permission to crawl.</div>
+                                                        </div>
+                                                        <hr>
+                                                        <div class="mb-2">
+                                                            <label class="form-label mb-1">Snapshots</label>
+                                                            <div class="form-check">
+                                                                <input class="form-check-input" type="checkbox" name="snapshot_enabled" id="snapshotEnabled-{{ url.id }}" {% if url.snapshot_enabled %}checked{% endif %}>
+                                                                <label class="form-check-label" for="snapshotEnabled-{{ url.id }}">
+                                                                    Enable point-in-time snapshots for this URL (Suggested for sites that change a lot.)
+                                                                </label>
+                                                            </div>
+                                                            <div class="row mt-2">
+                                                                <div class="col-md-6 mb-2">
+                                                                    <label class="form-label">Retention (days)</label>
+                                                                    <input type="number" class="form-control" name="snapshot_retention_days" min="0" step="1" value="{{ url.snapshot_retention_days if url.snapshot_retention_days is not none else '' }}" placeholder="Unlimited">
+                                                                    <div class="form-text">Leave blank for unlimited days.</div>
+                                                                </div>
+                                                                <div class="col-md-6 mb-2">
+                                                                    <label class="form-label">Max snapshots</label>
+                                                                    <input type="number" class="form-control" name="snapshot_max_snapshots" min="0" step="1" value="{{ url.snapshot_max_snapshots if url.snapshot_max_snapshots is not none else '' }}" placeholder="Unlimited">
+                                                                    <div class="form-text">Leave blank for unlimited copies.</div>
+                                                                </div>
+                                                            </div>
+                                                            <div class="form-text">Artifacts will be stored under {{ config.SNAPSHOT_DIR if config else 'uploaded/snapshots' }}.</div>
                                                         </div>
                                                     </div>
                                                     <div class="modal-footer">

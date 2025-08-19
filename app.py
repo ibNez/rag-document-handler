@@ -162,6 +162,12 @@ class Config:
     USE_POSTGRESQL_URL_MANAGER: bool = os.getenv('USE_POSTGRESQL_URL_MANAGER', 'false').lower() == 'true'
     POSTGRES_MIGRATION_MODE: str = os.getenv('POSTGRES_MIGRATION_MODE', 'disabled')  # disabled, testing, enabled
 
+    # URL Snapshot settings (per-URL control; this is only a default for new URLs)
+    SNAPSHOT_DEFAULT_ENABLED: bool = os.getenv('SNAPSHOT_DEFAULT_ENABLED', 'false').lower() == 'true'
+    SNAPSHOT_DIR: str = os.getenv('SNAPSHOT_DIR', os.path.join('uploaded', 'snapshots'))
+    SNAPSHOT_FORMATS: list[str] = field(default_factory=lambda: os.getenv('SNAPSHOT_FORMATS', 'pdf,mhtml').split(','))
+    SNAPSHOT_TIMEOUT_SECONDS: int = int(os.getenv('SNAPSHOT_TIMEOUT_SECONDS', '60'))
+
 
 @dataclass
 class ProcessingStatus:
@@ -586,7 +592,18 @@ class URLManager:
             logger.error(f"Error getting URL by id: {e}")
             return None
 
-    def update_url_metadata(self, url_id: int, title: Optional[str], description: Optional[str], refresh_interval_minutes: Optional[int], crawl_domain: Optional[int], ignore_robots: Optional[int]) -> Dict[str, Any]:
+    def update_url_metadata(
+        self,
+        url_id: int,
+        title: Optional[str],
+        description: Optional[str],
+        refresh_interval_minutes: Optional[int],
+        crawl_domain: Optional[int],
+        ignore_robots: Optional[int],
+        snapshot_enabled: Optional[int] = None,
+        snapshot_retention_days: Optional[int] = None,
+        snapshot_max_snapshots: Optional[int] = None,
+    ) -> Dict[str, Any]:
         try:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
@@ -2350,6 +2367,10 @@ class RAGKnowledgebaseManager:
             refresh_raw = request.form.get('refresh_interval_minutes')
             crawl_domain_flag = 1 if request.form.get('crawl_domain') in ('on', '1', 'true', 'True') else 0
             ignore_robots_flag = 1 if request.form.get('ignore_robots') in ('on', '1', 'true', 'True') else 0
+            snapshot_enabled_flag = 1 if request.form.get('snapshot_enabled') in ('on', '1', 'true', 'True') else 0
+            # Optional retention fields
+            sr_raw = request.form.get('snapshot_retention_days')
+            sm_raw = request.form.get('snapshot_max_snapshots')
             refresh_interval_minutes = None
             if refresh_raw:
                 try:
@@ -2358,7 +2379,28 @@ class RAGKnowledgebaseManager:
                         refresh_interval_minutes = None
                 except ValueError:
                     refresh_interval_minutes = None
-            result = self.url_manager.update_url_metadata(url_id, title, description, refresh_interval_minutes, crawl_domain_flag, ignore_robots_flag)
+            snapshot_retention_days = None
+            snapshot_max_snapshots = None
+            try:
+                if sr_raw and sr_raw.strip() != '':
+                    v = int(sr_raw)
+                    if v >= 0:
+                        snapshot_retention_days = v
+            except ValueError:
+                snapshot_retention_days = None
+            try:
+                if sm_raw and sm_raw.strip() != '':
+                    v = int(sm_raw)
+                    if v >= 0:
+                        snapshot_max_snapshots = v
+            except ValueError:
+                snapshot_max_snapshots = None
+
+            result = self.url_manager.update_url_metadata(
+                url_id, title, description, refresh_interval_minutes,
+                crawl_domain_flag, ignore_robots_flag,
+                snapshot_enabled_flag, snapshot_retention_days, snapshot_max_snapshots
+            )
             if result.get('success'):
                 flash('URL metadata updated', 'success')
             else:

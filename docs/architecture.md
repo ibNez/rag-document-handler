@@ -199,6 +199,33 @@ sequenceDiagram
     Note over Scheduler: Background scheduler<br/>triggers periodic re-crawling
 ```
 
+### URL Snapshots (Point-in-time capture)
+
+To ensure search results reference the exact version of a web page used for embeddings, the system supports point-in-time snapshots for URLs:
+
+- Two artifacts are captured per successful crawl:
+    - PDF: human-friendly rendering of the page at time of crawl
+    - MHTML: single-file archive preserving assets for high-fidelity replay
+- Files are stored locally (configurable base dir via `SNAPSHOT_DIR`, default `uploaded/snapshots`), and each capture is linked to its URL via a `url_snapshots` record.
+- For URL embeddings, the Milvus `document_id` is set to the snapshot id, guaranteeing that retrieved chunks can be traced to a specific snapshot.
+
+Storage layout (example):
+- `uploaded/snapshots/{url_id}/{UTC_ISO8601}/page.pdf`
+- `uploaded/snapshots/{url_id}/{UTC_ISO8601}/page.mhtml`
+- `uploaded/snapshots/{url_id}/{UTC_ISO8601}/metadata.json`
+
+Milvus mapping for URL snapshots:
+- `document_id` = snapshot_id (UUID)
+- `source` = original URL
+- `topic` = extracted page title
+- `category` = "url"
+- `chunk_id` = `{snapshot_id}:{chunk_index}`
+
+Operational notes:
+- Snapshots are optional and controlled per-URL via `urls.snapshot_enabled` (default for new URLs comes from `SNAPSHOT_DEFAULT_ENABLED`).
+- Retention can be enforced (max snapshots per URL or days to keep).
+- Files are served read-only; database stores metadata and linkages.
+
 ### Email Processing Flow
 
 ```mermaid
