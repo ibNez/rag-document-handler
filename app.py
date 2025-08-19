@@ -158,6 +158,10 @@ class Config:
     EMAIL_SYNC_INTERVAL_SECONDS: int = int(os.getenv('EMAIL_SYNC_INTERVAL_SECONDS', '300'))
     EMAIL_DEFAULT_REFRESH_MINUTES: int = int(os.getenv('EMAIL_DEFAULT_REFRESH_MINUTES', '5'))
 
+    # PostgreSQL Migration Feature Flags
+    USE_POSTGRESQL_URL_MANAGER: bool = os.getenv('USE_POSTGRESQL_URL_MANAGER', 'false').lower() == 'true'
+    POSTGRES_MIGRATION_MODE: str = os.getenv('POSTGRES_MIGRATION_MODE', 'disabled')  # disabled, testing, enabled
+
 
 @dataclass
 class ProcessingStatus:
@@ -1417,7 +1421,35 @@ class RAGKnowledgebaseManager:
         # Initialize components
         self.document_processor = DocumentProcessor(self.config)
         self.milvus_manager = MilvusManager(self.config)
-        self.url_manager = URLManager()
+        
+        # Initialize PostgreSQL manager for metadata
+        from ingestion.postgres_manager import PostgreSQLManager, PostgreSQLConfig
+        from ingestion.database_manager import RAGDatabaseManager
+        postgres_config = PostgreSQLConfig(
+            host=self.config.POSTGRES_HOST,
+            port=self.config.POSTGRES_PORT,
+            database=self.config.POSTGRES_DB,
+            user=self.config.POSTGRES_USER,
+            password=self.config.POSTGRES_PASSWORD
+        )
+        self.postgres_manager = PostgreSQLManager(postgres_config)
+        self.database_manager = RAGDatabaseManager(postgres_config)
+        logger.info("PostgreSQL integration initialized successfully")
+        
+        # Initialize URL manager based on feature flags
+        if self.config.USE_POSTGRESQL_URL_MANAGER or self.config.POSTGRES_MIGRATION_MODE == 'enabled':
+            logger.info("Initializing PostgreSQL URL Manager")
+            try:
+                from ingestion.postgresql_url_manager import PostgreSQLURLManager
+                self.url_manager = PostgreSQLURLManager(self.postgres_manager)
+                logger.info("PostgreSQL URL Manager initialized successfully")
+            except ImportError as e:
+                logger.error(f"Failed to import PostgreSQL URL Manager: {e}")
+                logger.info("Falling back to SQLite URL Manager")
+                self.url_manager = URLManager()
+        else:
+            logger.info("Initializing SQLite URL Manager (default)")
+            self.url_manager = URLManager()
         # Processing status tracking
         self.processing_status: Dict[str, ProcessingStatus] = {}
         # URL refresh status tracking (keyed by url_id)
@@ -1449,24 +1481,55 @@ class RAGKnowledgebaseManager:
             except Exception as e:
                 logger.error(f"Failed to start scheduler: {e}")
 
-        # Start email orchestrator if enabled
+        # Start email orchestrator (works with both SQLite and PostgreSQL)
         try:
-            email_conn = sqlite3.connect(self.url_manager.db_path, check_same_thread=False)
-            self.email_account_manager = EmailAccountManager(email_conn)
-            
-            # Ensure vector store is initialized before passing to EmailProcessor
-            self.milvus_manager._ensure_vector_store()
-            
-            # Create EmailProcessor with persistent database and vector store
-            email_processor = EmailProcessor(
-                milvus=self.milvus_manager.vector_store,
-                sqlite_conn=email_conn,
-                embedding_model=self.milvus_manager.langchain_embeddings
-            )
-            
-            self.email_orchestrator = EmailOrchestrator(
-                self.config, self.email_account_manager, email_processor
-            )
+            if Config.USE_POSTGRESQL_URL_MANAGER:
+                # Use PostgreSQL email manager
+                from ingestion.postgresql_email_manager import PostgreSQLEmailManager
+                from ingestion.postgres_manager import PostgreSQLManager
+                
+                postgres_manager = PostgreSQLManager()
+                self.email_account_manager = PostgreSQLEmailManager(postgres_manager)
+                
+                # Ensure vector store is initialized before passing to EmailProcessor
+                self.milvus_manager._ensure_vector_store()
+                
+                # Create EmailProcessor with minimal SQLite for compatibility
+                from ingestion.email.processor import EmailProcessor
+                email_conn = sqlite3.connect(":memory:", check_same_thread=False)
+                email_processor = EmailProcessor(
+                    milvus=self.milvus_manager.vector_store,
+                    sqlite_conn=email_conn,  # Use in-memory SQLite for processor compatibility
+                    embedding_model=self.milvus_manager.langchain_embeddings
+                )
+                
+                from ingestion.email.orchestrator import EmailOrchestrator
+                self.email_orchestrator = EmailOrchestrator(
+                    self.config, self.email_account_manager, email_processor
+                )
+                logger.info("PostgreSQL Email orchestrator initialized successfully")
+            else:
+                # Use SQLite email manager (original implementation)
+                email_conn = sqlite3.connect(self.url_manager.db_path, check_same_thread=False)
+                from ingestion.email.account_manager import EmailAccountManager
+                self.email_account_manager = EmailAccountManager(email_conn)
+                
+                # Ensure vector store is initialized before passing to EmailProcessor
+                self.milvus_manager._ensure_vector_store()
+                
+                # Create EmailProcessor with persistent database and vector store
+                from ingestion.email.processor import EmailProcessor
+                email_processor = EmailProcessor(
+                    milvus=self.milvus_manager.vector_store,
+                    sqlite_conn=email_conn,
+                    embedding_model=self.milvus_manager.langchain_embeddings
+                )
+                
+                from ingestion.email.orchestrator import EmailOrchestrator
+                self.email_orchestrator = EmailOrchestrator(
+                    self.config, self.email_account_manager, email_processor
+                )
+                logger.info("SQLite Email orchestrator initialized successfully")
         except Exception as e:
             logger.error(f"Failed to start email orchestrator: {e}")
 
@@ -1526,27 +1589,33 @@ class RAGKnowledgebaseManager:
                 'top_keywords': []
             }
             try:
-                with sqlite3.connect(self.url_manager.db_path) as conn:
-                    conn.row_factory = sqlite3.Row
-                    cur = conn.cursor()
-                    cur.execute("SELECT COUNT(*) as c, AVG(word_count) as aw, AVG(chunk_count) as ac, AVG(median_chunk_chars) as mc FROM documents")
-                    row = cur.fetchone()
-                    if row:
-                        kb_meta['documents_total'] = int(row['c'] or 0)
-                        kb_meta['avg_words_per_doc'] = int(row['aw'] or 0)
-                        kb_meta['avg_chunks_per_doc'] = int(row['ac'] or 0)
-                        kb_meta['median_chunk_chars'] = int(row['mc'] or 0)
-                    # Aggregate top keywords across docs (flatten and count)
-                    cur.execute("SELECT top_keywords FROM documents WHERE top_keywords IS NOT NULL")
-                    kw_counts = {}
-                    for (kw_json,) in cur.fetchall():
-                        try:
-                            kws = json.loads(kw_json) if kw_json else []
-                            for k in kws:
-                                kw_counts[k] = kw_counts.get(k, 0) + 1
-                        except Exception:
-                            continue
-                    kb_meta['top_keywords'] = [k for k,_ in sorted(kw_counts.items(), key=lambda x: x[1], reverse=True)[:10]]
+                if Config.USE_POSTGRESQL_URL_MANAGER and hasattr(self.url_manager, 'get_knowledgebase_metadata'):
+                    # Use PostgreSQL URL manager for metadata
+                    kb_stats = self.url_manager.get_knowledgebase_metadata()
+                    kb_meta.update(kb_stats)
+                else:
+                    # Original SQLite approach
+                    with sqlite3.connect(self.url_manager.db_path) as conn:
+                        conn.row_factory = sqlite3.Row
+                        cur = conn.cursor()
+                        cur.execute("SELECT COUNT(*) as c, AVG(word_count) as aw, AVG(chunk_count) as ac, AVG(median_chunk_chars) as mc FROM documents")
+                        row = cur.fetchone()
+                        if row:
+                            kb_meta['documents_total'] = int(row['c'] or 0)
+                            kb_meta['avg_words_per_doc'] = int(row['aw'] or 0)
+                            kb_meta['avg_chunks_per_doc'] = int(row['ac'] or 0)
+                            kb_meta['median_chunk_chars'] = int(row['mc'] or 0)
+                        # Aggregate top keywords across docs (flatten and count)
+                        cur.execute("SELECT top_keywords FROM documents WHERE top_keywords IS NOT NULL")
+                        kw_counts = {}
+                        for (kw_json,) in cur.fetchall():
+                            try:
+                                kws = json.loads(kw_json) if kw_json else []
+                                for k in kws:
+                                    kw_counts[k] = kw_counts.get(k, 0) + 1
+                            except Exception:
+                                continue
+                        kb_meta['top_keywords'] = [k for k,_ in sorted(kw_counts.items(), key=lambda x: x[1], reverse=True)[:10]]
             except Exception as e:
                 logger.warning(f"KB meta aggregation failed: {e}")
 
@@ -1561,30 +1630,36 @@ class RAGKnowledgebaseManager:
                 'due_now': 0,
             }
             try:
-                with sqlite3.connect(self.url_manager.db_path) as conn:
-                    conn.row_factory = sqlite3.Row
-                    cur = conn.cursor()
-                    cur.execute(
-                        """
-                        SELECT
-                          COUNT(*) AS total,
-                          SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) AS active,
-                          SUM(CASE WHEN crawl_domain = 1 THEN 1 ELSE 0 END) AS crawl_on,
-                          SUM(CASE WHEN ignore_robots = 1 THEN 1 ELSE 0 END) AS robots_ignored,
-                          SUM(CASE WHEN last_scraped IS NOT NULL THEN 1 ELSE 0 END) AS scraped,
-                          SUM(CASE WHEN last_scraped IS NULL THEN 1 ELSE 0 END) AS never_scraped,
-                          SUM(CASE
-                                WHEN refresh_interval_minutes IS NOT NULL AND refresh_interval_minutes > 0 AND (
-                                      (last_scraped IS NOT NULL AND datetime(last_scraped, '+' || refresh_interval_minutes || ' minutes') <= datetime('now'))
-                                   OR (last_scraped IS NULL)
-                                )
-                                THEN 1 ELSE 0 END) AS due_now
-                        FROM urls
-                        """
-                    )
-                    row = cur.fetchone()
-                    if row:
-                        url_meta = {k: int(row[k] or 0) for k in url_meta.keys()}
+                if Config.USE_POSTGRESQL_URL_MANAGER and hasattr(self.url_manager, 'get_url_metadata_stats'):
+                    # Use PostgreSQL URL manager for metadata
+                    url_stats = self.url_manager.get_url_metadata_stats()
+                    url_meta.update(url_stats)
+                else:
+                    # Original SQLite approach
+                    with sqlite3.connect(self.url_manager.db_path) as conn:
+                        conn.row_factory = sqlite3.Row
+                        cur = conn.cursor()
+                        cur.execute(
+                            """
+                            SELECT
+                              COUNT(*) AS total,
+                              SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) AS active,
+                              SUM(CASE WHEN crawl_domain = 1 THEN 1 ELSE 0 END) AS crawl_on,
+                              SUM(CASE WHEN ignore_robots = 1 THEN 1 ELSE 0 END) AS robots_ignored,
+                              SUM(CASE WHEN last_scraped IS NOT NULL THEN 1 ELSE 0 END) AS scraped,
+                              SUM(CASE WHEN last_scraped IS NULL THEN 1 ELSE 0 END) AS never_scraped,
+                              SUM(CASE
+                                    WHEN refresh_interval_minutes IS NOT NULL AND refresh_interval_minutes > 0 AND (
+                                          (last_scraped IS NOT NULL AND datetime(last_scraped, '+' || refresh_interval_minutes || ' minutes') <= datetime('now'))
+                                       OR (last_scraped IS NULL)
+                                    )
+                                    THEN 1 ELSE 0 END) AS due_now
+                            FROM urls
+                            """
+                        )
+                        row = cur.fetchone()
+                        if row:
+                            url_meta = {k: int(row[k] or 0) for k in url_meta.keys()}
             except Exception as e:
                 logger.warning(f"URL meta aggregation failed: {e}")
             
@@ -1615,9 +1690,19 @@ class RAGKnowledgebaseManager:
             # Get configured email accounts
             email_accounts: List[Dict[str, Any]] = []
             try:
-                with sqlite3.connect(self.url_manager.db_path) as conn:
-                    manager = EmailAccountManager(conn)
-                    email_accounts = manager.list_accounts(include_password=False)
+                if Config.USE_POSTGRESQL_URL_MANAGER:
+                    # Use PostgreSQL email manager
+                    if hasattr(self, 'email_account_manager') and self.email_account_manager:
+                        email_accounts = self.email_account_manager.list_accounts(include_password=False)
+                    else:
+                        logger.info("PostgreSQL email manager not available")
+                        email_accounts = []
+                else:
+                    # Original SQLite email account loading
+                    with sqlite3.connect(self.url_manager.db_path) as conn:
+                        from ingestion.email.account_manager import EmailAccountManager
+                        manager = EmailAccountManager(conn)
+                        email_accounts = manager.list_accounts(include_password=False)
             except Exception as e:
                 logger.warning(f"Failed to load email accounts: {e}")
 
@@ -1636,65 +1721,82 @@ class RAGKnowledgebaseManager:
                 'most_active_account': None
             }
             try:
-                with sqlite3.connect(self.url_manager.db_path) as conn:
-                    conn.row_factory = sqlite3.Row
-                    cur = conn.cursor()
-                    
-                    # Account statistics
-                    cur.execute("""
-                        SELECT 
-                            COUNT(*) as total_accounts,
-                            SUM(CASE WHEN refresh_interval_minutes IS NOT NULL AND refresh_interval_minutes > 0 THEN 1 ELSE 0 END) as active_accounts,
-                            SUM(CASE WHEN last_synced IS NULL THEN 1 ELSE 0 END) as never_synced,
-                            SUM(CASE 
-                                WHEN refresh_interval_minutes IS NOT NULL AND refresh_interval_minutes > 0 AND (
-                                    (last_synced IS NOT NULL AND datetime(last_synced, '+' || refresh_interval_minutes || ' minutes') <= datetime('now'))
-                                    OR (last_synced IS NULL)
-                                )
-                                THEN 1 ELSE 0 END) as due_now
-                        FROM email_accounts
-                    """)
-                    row = cur.fetchone()
-                    if row:
-                        email_meta['total_accounts'] = int(row['total_accounts'] or 0)
-                        email_meta['active_accounts'] = int(row['active_accounts'] or 0)
-                        email_meta['never_synced'] = int(row['never_synced'] or 0)
-                        email_meta['due_now'] = int(row['due_now'] or 0)
-                    
-                    # Email content statistics
-                    cur.execute("""
-                        SELECT 
-                            COUNT(*) as total_emails,
-                            COUNT(DISTINCT from_addr) as unique_senders,
-                            SUM(CASE WHEN has_attachments = 1 THEN 1 ELSE 0 END) as emails_with_attachments,
-                            MAX(date_utc) as latest_email_date,
-                            AVG(raw_size_bytes) as avg_email_size
-                        FROM emails
-                    """)
-                    row = cur.fetchone()
-                    if row:
-                        email_meta['total_emails'] = int(row['total_emails'] or 0)
-                        email_meta['unique_senders'] = int(row['unique_senders'] or 0)
-                        email_meta['emails_with_attachments'] = int(row['emails_with_attachments'] or 0)
-                        email_meta['latest_email_date'] = row['latest_email_date']
-                        email_meta['avg_email_size'] = round(float(row['avg_email_size'] or 0), 1)
-                    
-                    # Calculate average emails per account
-                    if email_meta['total_accounts'] > 0:
-                        email_meta['avg_emails_per_account'] = round(email_meta['total_emails'] / email_meta['total_accounts'], 1)
-                    
-                    # Find most active account (by email count)
-                    cur.execute("""
-                        SELECT ea.account_name, COUNT(e.id) as email_count
-                        FROM email_accounts ea
-                        LEFT JOIN emails e ON ea.email_address = e.from_addr OR ea.email_address = e.to_primary
-                        GROUP BY ea.id, ea.account_name
-                        ORDER BY email_count DESC
-                        LIMIT 1
-                    """)
-                    row = cur.fetchone()
-                    if row and row['email_count'] > 0:
-                        email_meta['most_active_account'] = row['account_name']
+                if Config.USE_POSTGRESQL_URL_MANAGER:
+                    # Use PostgreSQL email manager for meta aggregation
+                    if hasattr(self, 'email_account_manager') and self.email_account_manager:
+                        # Check if this is the PostgreSQL implementation that has get_account_stats
+                        if hasattr(self.email_account_manager, 'get_account_stats'):
+                            try:
+                                email_stats = getattr(self.email_account_manager, 'get_account_stats')()
+                                email_meta.update(email_stats)
+                                logger.debug("Email meta aggregation completed using PostgreSQL")
+                            except Exception as e:
+                                logger.warning(f"PostgreSQL email stats failed: {e}")
+                        else:
+                            logger.info("Email meta aggregation skipped - PostgreSQL stats method not available")
+                    else:
+                        logger.info("Email meta aggregation skipped - PostgreSQL email manager not available")
+                else:
+                    # Original SQLite email meta aggregation
+                    with sqlite3.connect(self.url_manager.db_path) as conn:
+                        conn.row_factory = sqlite3.Row
+                        cur = conn.cursor()
+                        
+                        # Account statistics
+                        cur.execute("""
+                            SELECT 
+                                COUNT(*) as total_accounts,
+                                SUM(CASE WHEN refresh_interval_minutes IS NOT NULL AND refresh_interval_minutes > 0 THEN 1 ELSE 0 END) as active_accounts,
+                                SUM(CASE WHEN last_synced IS NULL THEN 1 ELSE 0 END) as never_synced,
+                                SUM(CASE 
+                                    WHEN refresh_interval_minutes IS NOT NULL AND refresh_interval_minutes > 0 AND (
+                                        (last_synced IS NOT NULL AND datetime(last_synced, '+' || refresh_interval_minutes || ' minutes') <= datetime('now'))
+                                        OR (last_synced IS NULL)
+                                    )
+                                    THEN 1 ELSE 0 END) as due_now
+                            FROM email_accounts
+                        """)
+                        row = cur.fetchone()
+                        if row:
+                            email_meta['total_accounts'] = int(row['total_accounts'] or 0)
+                            email_meta['active_accounts'] = int(row['active_accounts'] or 0)
+                            email_meta['never_synced'] = int(row['never_synced'] or 0)
+                            email_meta['due_now'] = int(row['due_now'] or 0)
+                        
+                        # Email content statistics
+                        cur.execute("""
+                            SELECT 
+                                COUNT(*) as total_emails,
+                                COUNT(DISTINCT from_addr) as unique_senders,
+                                SUM(CASE WHEN has_attachments = 1 THEN 1 ELSE 0 END) as emails_with_attachments,
+                                MAX(date_utc) as latest_email_date,
+                                AVG(raw_size_bytes) as avg_email_size
+                            FROM emails
+                        """)
+                        row = cur.fetchone()
+                        if row:
+                            email_meta['total_emails'] = int(row['total_emails'] or 0)
+                            email_meta['unique_senders'] = int(row['unique_senders'] or 0)
+                            email_meta['emails_with_attachments'] = int(row['emails_with_attachments'] or 0)
+                            email_meta['latest_email_date'] = row['latest_email_date']
+                            email_meta['avg_email_size'] = round(float(row['avg_email_size'] or 0), 1)
+                        
+                        # Calculate average emails per account
+                        if email_meta['total_accounts'] > 0:
+                            email_meta['avg_emails_per_account'] = round(email_meta['total_emails'] / email_meta['total_accounts'], 1)
+                        
+                        # Find most active account (by email count)
+                        cur.execute("""
+                            SELECT ea.account_name, COUNT(e.id) as email_count
+                            FROM email_accounts ea
+                            LEFT JOIN emails e ON ea.email_address = e.from_addr OR ea.email_address = e.to_primary
+                            GROUP BY ea.id, ea.account_name
+                            ORDER BY email_count DESC
+                            LIMIT 1
+                        """)
+                        row = cur.fetchone()
+                        if row and row['email_count'] > 0:
+                            email_meta['most_active_account'] = row['account_name']
                         
             except Exception as e:
                 logger.warning(f"Email meta aggregation failed: {e}")
@@ -1833,11 +1935,17 @@ class RAGKnowledgebaseManager:
                 })
             return jsonify({'status': 'not_found'})
 
-        @self.app.route('/url_status/<int:url_id>')
-        def get_url_status(url_id: int):
+        @self.app.route('/url_status/<url_id>')
+        def get_url_status(url_id):
             """Get processing status for a URL refresh.
             When background status is gone, also return final DB state (last_update_status, last_scraped, next_refresh).
             """
+            # Convert string ID to int if using SQLite (for backward compatibility)
+            if not Config.USE_POSTGRESQL_URL_MANAGER:
+                try:
+                    url_id = int(url_id)
+                except ValueError:
+                    return jsonify({'status': 'invalid_id'})
             status = self.url_processing_status.get(url_id)
             if status:
                 return jsonify({
@@ -1979,9 +2087,7 @@ class RAGKnowledgebaseManager:
         def list_email_accounts():
             """Return JSON list of configured email accounts."""
             try:
-                with sqlite3.connect(self.url_manager.db_path) as conn:
-                    manager = EmailAccountManager(conn)
-                    accounts = manager.list_accounts(include_password=False)
+                accounts = self.email_account_manager.list_accounts(include_password=False)
                 return jsonify(accounts)
             except Exception as e:
                 logger.error(f"Failed to fetch email accounts: {e}")
@@ -2035,9 +2141,7 @@ class RAGKnowledgebaseManager:
             }
 
             try:
-                with sqlite3.connect(self.url_manager.db_path) as conn:
-                    manager = EmailAccountManager(conn)
-                    manager.create_account(record)
+                self.email_account_manager.create_account(record)
                 logger.info("Email account '%s' added successfully", account_name)
                 flash('Email account added successfully', 'success')
             except Exception as e:
@@ -2100,9 +2204,7 @@ class RAGKnowledgebaseManager:
                 return redirect(url_for('index'))
 
             try:
-                with sqlite3.connect(self.url_manager.db_path) as conn:
-                    manager = EmailAccountManager(conn)
-                    manager.update_account(account_id, updates)
+                self.email_account_manager.update_account(account_id, updates)
                 flash('Email account updated successfully', 'success')
             except Exception as e:
                 flash(f'Failed to update email account: {e}', 'error')
@@ -2113,9 +2215,7 @@ class RAGKnowledgebaseManager:
         def delete_email_account(account_id: int):
             """Remove an email account configuration."""
             try:
-                with sqlite3.connect(self.url_manager.db_path) as conn:
-                    manager = EmailAccountManager(conn)
-                    manager.delete_account(account_id)
+                self.email_account_manager.delete_account(account_id)
                 flash('Email account deleted', 'success')
             except Exception as e:
                 flash(f'Failed to delete email account: {e}', 'error')
@@ -2152,9 +2252,16 @@ class RAGKnowledgebaseManager:
             
             return redirect(url_for('index'))
         
-        @self.app.route('/delete_url/<int:url_id>', methods=['POST'])
+        @self.app.route('/delete_url/<url_id>', methods=['POST'])
         def delete_url(url_id):
             """Delete a URL."""
+            # Convert string ID to int if using SQLite (for backward compatibility)
+            if not Config.USE_POSTGRESQL_URL_MANAGER:
+                try:
+                    url_id = int(url_id)
+                except ValueError:
+                    flash('Invalid URL ID', 'error')
+                    return redirect(url_for('index'))
             # Load the URL and any crawled pages
             url_rec = self.url_manager.get_url_by_id(url_id)
             if not url_rec:
@@ -2189,9 +2296,16 @@ class RAGKnowledgebaseManager:
                 flash(f'Failed to delete URL: {result["message"]}', 'error')
             return redirect(url_for('index'))
 
-        @self.app.route('/delete_url_bg/<int:url_id>', methods=['POST'])
-        def delete_url_bg(url_id: int):
+        @self.app.route('/delete_url_bg/<url_id>', methods=['POST'])
+        def delete_url_bg(url_id):
             """Start background deletion of a URL and its embeddings, with progress bar."""
+            # Convert string ID to int if using SQLite (for backward compatibility)
+            if not Config.USE_POSTGRESQL_URL_MANAGER:
+                try:
+                    url_id = int(url_id)
+                except ValueError:
+                    flash('Invalid URL ID', 'error')
+                    return redirect(url_for('index'))
             url_rec = self.url_manager.get_url_by_id(url_id)
             if not url_rec:
                 flash('URL not found', 'error')
@@ -2208,9 +2322,16 @@ class RAGKnowledgebaseManager:
             flash('Deletion started in background', 'info')
             return redirect(url_for('index'))
 
-        @self.app.route('/update_url/<int:url_id>', methods=['POST'])
-        def update_url(url_id: int):
+        @self.app.route('/update_url/<url_id>', methods=['POST'])
+        def update_url(url_id):
             """Update URL metadata including title, description, and refresh schedule."""
+            # Convert string ID to int if using SQLite (for backward compatibility)
+            if not Config.USE_POSTGRESQL_URL_MANAGER:
+                try:
+                    url_id = int(url_id)
+                except ValueError:
+                    flash('Invalid URL ID', 'error')
+                    return redirect(url_for('index'))
             title = request.form.get('title')
             description = request.form.get('description')
             refresh_raw = request.form.get('refresh_interval_minutes')
@@ -2231,9 +2352,16 @@ class RAGKnowledgebaseManager:
                 flash(f"Failed to update URL: {result.get('message','Unknown error')}", 'error')
             return redirect(url_for('index'))
 
-        @self.app.route('/ingest_url/<int:url_id>', methods=['POST'])
-        def ingest_url(url_id: int):
+        @self.app.route('/ingest_url/<url_id>', methods=['POST'])
+        def ingest_url(url_id):
             """Trigger immediate ingestion/refresh for a URL."""
+            # Convert string ID to int if using SQLite (for backward compatibility)
+            if not Config.USE_POSTGRESQL_URL_MANAGER:
+                try:
+                    url_id = int(url_id)
+                except ValueError:
+                    flash('Invalid URL ID', 'error')
+                    return redirect(url_for('index'))
             url_rec = self.url_manager.get_url_by_id(url_id)
             if not url_rec:
                 flash('URL not found', 'error')
@@ -2486,13 +2614,24 @@ class RAGKnowledgebaseManager:
 
                     cfg = _Cfg()
                 
-                # Create EmailProcessor with persistent database and vector store
-                email_conn = sqlite3.connect(self.url_manager.db_path, check_same_thread=False)
-                email_processor = EmailProcessor(
-                    milvus=self.milvus_manager.vector_store,
-                    sqlite_conn=email_conn,
-                    embedding_model=self.milvus_manager.langchain_embeddings
-                )
+                # Create EmailProcessor with appropriate database backend
+                if Config.USE_POSTGRESQL_URL_MANAGER:
+                    # For PostgreSQL mode, we need to create a compatible processor
+                    # For now, create minimal SQLite connection for processor compatibility
+                    email_conn = sqlite3.connect(":memory:", check_same_thread=False)
+                    email_processor = EmailProcessor(
+                        milvus=self.milvus_manager.vector_store,
+                        sqlite_conn=email_conn,
+                        embedding_model=self.milvus_manager.langchain_embeddings
+                    )
+                else:
+                    # Original SQLite path
+                    email_conn = sqlite3.connect(self.url_manager.db_path, check_same_thread=False)
+                    email_processor = EmailProcessor(
+                        milvus=self.milvus_manager.vector_store,
+                        sqlite_conn=email_conn,
+                        embedding_model=self.milvus_manager.langchain_embeddings
+                    )
                 
                 orchestrator = EmailOrchestrator(cfg, self.email_account_manager, email_processor)
             except Exception:
