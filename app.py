@@ -182,531 +182,6 @@ class ProcessingStatus:
     error_details: Optional[str] = None
     title: Optional[str] = None
 
-
-class URLManager:
-    """Manages URL storage and validation using SQLite database."""
-    
-    def __init__(self, db_path: str = os.path.join("databases", "knowledgebase.db")):
-        """
-        Initialize URL manager with SQLite database.
-        
-        Args:
-            db_path: Path to SQLite database file
-        """
-        # Ensure parent directory exists
-        try:
-            parent = os.path.dirname(db_path)
-            if parent and not os.path.exists(parent):
-                os.makedirs(parent, exist_ok=True)
-        except Exception:
-            pass
-        self.db_path = db_path
-        self._init_database()
-        try:
-            self._log_schema_state()
-        except Exception:
-            pass
-        logger.info(f"URLManager initialized with database: {db_path}")
-    
-    def _init_database(self) -> None:
-        """Initialize the SQLite database and create tables if they don't exist."""
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS urls (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    url TEXT UNIQUE NOT NULL,
-                    title TEXT,
-                    description TEXT,
-                    added_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    last_checked TIMESTAMP,
-                    status TEXT DEFAULT 'active',
-                    refresh_interval_minutes INTEGER DEFAULT 1440,
-                    last_scraped TIMESTAMP,
-                    crawl_domain INTEGER DEFAULT 0,
-                    ignore_robots INTEGER DEFAULT 0,
-                    last_content_hash TEXT,
-                    last_update_status TEXT,
-                    refreshing INTEGER DEFAULT 0,
-                    last_refresh_started TIMESTAMP
-                )
-            ''')
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS url_pages (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    parent_url_id INTEGER NOT NULL,
-                    page_url TEXT UNIQUE NOT NULL,
-                    last_content_hash TEXT,
-                    last_scraped TIMESTAMP,
-                    FOREIGN KEY(parent_url_id) REFERENCES urls(id)
-                )
-            ''')
-            # Documents metadata table
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS documents (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    filename TEXT UNIQUE NOT NULL,
-                    title TEXT,
-                    page_count INTEGER,
-                    chunk_count INTEGER,
-                    word_count INTEGER,
-                    avg_chunk_chars REAL,
-                    median_chunk_chars REAL,
-                    top_keywords TEXT, -- JSON array
-                    processing_time_seconds REAL,
-                    ingestion_timestamp TEXT DEFAULT CURRENT_TIMESTAMP
-                )
-            ''')
-            # Emails metadata table
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS emails (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    message_id TEXT UNIQUE NOT NULL,
-                    thread_id TEXT,
-                    subject TEXT,
-                    from_addr TEXT,
-                    to_addrs TEXT,
-                    cc_addrs TEXT,
-                    date_utc TEXT,
-                    received_utc TEXT,
-                    in_reply_to TEXT,
-                    references_ids TEXT,
-                    is_reply INTEGER,
-                    is_forward INTEGER,
-                    raw_size_bytes INTEGER,
-                    body_text TEXT,
-                    body_html TEXT,
-                    language TEXT,
-                    has_attachments INTEGER,
-                    attachment_manifest TEXT,
-                    processed INTEGER DEFAULT 0,
-                    ingested_at TEXT,
-                    updated_at TEXT,
-                    content_hash TEXT,
-                    summary TEXT,
-                    keywords TEXT,
-                    auto_topic TEXT,
-                    manual_topic TEXT,
-                    topic_confidence REAL,
-                    topic_version TEXT,
-                    error_state TEXT,
-                    direction TEXT,
-                    participants TEXT,
-                    participants_hash TEXT,
-                    to_primary TEXT
-                )
-            ''')
-            conn.commit()
-            logger.info("URL database initialized")
-
-    def _ensure_schema(self) -> None:
-        """Ensure the database file and core tables exist (self-heal after external deletion).
-
-        This guards against scenarios where the SQLite file is removed (e.g. reset script)
-        while the Flask app process keeps running. Without this, subsequent operations
-        would raise 'no such table: urls'. We check cheaply and re-run _init_database if missing.
-        """
-        try:
-            if not os.path.exists(self.db_path):
-                logger.warning("Knowledgebase DB file missing; reinitializing schema")
-                self._init_database()
-                return
-            with sqlite3.connect(self.db_path) as conn:
-                cur = conn.cursor()
-                cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='urls'")
-                if not cur.fetchone():
-                    logger.warning("'urls' table missing; reinitializing schema")
-                    self._init_database()
-        except Exception as e:
-            logger.error(f"Schema ensure failed: {e}")
-
-    def _log_schema_state(self) -> None:
-        """Log current columns for key tables (diagnostic)."""
-        with sqlite3.connect(self.db_path) as conn:
-            cur = conn.cursor()
-            for table in ("urls", "url_pages", "documents"):
-                try:
-                    cur.execute(f"PRAGMA table_info({table})")
-                    cols = [r[1] for r in cur.fetchall()]
-                    logger.info(f"Schema {table} columns: {cols}")
-                except Exception as e:
-                    logger.warning(f"Could not introspect table {table}: {e}")
-
-    def upsert_document_metadata(self, filename: str, **fields) -> None:
-        """Insert or update a documents row."""
-        try:
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                # Build columns
-                col_names = ["filename"] + list(fields.keys())
-                placeholders = ["?"] * len(col_names)
-                values = [filename] + list(fields.values())
-                update_assignments = ", ".join([f"{k}=excluded.{k}" for k in fields.keys()])
-                sql = f"INSERT INTO documents ({', '.join(col_names)}) VALUES ({', '.join(placeholders)}) ON CONFLICT(filename) DO UPDATE SET {update_assignments}"
-                cursor.execute(sql, values)
-                conn.commit()
-        except Exception:
-            logger.exception(f"Failed to upsert metadata for {filename}")
-            raise
-
-    def get_document_metadata(self, filename: str) -> Optional[Dict[str, Any]]:
-        try:
-            with sqlite3.connect(self.db_path) as conn:
-                conn.row_factory = sqlite3.Row
-                cursor = conn.cursor()
-                cursor.execute("SELECT * FROM documents WHERE filename = ?", (filename,))
-                row = cursor.fetchone()
-                if not row:
-                    logger.info(f"Metadata lookup miss for {filename}")
-                    return None
-                d = dict(row)
-                # Parse keywords JSON
-                try:
-                    if d.get('top_keywords'):
-                        d['top_keywords'] = json.loads(d['top_keywords'])
-                except Exception:
-                    pass
-                logger.info(f"Metadata lookup succeeded for {filename}")
-                return d
-        except Exception:
-            logger.exception(f"Metadata lookup failed for {filename}")
-            return None
-
-    def delete_document_metadata(self, filename: str) -> None:
-        """Remove a document metadata row permanently.
-
-        Args:
-            filename: Name of the document whose metadata should be deleted.
-        """
-        try:
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute("DELETE FROM documents WHERE filename = ?", (filename,))
-                removed = cursor.rowcount
-                conn.commit()
-            logger.info(f"Metadata delete for {filename}; removed_row={removed > 0}")
-        except Exception:
-            logger.exception(f"Failed to delete metadata row for {filename}")
-    
-    def validate_url(self, url: str) -> bool:
-        """
-        Validate if the provided string is a valid URL.
-        
-        Args:
-            url: URL string to validate
-            
-        Returns:
-            bool: True if valid URL, False otherwise
-        """
-        try:
-            result = urllib.parse.urlparse(url)
-            return all([result.scheme, result.netloc]) and result.scheme in ['http', 'https']
-        except Exception:
-            return False
-    
-    def extract_title_from_url(self, url: str) -> str:
-        """
-        Extract the title from a web page by scraping the <title> tag.
-        
-        Args:
-            url: URL to scrape for title
-            
-        Returns:
-            str: Extracted title or fallback to domain name
-        """
-        try:
-            # Set headers to mimic a real browser
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-            }
-            
-            # Make request with timeout
-            response = requests.get(url, headers=headers, timeout=10)
-            response.raise_for_status()
-            
-            # Parse HTML content
-            soup = BeautifulSoup(response.content, 'html.parser')
-            
-            # Extract title
-            title_tag = soup.find('title')
-            if title_tag and title_tag.string:
-                title = title_tag.string.strip()
-                # Clean up common title patterns
-                title = re.sub(r'\s+', ' ', title)  # Normalize whitespace
-                title = title[:200]  # Limit length
-                return title
-            
-            # Fallback to domain name if no title found
-            parsed_url = urllib.parse.urlparse(url)
-            return parsed_url.netloc
-            
-        except requests.RequestException as e:
-            logger.warning(f"Failed to fetch title from {url}: {str(e)}")
-            # Fallback to domain name on error
-            try:
-                parsed_url = urllib.parse.urlparse(url)
-                return parsed_url.netloc
-            except Exception:
-                return "Unknown Title"
-        except Exception as e:
-            logger.error(f"Error extracting title from {url}: {str(e)}")
-            return "Unknown Title"
-    
-    def add_url(self, url: str, title: str = None, description: str = None) -> Dict[str, Any]:
-        """
-        Add a new URL to the database with automatic title extraction.
-        
-        Args:
-            url: URL to add
-            title: Optional title override (will extract from page if None)
-            description: Optional description
-            
-        Returns:
-            Dict with success status and message
-        """
-        # Validate URL format
-        if not self.validate_url(url):
-            return {"success": False, "message": "Invalid URL format"}
-        
-        # Extract title from URL if not provided
-        if not title:
-            logger.info(f"Extracting title from URL: {url}")
-            title = self.extract_title_from_url(url)
-            logger.info(f"Extracted title: {title}")
-        
-        try:
-            # Self-heal in case DB was externally reset after startup
-            self._ensure_schema()
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "INSERT INTO urls (url, title, description, refresh_interval_minutes, crawl_domain, ignore_robots) VALUES (?, ?, ?, ?, ?, ?)",
-                    (url, title, description, Config.URL_DEFAULT_REFRESH_MINUTES, 0, 0)
-                )
-                conn.commit()
-                url_id = cursor.lastrowid
-                logger.info(f"Added URL: {url} with title: {title} (ID: {url_id})")
-                return {"success": True, "message": "URL added successfully", "id": url_id, "title": title}
-        except sqlite3.IntegrityError:
-            return {"success": False, "message": "URL already exists"}
-        except Exception as e:
-            logger.error(f"Error adding URL: {str(e)}")
-            return {"success": False, "message": f"Database error: {str(e)}"}
-    
-    def get_all_urls(self) -> List[Dict[str, Any]]:
-        """
-        Retrieve all URLs from the database.
-        
-        Returns:
-            List of URL dictionaries
-        """
-        try:
-            self._ensure_schema()
-            with sqlite3.connect(self.db_path) as conn:
-                conn.row_factory = sqlite3.Row
-                cursor = conn.cursor()
-                cursor.execute(
-                    """
-                    SELECT 
-                        *,
-                        CASE 
-                            WHEN refresh_interval_minutes IS NOT NULL AND refresh_interval_minutes > 0 AND last_scraped IS NOT NULL
-                            THEN datetime(last_scraped, '+' || refresh_interval_minutes || ' minutes')
-                            ELSE NULL
-                        END AS next_refresh
-                    FROM urls 
-                    WHERE status = 'active' 
-                    ORDER BY added_date DESC
-                    """
-                )
-                urls = [dict(row) for row in cursor.fetchall()]
-                return urls
-        except Exception as e:
-            logger.error(f"Error retrieving URLs: {str(e)}")
-            return []
-    
-    def delete_url(self, url_id: int) -> Dict[str, Any]:
-        """
-        Delete a URL from the database.
-        
-        Args:
-            url_id: ID of the URL to delete
-            
-        Returns:
-            Dict with success status and message
-        """
-        try:
-            self._ensure_schema()
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute("DELETE FROM urls WHERE id = ?", (url_id,))
-                if cursor.rowcount > 0:
-                    conn.commit()
-                    logger.info(f"Deleted URL with ID: {url_id}")
-                    return {"success": True, "message": "URL deleted successfully"}
-                else:
-                    return {"success": False, "message": "URL not found"}
-        except Exception as e:
-            logger.error(f"Error deleting URL: {str(e)}")
-            return {"success": False, "message": f"Database error: {str(e)}"}
-
-    def get_pages_for_parent(self, parent_url_id: int) -> List[str]:
-        try:
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT page_url FROM url_pages WHERE parent_url_id = ?", (parent_url_id,))
-                return [row[0] for row in cursor.fetchall()]
-        except Exception as e:
-            logger.error(f"Error getting pages for parent {parent_url_id}: {e}")
-            return []
-
-    def delete_pages_for_parent(self, parent_url_id: int) -> None:
-        try:
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute("DELETE FROM url_pages WHERE parent_url_id = ?", (parent_url_id,))
-                conn.commit()
-        except Exception as e:
-            logger.error(f"Error deleting page records for parent {parent_url_id}: {e}")
-    
-    def get_url_count(self) -> int:
-        """Get the total number of active URLs."""
-        try:
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT COUNT(*) FROM urls WHERE status = 'active'")
-                return cursor.fetchone()[0]
-        except Exception as e:
-            logger.error(f"Error getting URL count: {str(e)}")
-            return 0
-
-    def get_url_by_id(self, url_id: int) -> Optional[Dict[str, Any]]:
-        try:
-            with sqlite3.connect(self.db_path) as conn:
-                conn.row_factory = sqlite3.Row
-                cursor = conn.cursor()
-                cursor.execute("SELECT * FROM urls WHERE id = ?", (url_id,))
-                row = cursor.fetchone()
-                return dict(row) if row else None
-        except Exception as e:
-            logger.error(f"Error getting URL by id: {e}")
-            return None
-
-    def update_url_metadata(
-        self,
-        url_id: int,
-        title: Optional[str],
-        description: Optional[str],
-        refresh_interval_minutes: Optional[int],
-        crawl_domain: Optional[int],
-        ignore_robots: Optional[int],
-        snapshot_enabled: Optional[int] = None,
-        snapshot_retention_days: Optional[int] = None,
-        snapshot_max_snapshots: Optional[int] = None,
-    ) -> Dict[str, Any]:
-        try:
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "UPDATE urls SET title = ?, description = ?, refresh_interval_minutes = ?, crawl_domain = ?, ignore_robots = ? WHERE id = ?",
-                    (title, description, refresh_interval_minutes, crawl_domain, ignore_robots, url_id)
-                )
-                conn.commit()
-                return {"success": cursor.rowcount > 0}
-        except Exception as e:
-            logger.error(f"Error updating URL metadata: {e}")
-            return {"success": False, "message": str(e)}
-
-    def mark_scraped(self, url_id: int, refresh_interval_minutes: Optional[int]) -> None:
-        try:
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "UPDATE urls SET last_scraped = CURRENT_TIMESTAMP WHERE id = ?",
-                    (url_id,)
-                )
-                conn.commit()
-        except Exception as e:
-            logger.error(f"Error marking URL scraped: {e}")
-
-    def set_refreshing(self, url_id: int, refreshing: bool) -> None:
-        """Set or clear the refreshing flag (and start timestamp when setting)."""
-        try:
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "UPDATE urls SET refreshing = ?, last_refresh_started = CASE WHEN ? = 1 THEN CURRENT_TIMESTAMP ELSE last_refresh_started END WHERE id = ?",
-                    (1 if refreshing else 0, 1 if refreshing else 0, url_id)
-                )
-                conn.commit()
-        except Exception as e:
-            logger.error(f"Error updating refreshing flag: {e}")
-
-    def update_url_hash_status(self, url_id: int, content_hash: Optional[str], status: str) -> None:
-        try:
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "UPDATE urls SET last_content_hash = ?, last_update_status = ?, last_scraped = CURRENT_TIMESTAMP WHERE id = ?",
-                    (content_hash, status, url_id)
-                )
-                conn.commit()
-        except Exception as e:
-            logger.error(f"Error updating URL hash/status: {e}")
-
-    def get_page_hash(self, page_url: str) -> Optional[str]:
-        try:
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT last_content_hash FROM url_pages WHERE page_url = ?", (page_url,))
-                row = cursor.fetchone()
-                return row[0] if row and row[0] else None
-        except Exception as e:
-            logger.error(f"Error getting page hash: {e}")
-            return None
-
-    def set_page_hash(self, parent_url_id: int, page_url: str, content_hash: str) -> None:
-        try:
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "INSERT INTO url_pages (parent_url_id, page_url, last_content_hash, last_scraped) VALUES (?, ?, ?, CURRENT_TIMESTAMP) "
-                    "ON CONFLICT(page_url) DO UPDATE SET last_content_hash=excluded.last_content_hash, last_scraped=CURRENT_TIMESTAMP",
-                    (parent_url_id, page_url, content_hash)
-                )
-                conn.commit()
-        except Exception as e:
-            logger.error(f"Error setting page hash: {e}")
-
-    def get_due_urls(self) -> List[Dict[str, Any]]:
-                try:
-                        # Ensure schema exists (handles external DB deletion while app runs)
-                        self._ensure_schema()
-                        with sqlite3.connect(self.db_path) as conn:
-                                conn.row_factory = sqlite3.Row
-                                cursor = conn.cursor()
-                                cursor.execute(
-                                        """
-                                        SELECT * FROM urls
-                                        WHERE status = 'active'
-                                            AND refresh_interval_minutes IS NOT NULL
-                                            AND refresh_interval_minutes > 0
-                                            AND (refreshing IS NULL OR refreshing = 0)
-                                            AND (
-                                                last_scraped IS NULL OR
-                                                datetime(last_scraped, '+' || refresh_interval_minutes || ' minutes') <= datetime('now')
-                                            )
-                                        """
-                                )
-                                rows = [dict(row) for row in cursor.fetchall()]
-                                if not rows:
-                                        logger.debug("Scheduler: no due URLs this cycle")
-                                return rows
-                except Exception as e:
-                        logger.error(f"Error fetching due URLs: {e}")
-                        return []
-
-
 class DocumentProcessor:
     """
     Handles document processing operations including text extraction,
@@ -1454,19 +929,15 @@ class RAGKnowledgebaseManager:
         logger.info("PostgreSQL integration initialized successfully")
         
         # Initialize URL manager based on feature flags
-        if self.config.USE_POSTGRESQL_URL_MANAGER or self.config.POSTGRES_MIGRATION_MODE == 'enabled':
-            logger.info("Initializing PostgreSQL URL Manager")
-            try:
-                from ingestion.postgresql_url_manager import PostgreSQLURLManager
-                self.url_manager = PostgreSQLURLManager(self.postgres_manager)
-                logger.info("PostgreSQL URL Manager initialized successfully")
-            except ImportError as e:
-                logger.error(f"Failed to import PostgreSQL URL Manager: {e}")
-                logger.info("Falling back to SQLite URL Manager")
-                self.url_manager = URLManager()
-        else:
-            logger.info("Initializing SQLite URL Manager (default)")
-            self.url_manager = URLManager()
+        logger.info("Initializing PostgreSQL URL Manager")
+        try:
+            from ingestion.postgresql_url_manager import PostgreSQLURLManager
+            self.url_manager = PostgreSQLURLManager(self.postgres_manager)
+            logger.info("PostgreSQL URL Manager initialized successfully")
+        except ImportError as e:
+            logger.error(f"Failed to import PostgreSQL URL Manager: {e}")
+
+
         # Processing status tracking
         self.processing_status: Dict[str, ProcessingStatus] = {}
         # URL refresh status tracking (keyed by url_id)
@@ -1498,55 +969,32 @@ class RAGKnowledgebaseManager:
             except Exception as e:
                 logger.error(f"Failed to start scheduler: {e}")
 
-        # Start email orchestrator (works with both SQLite and PostgreSQL)
+        # Start email orchestrator
         try:
-            if Config.USE_POSTGRESQL_URL_MANAGER:
-                # Use PostgreSQL email manager
-                from ingestion.postgresql_email_manager import PostgreSQLEmailManager
-                from ingestion.postgres_manager import PostgreSQLManager
-                
-                postgres_manager = PostgreSQLManager()
-                self.email_account_manager = PostgreSQLEmailManager(postgres_manager)
-                
-                # Ensure vector store is initialized before passing to EmailProcessor
-                self.milvus_manager._ensure_vector_store()
-                
-                # Create EmailProcessor with minimal SQLite for compatibility
-                from ingestion.email.processor import EmailProcessor
-                email_conn = sqlite3.connect(":memory:", check_same_thread=False)
-                email_processor = EmailProcessor(
-                    milvus=self.milvus_manager.vector_store,
-                    sqlite_conn=email_conn,  # Use in-memory SQLite for processor compatibility
-                    embedding_model=self.milvus_manager.langchain_embeddings
-                )
-                
-                from ingestion.email.orchestrator import EmailOrchestrator
-                self.email_orchestrator = EmailOrchestrator(
-                    self.config, self.email_account_manager, email_processor
-                )
-                logger.info("PostgreSQL Email orchestrator initialized successfully")
-            else:
-                # Use SQLite email manager (original implementation)
-                email_conn = sqlite3.connect(self.url_manager.db_path, check_same_thread=False)
-                from ingestion.email.account_manager import EmailAccountManager
-                self.email_account_manager = EmailAccountManager(email_conn)
-                
-                # Ensure vector store is initialized before passing to EmailProcessor
-                self.milvus_manager._ensure_vector_store()
-                
-                # Create EmailProcessor with persistent database and vector store
-                from ingestion.email.processor import EmailProcessor
-                email_processor = EmailProcessor(
-                    milvus=self.milvus_manager.vector_store,
-                    sqlite_conn=email_conn,
-                    embedding_model=self.milvus_manager.langchain_embeddings
-                )
-                
-                from ingestion.email.orchestrator import EmailOrchestrator
-                self.email_orchestrator = EmailOrchestrator(
-                    self.config, self.email_account_manager, email_processor
-                )
-                logger.info("SQLite Email orchestrator initialized successfully")
+            # Use PostgreSQL email manager
+            from ingestion.postgresql_email_manager import PostgreSQLEmailManager
+            from ingestion.postgres_manager import PostgreSQLManager
+            
+            postgres_manager = PostgreSQLManager()
+            self.email_account_manager = PostgreSQLEmailManager(postgres_manager)
+            
+            # Ensure vector store is initialized before passing to EmailProcessor
+            self.milvus_manager._ensure_vector_store()
+            
+            # Create EmailProcessor with minimal SQLite for compatibility
+            from ingestion.email.processor import EmailProcessor
+            email_conn = sqlite3.connect(":memory:", check_same_thread=False)
+            email_processor = EmailProcessor(
+                milvus=self.milvus_manager.vector_store,
+                sqlite_conn=email_conn,  # Use in-memory SQLite for processor compatibility
+                embedding_model=self.milvus_manager.langchain_embeddings
+            )
+            
+            from ingestion.email.orchestrator import EmailOrchestrator
+            self.email_orchestrator = EmailOrchestrator(
+                self.config, self.email_account_manager, email_processor
+            )
+            logger.info("PostgreSQL Email orchestrator initialized successfully")
         except Exception as e:
             logger.error(f"Failed to start email orchestrator: {e}")
 
@@ -1583,28 +1031,19 @@ class RAGKnowledgebaseManager:
             collection_stats = self.milvus_manager.get_collection_stats()
 
             # Connection health statuses
-            # Database (PostgreSQL or SQLite)
+            # Database (PostgreSQL)
             try:
-                if Config.USE_POSTGRESQL_URL_MANAGER:
-                    # Get PostgreSQL status
-                    if hasattr(self, 'database_manager') and hasattr(self.database_manager, 'postgresql_manager'):
-                        sql_status = self.database_manager.postgresql_manager.get_version_info()
-                    else:
-                        # Fallback - create a temporary PostgreSQL manager to get version
-                        from ingestion.postgres_manager import PostgreSQLManager
-                        temp_pg_manager = PostgreSQLManager()
-                        sql_status = temp_pg_manager.get_version_info()
-                        temp_pg_manager.close()
+                # Get PostgreSQL status
+                if hasattr(self, 'database_manager') and hasattr(self.database_manager, 'postgresql_manager'):
+                    sql_status = self.database_manager.postgresql_manager.get_version_info()
                 else:
-                    # Get SQLite status
-                    with sqlite3.connect(self.url_manager.db_path) as _c:
-                        _cur = _c.cursor()
-                        _cur.execute("SELECT sqlite_version()")
-                        ver_row = _cur.fetchone()
-                        ver = f"SQLite {ver_row[0]}" if ver_row else "SQLite Unknown"
-                    sql_status = {"connected": True, "version": ver}
+                    # Fallback - create a temporary PostgreSQL manager to get version
+                    from ingestion.postgres_manager import PostgreSQLManager
+                    temp_pg_manager = PostgreSQLManager()
+                    sql_status = temp_pg_manager.get_version_info()
+                    temp_pg_manager.close()
             except Exception as _e_sql:
-                database_type = "PostgreSQL" if Config.USE_POSTGRESQL_URL_MANAGER else "SQLite"
+                database_type = "PostgreSQL"
                 sql_status = {"connected": False, "error": f"{database_type}: {str(_e_sql)}"}
 
             # Milvus
@@ -1619,33 +1058,9 @@ class RAGKnowledgebaseManager:
                 'top_keywords': []
             }
             try:
-                if Config.USE_POSTGRESQL_URL_MANAGER and hasattr(self.url_manager, 'get_knowledgebase_metadata'):
-                    # Use PostgreSQL URL manager for metadata
-                    kb_stats = self.url_manager.get_knowledgebase_metadata()
-                    kb_meta.update(kb_stats)
-                else:
-                    # Original SQLite approach
-                    with sqlite3.connect(self.url_manager.db_path) as conn:
-                        conn.row_factory = sqlite3.Row
-                        cur = conn.cursor()
-                        cur.execute("SELECT COUNT(*) as c, AVG(word_count) as aw, AVG(chunk_count) as ac, AVG(median_chunk_chars) as mc FROM documents")
-                        row = cur.fetchone()
-                        if row:
-                            kb_meta['documents_total'] = int(row['c'] or 0)
-                            kb_meta['avg_words_per_doc'] = int(row['aw'] or 0)
-                            kb_meta['avg_chunks_per_doc'] = int(row['ac'] or 0)
-                            kb_meta['median_chunk_chars'] = int(row['mc'] or 0)
-                        # Aggregate top keywords across docs (flatten and count)
-                        cur.execute("SELECT top_keywords FROM documents WHERE top_keywords IS NOT NULL")
-                        kw_counts = {}
-                        for (kw_json,) in cur.fetchall():
-                            try:
-                                kws = json.loads(kw_json) if kw_json else []
-                                for k in kws:
-                                    kw_counts[k] = kw_counts.get(k, 0) + 1
-                            except Exception:
-                                continue
-                        kb_meta['top_keywords'] = [k for k,_ in sorted(kw_counts.items(), key=lambda x: x[1], reverse=True)[:10]]
+                # Use PostgreSQL URL manager for metadata
+                kb_stats = self.url_manager.get_knowledgebase_metadata()
+                kb_meta.update(kb_stats)
             except Exception as e:
                 logger.warning(f"KB meta aggregation failed: {e}")
 
@@ -1660,36 +1075,9 @@ class RAGKnowledgebaseManager:
                 'due_now': 0,
             }
             try:
-                if Config.USE_POSTGRESQL_URL_MANAGER and hasattr(self.url_manager, 'get_url_metadata_stats'):
-                    # Use PostgreSQL URL manager for metadata
-                    url_stats = self.url_manager.get_url_metadata_stats()
-                    url_meta.update(url_stats)
-                else:
-                    # Original SQLite approach
-                    with sqlite3.connect(self.url_manager.db_path) as conn:
-                        conn.row_factory = sqlite3.Row
-                        cur = conn.cursor()
-                        cur.execute(
-                            """
-                            SELECT
-                              COUNT(*) AS total,
-                              SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) AS active,
-                              SUM(CASE WHEN crawl_domain = 1 THEN 1 ELSE 0 END) AS crawl_on,
-                              SUM(CASE WHEN ignore_robots = 1 THEN 1 ELSE 0 END) AS robots_ignored,
-                              SUM(CASE WHEN last_scraped IS NOT NULL THEN 1 ELSE 0 END) AS scraped,
-                              SUM(CASE WHEN last_scraped IS NULL THEN 1 ELSE 0 END) AS never_scraped,
-                              SUM(CASE
-                                    WHEN refresh_interval_minutes IS NOT NULL AND refresh_interval_minutes > 0 AND (
-                                          (last_scraped IS NOT NULL AND datetime(last_scraped, '+' || refresh_interval_minutes || ' minutes') <= datetime('now'))
-                                       OR (last_scraped IS NULL)
-                                    )
-                                    THEN 1 ELSE 0 END) AS due_now
-                            FROM urls
-                            """
-                        )
-                        row = cur.fetchone()
-                        if row:
-                            url_meta = {k: int(row[k] or 0) for k in url_meta.keys()}
+                # Use PostgreSQL URL manager for metadata
+                url_stats = self.url_manager.get_url_metadata_stats()
+                url_meta.update(url_stats)
             except Exception as e:
                 logger.warning(f"URL meta aggregation failed: {e}")
             
@@ -1720,19 +1108,12 @@ class RAGKnowledgebaseManager:
             # Get configured email accounts
             email_accounts: List[Dict[str, Any]] = []
             try:
-                if Config.USE_POSTGRESQL_URL_MANAGER:
-                    # Use PostgreSQL email manager
-                    if hasattr(self, 'email_account_manager') and self.email_account_manager:
-                        email_accounts = self.email_account_manager.list_accounts(include_password=False)
-                    else:
-                        logger.info("PostgreSQL email manager not available")
-                        email_accounts = []
+                # Use PostgreSQL email manager
+                if hasattr(self, 'email_account_manager') and self.email_account_manager:
+                    email_accounts = self.email_account_manager.list_accounts(include_password=False)
                 else:
-                    # Original SQLite email account loading
-                    with sqlite3.connect(self.url_manager.db_path) as conn:
-                        from ingestion.email.account_manager import EmailAccountManager
-                        manager = EmailAccountManager(conn)
-                        email_accounts = manager.list_accounts(include_password=False)
+                    logger.info("PostgreSQL email manager not available")
+                    email_accounts = []
             except Exception as e:
                 logger.warning(f"Failed to load email accounts: {e}")
 
@@ -1751,83 +1132,20 @@ class RAGKnowledgebaseManager:
                 'most_active_account': None
             }
             try:
-                if Config.USE_POSTGRESQL_URL_MANAGER:
-                    # Use PostgreSQL email manager for meta aggregation
-                    if hasattr(self, 'email_account_manager') and self.email_account_manager:
-                        # Check if this is the PostgreSQL implementation that has get_account_stats
-                        if hasattr(self.email_account_manager, 'get_account_stats'):
-                            try:
-                                email_stats = getattr(self.email_account_manager, 'get_account_stats')()
-                                email_meta.update(email_stats)
-                                logger.debug("Email meta aggregation completed using PostgreSQL")
-                            except Exception as e:
-                                logger.warning(f"PostgreSQL email stats failed: {e}")
-                        else:
-                            logger.info("Email meta aggregation skipped - PostgreSQL stats method not available")
+                # Use PostgreSQL email manager for meta aggregation
+                if hasattr(self, 'email_account_manager') and self.email_account_manager:
+                    # Check if this is the PostgreSQL implementation that has get_account_stats
+                    if hasattr(self.email_account_manager, 'get_account_stats'):
+                        try:
+                            email_stats = getattr(self.email_account_manager, 'get_account_stats')()
+                            email_meta.update(email_stats)
+                            logger.debug("Email meta aggregation completed using PostgreSQL")
+                        except Exception as e:
+                            logger.warning(f"PostgreSQL email stats failed: {e}")
                     else:
-                        logger.info("Email meta aggregation skipped - PostgreSQL email manager not available")
+                        logger.info("Email meta aggregation skipped - PostgreSQL stats method not available")
                 else:
-                    # Original SQLite email meta aggregation
-                    with sqlite3.connect(self.url_manager.db_path) as conn:
-                        conn.row_factory = sqlite3.Row
-                        cur = conn.cursor()
-                        
-                        # Account statistics
-                        cur.execute("""
-                            SELECT 
-                                COUNT(*) as total_accounts,
-                                SUM(CASE WHEN refresh_interval_minutes IS NOT NULL AND refresh_interval_minutes > 0 THEN 1 ELSE 0 END) as active_accounts,
-                                SUM(CASE WHEN last_synced IS NULL THEN 1 ELSE 0 END) as never_synced,
-                                SUM(CASE 
-                                    WHEN refresh_interval_minutes IS NOT NULL AND refresh_interval_minutes > 0 AND (
-                                        (last_synced IS NOT NULL AND datetime(last_synced, '+' || refresh_interval_minutes || ' minutes') <= datetime('now'))
-                                        OR (last_synced IS NULL)
-                                    )
-                                    THEN 1 ELSE 0 END) as due_now
-                            FROM email_accounts
-                        """)
-                        row = cur.fetchone()
-                        if row:
-                            email_meta['total_accounts'] = int(row['total_accounts'] or 0)
-                            email_meta['active_accounts'] = int(row['active_accounts'] or 0)
-                            email_meta['never_synced'] = int(row['never_synced'] or 0)
-                            email_meta['due_now'] = int(row['due_now'] or 0)
-                        
-                        # Email content statistics
-                        cur.execute("""
-                            SELECT 
-                                COUNT(*) as total_emails,
-                                COUNT(DISTINCT from_addr) as unique_senders,
-                                SUM(CASE WHEN has_attachments = 1 THEN 1 ELSE 0 END) as emails_with_attachments,
-                                MAX(date_utc) as latest_email_date,
-                                AVG(raw_size_bytes) as avg_email_size
-                            FROM emails
-                        """)
-                        row = cur.fetchone()
-                        if row:
-                            email_meta['total_emails'] = int(row['total_emails'] or 0)
-                            email_meta['unique_senders'] = int(row['unique_senders'] or 0)
-                            email_meta['emails_with_attachments'] = int(row['emails_with_attachments'] or 0)
-                            email_meta['latest_email_date'] = row['latest_email_date']
-                            email_meta['avg_email_size'] = round(float(row['avg_email_size'] or 0), 1)
-                        
-                        # Calculate average emails per account
-                        if email_meta['total_accounts'] > 0:
-                            email_meta['avg_emails_per_account'] = round(email_meta['total_emails'] / email_meta['total_accounts'], 1)
-                        
-                        # Find most active account (by email count)
-                        cur.execute("""
-                            SELECT ea.account_name, COUNT(e.id) as email_count
-                            FROM email_accounts ea
-                            LEFT JOIN emails e ON ea.email_address = e.from_addr OR ea.email_address = e.to_primary
-                            GROUP BY ea.id, ea.account_name
-                            ORDER BY email_count DESC
-                            LIMIT 1
-                        """)
-                        row = cur.fetchone()
-                        if row and row['email_count'] > 0:
-                            email_meta['most_active_account'] = row['account_name']
-                        
+                    logger.info("Email meta aggregation skipped - PostgreSQL email manager not available")
             except Exception as e:
                 logger.warning(f"Email meta aggregation failed: {e}")
 
@@ -1970,12 +1288,6 @@ class RAGKnowledgebaseManager:
             """Get processing status for a URL refresh.
             When background status is gone, also return final DB state (last_update_status, last_scraped, next_refresh).
             """
-            # Convert string ID to int if using SQLite (for backward compatibility)
-            if not Config.USE_POSTGRESQL_URL_MANAGER:
-                try:
-                    url_id = int(url_id)
-                except ValueError:
-                    return jsonify({'status': 'invalid_id'})
             status = self.url_processing_status.get(url_id)
             if status:
                 return jsonify({
@@ -2285,13 +1597,6 @@ class RAGKnowledgebaseManager:
         @self.app.route('/delete_url/<url_id>', methods=['POST'])
         def delete_url(url_id):
             """Delete a URL."""
-            # Convert string ID to int if using SQLite (for backward compatibility)
-            if not Config.USE_POSTGRESQL_URL_MANAGER:
-                try:
-                    url_id = int(url_id)
-                except ValueError:
-                    flash('Invalid URL ID', 'error')
-                    return redirect(url_for('index'))
             # Load the URL and any crawled pages
             url_rec = self.url_manager.get_url_by_id(url_id)
             if not url_rec:
@@ -2329,13 +1634,6 @@ class RAGKnowledgebaseManager:
         @self.app.route('/delete_url_bg/<url_id>', methods=['POST'])
         def delete_url_bg(url_id):
             """Start background deletion of a URL and its embeddings, with progress bar."""
-            # Convert string ID to int if using SQLite (for backward compatibility)
-            if not Config.USE_POSTGRESQL_URL_MANAGER:
-                try:
-                    url_id = int(url_id)
-                except ValueError:
-                    flash('Invalid URL ID', 'error')
-                    return redirect(url_for('index'))
             url_rec = self.url_manager.get_url_by_id(url_id)
             if not url_rec:
                 flash('URL not found', 'error')
@@ -2355,13 +1653,6 @@ class RAGKnowledgebaseManager:
         @self.app.route('/update_url/<url_id>', methods=['POST'])
         def update_url(url_id):
             """Update URL metadata including title, description, and refresh schedule."""
-            # Convert string ID to int if using SQLite (for backward compatibility)
-            if not Config.USE_POSTGRESQL_URL_MANAGER:
-                try:
-                    url_id = int(url_id)
-                except ValueError:
-                    flash('Invalid URL ID', 'error')
-                    return redirect(url_for('index'))
             title = request.form.get('title')
             description = request.form.get('description')
             refresh_raw = request.form.get('refresh_interval_minutes')
@@ -2410,13 +1701,6 @@ class RAGKnowledgebaseManager:
         @self.app.route('/ingest_url/<url_id>', methods=['POST'])
         def ingest_url(url_id):
             """Trigger immediate ingestion/refresh for a URL."""
-            # Convert string ID to int if using SQLite (for backward compatibility)
-            if not Config.USE_POSTGRESQL_URL_MANAGER:
-                try:
-                    url_id = int(url_id)
-                except ValueError:
-                    flash('Invalid URL ID', 'error')
-                    return redirect(url_for('index'))
             url_rec = self.url_manager.get_url_by_id(url_id)
             if not url_rec:
                 flash('URL not found', 'error')
