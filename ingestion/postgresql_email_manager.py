@@ -19,11 +19,11 @@ logger = logging.getLogger(__name__)
 
 def encrypt(password: str) -> str:
     """Encrypt password using Fernet encryption."""
-    key = os.getenv('ENCRYPTION_KEY')
+    key = os.getenv('EMAIL_ENCRYPTION_KEY')
     if not key:
         # Generate a key for development - in production this should be properly managed
         key = Fernet.generate_key().decode()
-        logger.warning("Generated temporary encryption key - set ENCRYPTION_KEY environment variable")
+        logger.warning("Generated temporary encryption key - set EMAIL_ENCRYPTION_KEY environment variable")
     
     f = Fernet(key.encode() if isinstance(key, str) else key)
     return f.encrypt(password.encode()).decode()
@@ -31,9 +31,9 @@ def encrypt(password: str) -> str:
 
 def decrypt(encrypted_password: str) -> str:
     """Decrypt password using Fernet encryption."""
-    key = os.getenv('ENCRYPTION_KEY')
+    key = os.getenv('EMAIL_ENCRYPTION_KEY')
     if not key:
-        logger.error("ENCRYPTION_KEY not set - cannot decrypt password")
+        logger.error("EMAIL_ENCRYPTION_KEY not set - cannot decrypt password")
         return ""
     
     f = Fernet(key.encode() if isinstance(key, str) else key)

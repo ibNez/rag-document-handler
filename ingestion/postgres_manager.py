@@ -119,16 +119,20 @@ class PostgreSQLManager:
             created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
         );
         
-        -- URLs table (migrated from SQLite)
+                -- URLs table (migrated from SQLite)
         CREATE TABLE IF NOT EXISTS urls (
             id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
             url TEXT UNIQUE NOT NULL,
             title TEXT,
+            description TEXT,
             status VARCHAR(50) DEFAULT 'pending',
             content_type VARCHAR(100),
             content_length BIGINT,
             last_crawled TIMESTAMP WITH TIME ZONE,
             crawl_depth INTEGER DEFAULT 0,
+            refresh_interval_minutes INTEGER DEFAULT 1440,
+            crawl_domain BOOLEAN DEFAULT FALSE,
+            ignore_robots BOOLEAN DEFAULT FALSE,
             metadata JSONB DEFAULT '{}',
             created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
             updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()

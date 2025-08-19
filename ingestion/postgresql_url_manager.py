@@ -81,18 +81,10 @@ class PostgreSQLURLManager:
         try:
             with self.postgres.get_connection() as conn:
                 with conn.cursor() as cursor:
-                    # Build metadata object
-                    metadata = {
-                        'description': description,
-                        'refresh_interval_minutes': 1440,  # Default 24 hours
-                        'crawl_domain': False,
-                        'ignore_robots': False
-                    }
-                    
                     cursor.execute(
-                        """INSERT INTO urls (url, title, status, metadata)
-                           VALUES (%s, %s, %s, %s) RETURNING id""",
-                        (url, title, 'active', json.dumps(metadata))
+                        """INSERT INTO urls (url, title, description, status, refresh_interval_minutes, crawl_domain, ignore_robots)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+                        (url, title, description, 'active', 1440, False, False)
                     )
                     url_id = cursor.fetchone()['id']
                     conn.commit()
@@ -111,12 +103,13 @@ class PostgreSQLURLManager:
                 with conn.cursor() as cursor:
                     cursor.execute(
                         """
-                        SELECT id, url, title, status, last_crawled, metadata, created_at, updated_at,
+                        SELECT id, url, title, description, status, refresh_interval_minutes, 
+                               crawl_domain, ignore_robots, last_crawled, metadata, created_at, updated_at,
                             CASE 
-                                WHEN (metadata->>'refresh_interval_minutes')::int IS NOT NULL 
-                                     AND (metadata->>'refresh_interval_minutes')::int > 0 
+                                WHEN refresh_interval_minutes IS NOT NULL 
+                                     AND refresh_interval_minutes > 0 
                                      AND last_crawled IS NOT NULL
-                                THEN last_crawled + INTERVAL '1 minute' * (metadata->>'refresh_interval_minutes')::int
+                                THEN last_crawled + INTERVAL '1 minute' * refresh_interval_minutes
                                 ELSE NULL
                             END AS next_refresh
                         FROM urls 
@@ -127,15 +120,12 @@ class PostgreSQLURLManager:
                     urls = []
                     for row in cursor.fetchall():
                         url_dict = dict(row)
-                        # Convert UUID to string and parse metadata
+                        # Convert UUID to string
                         url_dict['id'] = str(url_dict['id'])
-                        if url_dict.get('metadata'):
-                            metadata = url_dict['metadata']
-                            # Add metadata fields as top-level for SQLite compatibility
-                            url_dict['description'] = metadata.get('description')
-                            url_dict['refresh_interval_minutes'] = metadata.get('refresh_interval_minutes', 1440)
-                            url_dict['crawl_domain'] = 1 if metadata.get('crawl_domain') else 0
-                            url_dict['ignore_robots'] = 1 if metadata.get('ignore_robots') else 0
+                        
+                        # Convert boolean to int for SQLite compatibility
+                        url_dict['crawl_domain'] = 1 if url_dict.get('crawl_domain') else 0
+                        url_dict['ignore_robots'] = 1 if url_dict.get('ignore_robots') else 0
                         
                         # Map PostgreSQL columns to SQLite equivalents
                         url_dict['added_date'] = url_dict['created_at']
@@ -231,27 +221,23 @@ class PostgreSQLURLManager:
         try:
             with self.postgres.get_connection() as conn:
                 with conn.cursor() as cursor:
-                    # Get current metadata
-                    cursor.execute("SELECT metadata FROM urls WHERE id = %s", (str(url_id),))
+                    # Check if URL exists
+                    cursor.execute("SELECT id FROM urls WHERE id = %s", (str(url_id),))
                     row = cursor.fetchone()
                     if not row:
                         return {"success": False, "message": "URL not found"}
                     
-                    # Update metadata
-                    metadata = row['metadata'] or {}
-                    if description is not None:
-                        metadata['description'] = description
-                    if refresh_interval_minutes is not None:
-                        metadata['refresh_interval_minutes'] = refresh_interval_minutes
-                    if crawl_domain is not None:
-                        metadata['crawl_domain'] = bool(crawl_domain)
-                    if ignore_robots is not None:
-                        metadata['ignore_robots'] = bool(ignore_robots)
-                    
-                    # Update the record
+                    # Update the record with explicit columns
                     cursor.execute(
-                        "UPDATE urls SET title = %s, metadata = %s, updated_at = NOW() WHERE id = %s",
-                        (title, json.dumps(metadata), str(url_id))
+                        """UPDATE urls SET 
+                           title = %s, 
+                           description = %s, 
+                           refresh_interval_minutes = %s, 
+                           crawl_domain = %s, 
+                           ignore_robots = %s, 
+                           updated_at = NOW() 
+                           WHERE id = %s""",
+                        (title, description, refresh_interval_minutes, bool(crawl_domain) if crawl_domain is not None else None, bool(ignore_robots) if ignore_robots is not None else None, str(url_id))
                     )
                     conn.commit()
                     return {"success": cursor.rowcount > 0}
@@ -334,12 +320,12 @@ class PostgreSQLURLManager:
                         """
                         SELECT * FROM urls
                         WHERE status = 'active'
-                            AND (metadata->>'refresh_interval_minutes')::int IS NOT NULL
-                            AND (metadata->>'refresh_interval_minutes')::int > 0
+                            AND refresh_interval_minutes IS NOT NULL
+                            AND refresh_interval_minutes > 0
                             AND (metadata->>'refreshing')::boolean IS NOT TRUE
                             AND (
                                 last_crawled IS NULL OR
-                                last_crawled + INTERVAL '1 minute' * (metadata->>'refresh_interval_minutes')::int <= NOW()
+                                last_crawled + INTERVAL '1 minute' * refresh_interval_minutes <= NOW()
                             )
                         """
                     )
@@ -348,14 +334,9 @@ class PostgreSQLURLManager:
                         url_dict = dict(row)
                         url_dict['id'] = str(url_dict['id'])
                         
-                        # Parse metadata for SQLite compatibility
-                        if url_dict.get('metadata'):
-                            metadata = url_dict['metadata']
-                            url_dict['description'] = metadata.get('description')
-                            url_dict['refresh_interval_minutes'] = metadata.get('refresh_interval_minutes', 1440)
-                            url_dict['crawl_domain'] = 1 if metadata.get('crawl_domain') else 0
-                            url_dict['ignore_robots'] = 1 if metadata.get('ignore_robots') else 0
-                            url_dict['refreshing'] = 1 if metadata.get('refreshing') else 0
+                        # Convert boolean to int for SQLite compatibility
+                        url_dict['crawl_domain'] = 1 if url_dict.get('crawl_domain') else 0
+                        url_dict['ignore_robots'] = 1 if url_dict.get('ignore_robots') else 0
                         
                         # Map PostgreSQL columns to SQLite equivalents
                         url_dict['added_date'] = url_dict['created_at']
@@ -579,17 +560,11 @@ class PostgreSQLURLManager:
                             logger.warning(f"Failed to get URL status counts: {e}")
                         
                         try:
-                            # Get metadata-based counts with safe boolean conversion
+                            # Get metadata-based counts using explicit columns
                             cursor.execute("""
                                 SELECT
-                                    SUM(CASE 
-                                        WHEN metadata->>'crawl_domain' = 'true' OR (metadata->>'crawl_domain')::text = '1'
-                                        THEN 1 ELSE 0 
-                                    END) AS crawl_on,
-                                    SUM(CASE 
-                                        WHEN metadata->>'ignore_robots' = 'true' OR (metadata->>'ignore_robots')::text = '1'
-                                        THEN 1 ELSE 0 
-                                    END) AS robots_ignored
+                                    SUM(CASE WHEN crawl_domain = true THEN 1 ELSE 0 END) AS crawl_on,
+                                    SUM(CASE WHEN ignore_robots = true THEN 1 ELSE 0 END) AS robots_ignored
                                 FROM urls
                             """)
                             row = cursor.fetchone()
@@ -600,12 +575,11 @@ class PostgreSQLURLManager:
                             logger.warning(f"Failed to get URL metadata counts: {e}")
                         
                         try:
-                            # Get due_now count (simplified)
+                            # Get due_now count using explicit column
                             cursor.execute("""
                                 SELECT COUNT(*) as count FROM urls 
-                                WHERE metadata->>'refresh_interval_minutes' IS NOT NULL 
-                                AND (metadata->>'refresh_interval_minutes')::text ~ '^[0-9]+$'
-                                AND (metadata->>'refresh_interval_minutes')::int > 0
+                                WHERE refresh_interval_minutes IS NOT NULL 
+                                AND refresh_interval_minutes > 0
                             """)
                             result = cursor.fetchone()
                             if result:
