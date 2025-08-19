@@ -1,0 +1,619 @@
+"""
+PostgreSQL URL Manager - Simple adaptation of SQLite URLManager interface
+Uses existing PostgreSQL schema from postgres_manager.py
+"""
+
+import logging
+import urllib.parse
+import requests
+import json
+import hashlib
+import uuid
+from datetime import datetime
+from typing import Dict, List, Optional, Any
+from bs4 import BeautifulSoup
+import re
+
+logger = logging.getLogger(__name__)
+
+
+class PostgreSQLURLManager:
+    """PostgreSQL-based URL manager that adapts SQLite URLManager interface to existing PostgreSQL schema."""
+    
+    def __init__(self, postgres_manager):
+        """Initialize with PostgreSQL manager."""
+        self.postgres = postgres_manager
+        # For compatibility with SQLite URLManager
+        self.db_path = "postgresql://rag_metadata"  # Fake path for compatibility
+        logger.info("PostgreSQL URLManager initialized")
+    
+    def validate_url(self, url: str) -> bool:
+        """Validate if the provided string is a valid URL."""
+        try:
+            result = urllib.parse.urlparse(url)
+            return all([result.scheme, result.netloc]) and result.scheme in ['http', 'https']
+        except Exception:
+            return False
+    
+    def extract_title_from_url(self, url: str) -> str:
+        """Extract the title from a web page by scraping the <title> tag."""
+        try:
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            }
+            
+            response = requests.get(url, headers=headers, timeout=10)
+            response.raise_for_status()
+            
+            soup = BeautifulSoup(response.content, 'html.parser')
+            title_tag = soup.find('title')
+            if title_tag and title_tag.string:
+                title = title_tag.string.strip()
+                title = re.sub(r'\s+', ' ', title)  # Normalize whitespace
+                title = title[:200]  # Limit length
+                return title
+            
+            # Fallback to domain name if no title found
+            parsed_url = urllib.parse.urlparse(url)
+            return parsed_url.netloc
+            
+        except requests.RequestException as e:
+            logger.warning(f"Failed to fetch title from {url}: {str(e)}")
+            try:
+                parsed_url = urllib.parse.urlparse(url)
+                return parsed_url.netloc
+            except Exception:
+                return "Unknown Title"
+        except Exception as e:
+            logger.error(f"Error extracting title from {url}: {str(e)}")
+            return "Unknown Title"
+    
+    def add_url(self, url: str, title: Optional[str] = None, description: Optional[str] = None) -> Dict[str, Any]:
+        """Add a new URL to the database with automatic title extraction."""
+        if not self.validate_url(url):
+            return {"success": False, "message": "Invalid URL format"}
+        
+        if not title:
+            logger.info(f"Extracting title from URL: {url}")
+            title = self.extract_title_from_url(url)
+            logger.info(f"Extracted title: {title}")
+        
+        try:
+            with self.postgres.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    # Build metadata object
+                    metadata = {
+                        'description': description,
+                        'refresh_interval_minutes': 1440,  # Default 24 hours
+                        'crawl_domain': False,
+                        'ignore_robots': False
+                    }
+                    
+                    cursor.execute(
+                        """INSERT INTO urls (url, title, status, metadata)
+                           VALUES (%s, %s, %s, %s) RETURNING id""",
+                        (url, title, 'active', json.dumps(metadata))
+                    )
+                    url_id = cursor.fetchone()['id']
+                    conn.commit()
+                    logger.info(f"Added URL: {url} with title: {title} (ID: {url_id})")
+                    return {"success": True, "message": "URL added successfully", "id": str(url_id), "title": title}
+        except Exception as e:
+            if "duplicate key" in str(e).lower():
+                return {"success": False, "message": "URL already exists"}
+            logger.error(f"Error adding URL: {str(e)}")
+            return {"success": False, "message": f"Database error: {str(e)}"}
+    
+    def get_all_urls(self) -> List[Dict[str, Any]]:
+        """Retrieve all URLs from the database."""
+        try:
+            with self.postgres.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT id, url, title, status, last_crawled, metadata, created_at, updated_at,
+                            CASE 
+                                WHEN (metadata->>'refresh_interval_minutes')::int IS NOT NULL 
+                                     AND (metadata->>'refresh_interval_minutes')::int > 0 
+                                     AND last_crawled IS NOT NULL
+                                THEN last_crawled + INTERVAL '1 minute' * (metadata->>'refresh_interval_minutes')::int
+                                ELSE NULL
+                            END AS next_refresh
+                        FROM urls 
+                        WHERE status = 'active' 
+                        ORDER BY created_at DESC
+                        """
+                    )
+                    urls = []
+                    for row in cursor.fetchall():
+                        url_dict = dict(row)
+                        # Convert UUID to string and parse metadata
+                        url_dict['id'] = str(url_dict['id'])
+                        if url_dict.get('metadata'):
+                            metadata = url_dict['metadata']
+                            # Add metadata fields as top-level for SQLite compatibility
+                            url_dict['description'] = metadata.get('description')
+                            url_dict['refresh_interval_minutes'] = metadata.get('refresh_interval_minutes', 1440)
+                            url_dict['crawl_domain'] = 1 if metadata.get('crawl_domain') else 0
+                            url_dict['ignore_robots'] = 1 if metadata.get('ignore_robots') else 0
+                        
+                        # Map PostgreSQL columns to SQLite equivalents
+                        url_dict['added_date'] = url_dict['created_at']
+                        url_dict['last_scraped'] = url_dict['last_crawled']
+                        
+                        # Convert datetime objects to strings for JSON serialization
+                        for key, value in url_dict.items():
+                            if isinstance(value, datetime):
+                                url_dict[key] = value.isoformat() if value else None
+                        
+                        urls.append(url_dict)
+                    return urls
+        except Exception as e:
+            logger.error(f"Error retrieving URLs: {str(e)}")
+            return []
+    
+    def delete_url(self, url_id: int) -> Dict[str, Any]:
+        """Delete a URL from the database."""
+        try:
+            with self.postgres.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("DELETE FROM urls WHERE id = %s", (str(url_id),))
+                    if cursor.rowcount > 0:
+                        conn.commit()
+                        logger.info(f"Deleted URL with ID: {url_id}")
+                        return {"success": True, "message": "URL deleted successfully"}
+                    else:
+                        return {"success": False, "message": "URL not found"}
+        except Exception as e:
+            logger.error(f"Error deleting URL: {str(e)}")
+            return {"success": False, "message": f"Database error: {str(e)}"}
+
+    def get_pages_for_parent(self, parent_url_id: int) -> List[str]:
+        """Get all pages for a parent URL (not implemented in current PostgreSQL schema)."""
+        # The current PostgreSQL schema doesn't have url_pages table
+        # Return empty list for now
+        return []
+
+    def delete_pages_for_parent(self, parent_url_id: int) -> None:
+        """Delete all pages for a parent URL (not implemented in current PostgreSQL schema)."""
+        # The current PostgreSQL schema doesn't have url_pages table
+        # No-op for now
+        pass
+    
+    def get_url_count(self) -> int:
+        """Get the total number of active URLs."""
+        try:
+            with self.postgres.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("SELECT COUNT(*) as count FROM urls WHERE status = 'active'")
+                    return cursor.fetchone()['count']
+        except Exception as e:
+            logger.error(f"Error getting URL count: {str(e)}")
+            return 0
+
+    def get_url_by_id(self, url_id: int) -> Optional[Dict[str, Any]]:
+        """Get URL by ID."""
+        try:
+            with self.postgres.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("SELECT * FROM urls WHERE id = %s", (str(url_id),))
+                    row = cursor.fetchone()
+                    if row:
+                        url_dict = dict(row)
+                        url_dict['id'] = str(url_dict['id'])
+                        
+                        # Parse metadata for SQLite compatibility
+                        if url_dict.get('metadata'):
+                            metadata = url_dict['metadata']
+                            url_dict['description'] = metadata.get('description')
+                            url_dict['refresh_interval_minutes'] = metadata.get('refresh_interval_minutes', 1440)
+                            url_dict['crawl_domain'] = 1 if metadata.get('crawl_domain') else 0
+                            url_dict['ignore_robots'] = 1 if metadata.get('ignore_robots') else 0
+                        
+                        # Map PostgreSQL columns to SQLite equivalents
+                        url_dict['added_date'] = url_dict['created_at']
+                        url_dict['last_scraped'] = url_dict['last_crawled']
+                        
+                        # Convert datetime objects to strings
+                        for key, value in url_dict.items():
+                            if isinstance(value, datetime):
+                                url_dict[key] = value.isoformat() if value else None
+                        return url_dict
+                    return None
+        except Exception as e:
+            logger.error(f"Error getting URL by id: {e}")
+            return None
+
+    def update_url_metadata(self, url_id: int, title: Optional[str], description: Optional[str], 
+                           refresh_interval_minutes: Optional[int], crawl_domain: Optional[int], 
+                           ignore_robots: Optional[int]) -> Dict[str, Any]:
+        """Update URL metadata."""
+        try:
+            with self.postgres.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    # Get current metadata
+                    cursor.execute("SELECT metadata FROM urls WHERE id = %s", (str(url_id),))
+                    row = cursor.fetchone()
+                    if not row:
+                        return {"success": False, "message": "URL not found"}
+                    
+                    # Update metadata
+                    metadata = row['metadata'] or {}
+                    if description is not None:
+                        metadata['description'] = description
+                    if refresh_interval_minutes is not None:
+                        metadata['refresh_interval_minutes'] = refresh_interval_minutes
+                    if crawl_domain is not None:
+                        metadata['crawl_domain'] = bool(crawl_domain)
+                    if ignore_robots is not None:
+                        metadata['ignore_robots'] = bool(ignore_robots)
+                    
+                    # Update the record
+                    cursor.execute(
+                        "UPDATE urls SET title = %s, metadata = %s, updated_at = NOW() WHERE id = %s",
+                        (title, json.dumps(metadata), str(url_id))
+                    )
+                    conn.commit()
+                    return {"success": cursor.rowcount > 0}
+        except Exception as e:
+            logger.error(f"Error updating URL metadata: {e}")
+            return {"success": False, "message": str(e)}
+
+    def mark_scraped(self, url_id: int, refresh_interval_minutes: Optional[int]) -> None:
+        """Mark URL as scraped."""
+        try:
+            with self.postgres.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "UPDATE urls SET last_crawled = NOW() WHERE id = %s",
+                        (str(url_id),)
+                    )
+                    conn.commit()
+        except Exception as e:
+            logger.error(f"Error marking URL scraped: {e}")
+
+    def set_refreshing(self, url_id: int, refreshing: bool) -> None:
+        """Set or clear the refreshing flag in metadata."""
+        try:
+            with self.postgres.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    # Get current metadata
+                    cursor.execute("SELECT metadata FROM urls WHERE id = %s", (str(url_id),))
+                    row = cursor.fetchone()
+                    if row:
+                        metadata = row['metadata'] or {}
+                        metadata['refreshing'] = refreshing
+                        if refreshing:
+                            metadata['last_refresh_started'] = datetime.now().isoformat()
+                        
+                        cursor.execute(
+                            "UPDATE urls SET metadata = %s WHERE id = %s",
+                            (json.dumps(metadata), str(url_id))
+                        )
+                        conn.commit()
+        except Exception as e:
+            logger.error(f"Error updating refreshing flag: {e}")
+
+    def update_url_hash_status(self, url_id: int, content_hash: Optional[str], status: str) -> None:
+        """Update URL content hash and status in metadata."""
+        try:
+            with self.postgres.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    # Get current metadata
+                    cursor.execute("SELECT metadata FROM urls WHERE id = %s", (str(url_id),))
+                    row = cursor.fetchone()
+                    if row:
+                        metadata = row['metadata'] or {}
+                        metadata['last_content_hash'] = content_hash
+                        metadata['last_update_status'] = status
+                        
+                        cursor.execute(
+                            "UPDATE urls SET metadata = %s, last_crawled = NOW() WHERE id = %s",
+                            (json.dumps(metadata), str(url_id))
+                        )
+                        conn.commit()
+        except Exception as e:
+            logger.error(f"Error updating URL hash/status: {e}")
+
+    def get_page_hash(self, page_url: str) -> Optional[str]:
+        """Get content hash for a page (not implemented in current PostgreSQL schema)."""
+        # The current PostgreSQL schema doesn't have url_pages table
+        return None
+
+    def set_page_hash(self, parent_url_id: int, page_url: str, content_hash: str) -> None:
+        """Set content hash for a page (not implemented in current PostgreSQL schema)."""
+        # The current PostgreSQL schema doesn't have url_pages table
+        pass
+
+    def get_due_urls(self) -> List[Dict[str, Any]]:
+        """Get URLs that are due for refresh."""
+        try:
+            with self.postgres.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT * FROM urls
+                        WHERE status = 'active'
+                            AND (metadata->>'refresh_interval_minutes')::int IS NOT NULL
+                            AND (metadata->>'refresh_interval_minutes')::int > 0
+                            AND (metadata->>'refreshing')::boolean IS NOT TRUE
+                            AND (
+                                last_crawled IS NULL OR
+                                last_crawled + INTERVAL '1 minute' * (metadata->>'refresh_interval_minutes')::int <= NOW()
+                            )
+                        """
+                    )
+                    rows = []
+                    for row in cursor.fetchall():
+                        url_dict = dict(row)
+                        url_dict['id'] = str(url_dict['id'])
+                        
+                        # Parse metadata for SQLite compatibility
+                        if url_dict.get('metadata'):
+                            metadata = url_dict['metadata']
+                            url_dict['description'] = metadata.get('description')
+                            url_dict['refresh_interval_minutes'] = metadata.get('refresh_interval_minutes', 1440)
+                            url_dict['crawl_domain'] = 1 if metadata.get('crawl_domain') else 0
+                            url_dict['ignore_robots'] = 1 if metadata.get('ignore_robots') else 0
+                            url_dict['refreshing'] = 1 if metadata.get('refreshing') else 0
+                        
+                        # Map PostgreSQL columns to SQLite equivalents
+                        url_dict['added_date'] = url_dict['created_at']
+                        url_dict['last_scraped'] = url_dict['last_crawled']
+                        
+                        # Convert datetime objects to strings
+                        for key, value in url_dict.items():
+                            if isinstance(value, datetime):
+                                url_dict[key] = value.isoformat() if value else None
+                        
+                        rows.append(url_dict)
+                    
+                    if not rows:
+                        logger.debug("Scheduler: no due URLs this cycle")
+                    return rows
+        except Exception as e:
+            logger.error(f"Error fetching due URLs: {e}")
+            return []
+
+    # Document metadata methods (using existing PostgreSQL documents table)
+    def upsert_document_metadata(self, filename: str, **fields) -> None:
+        """Insert or update a documents row."""
+        try:
+            with self.postgres.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    # Use filename as document_id for the existing schema
+                    metadata = {}
+                    
+                    # Map SQLite fields to PostgreSQL schema
+                    title = fields.get('title')
+                    word_count = fields.get('word_count')
+                    processing_time_seconds = fields.get('processing_time_seconds')
+                    
+                    # Store other fields in metadata JSONB
+                    for key, value in fields.items():
+                        if key not in ['title', 'word_count']:
+                            metadata[key] = value
+                    
+                    cursor.execute(
+                        """INSERT INTO documents (document_id, title, word_count, metadata) 
+                           VALUES (%s, %s, %s, %s) 
+                           ON CONFLICT(document_id) DO UPDATE SET 
+                           title = EXCLUDED.title,
+                           word_count = EXCLUDED.word_count,
+                           metadata = EXCLUDED.metadata,
+                           updated_at = NOW()""",
+                        (filename, title, word_count, json.dumps(metadata))
+                    )
+                    conn.commit()
+        except Exception as e:
+            logger.exception(f"Failed to upsert metadata for {filename}")
+            raise
+
+    def get_document_metadata(self, filename: str) -> Optional[Dict[str, Any]]:
+        """Get document metadata."""
+        try:
+            with self.postgres.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("SELECT * FROM documents WHERE document_id = %s", (filename,))
+                    row = cursor.fetchone()
+                    if not row:
+                        logger.info(f"Metadata lookup miss for {filename}")
+                        return None
+                    
+                    d = dict(row)
+                    # Map PostgreSQL schema back to SQLite format
+                    d['filename'] = d['document_id']
+                    
+                    # Extract metadata fields
+                    if d.get('metadata'):
+                        metadata = d['metadata']
+                        for key, value in metadata.items():
+                            d[key] = value
+                    
+                    # Convert datetime objects to strings
+                    for key, value in d.items():
+                        if isinstance(value, datetime):
+                            d[key] = value.isoformat() if value else None
+                    
+                    logger.info(f"Metadata lookup succeeded for {filename}")
+                    return d
+        except Exception as e:
+            logger.exception(f"Metadata lookup failed for {filename}")
+            return None
+
+    def delete_document_metadata(self, filename: str) -> None:
+        """Remove a document metadata row permanently."""
+        try:
+            with self.postgres.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("DELETE FROM documents WHERE document_id = %s", (filename,))
+                    removed = cursor.rowcount
+                    conn.commit()
+            logger.info(f"Metadata delete for {filename}; removed_row={removed > 0}")
+        except Exception as e:
+            logger.exception(f"Failed to delete metadata row for {filename}")
+
+    def check_connection(self) -> Dict[str, Any]:
+        """Check PostgreSQL connection health."""
+        try:
+            with self.postgres.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("SELECT version()")
+                    ver_row = cursor.fetchone()
+                    ver = ver_row['version'] if ver_row else None
+            return {"connected": True, "version": ver}
+        except Exception as e:
+            return {"connected": False, "error": str(e)}
+    
+    def get_knowledgebase_metadata(self) -> Dict[str, Any]:
+        """Get aggregated knowledge base metadata from PostgreSQL."""
+        kb_meta = {
+            'documents_total': 0,
+            'avg_words_per_doc': 0,
+            'avg_chunks_per_doc': 0,
+            'median_chunk_chars': 0,
+            'top_keywords': []
+        }
+        
+        try:
+            with self.postgres.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    # Get document count first - simple query
+                    cursor.execute("SELECT COUNT(*) as count FROM documents")
+                    result = cursor.fetchone()
+                    if result:
+                        kb_meta['documents_total'] = int(result['count'] or 0)
+                    
+                    # Only try more complex queries if we have documents
+                    if kb_meta['documents_total'] > 0:
+                        try:
+                            # Get averages with safe type conversion
+                            cursor.execute("""
+                                SELECT 
+                                    AVG(CASE 
+                                        WHEN metadata->>'word_count' IS NOT NULL AND metadata->>'word_count' ~ '^[0-9]+$' 
+                                        THEN (metadata->>'word_count')::int 
+                                        ELSE NULL 
+                                    END) as avg_words,
+                                    AVG(CASE 
+                                        WHEN metadata->>'chunk_count' IS NOT NULL AND metadata->>'chunk_count' ~ '^[0-9]+$' 
+                                        THEN (metadata->>'chunk_count')::int 
+                                        ELSE NULL 
+                                    END) as avg_chunks,
+                                    AVG(CASE 
+                                        WHEN metadata->>'median_chunk_chars' IS NOT NULL AND metadata->>'median_chunk_chars' ~ '^[0-9]+$' 
+                                        THEN (metadata->>'median_chunk_chars')::int 
+                                        ELSE NULL 
+                                    END) as avg_median_chars
+                                FROM documents
+                            """)
+                            row = cursor.fetchone()
+                            if row:
+                                kb_meta['avg_words_per_doc'] = int(row['avg_words'] or 0)
+                                kb_meta['avg_chunks_per_doc'] = int(row['avg_chunks'] or 0)
+                                kb_meta['median_chunk_chars'] = int(row['avg_median_chars'] or 0)
+                        except Exception as e:
+                            logger.warning(f"Failed to get document averages: {e}")
+                        
+                        try:
+                            # Get top keywords if available
+                            cursor.execute("SELECT metadata->>'top_keywords' as top_keywords FROM documents WHERE metadata->>'top_keywords' IS NOT NULL LIMIT 100")
+                            kw_counts = {}
+                            for row in cursor.fetchall():
+                                kw_json = row['top_keywords']
+                                if kw_json:
+                                    try:
+                                        kws = json.loads(kw_json) if kw_json else []
+                                        for k in kws:
+                                            if isinstance(k, str):
+                                                kw_counts[k] = kw_counts.get(k, 0) + 1
+                                    except (json.JSONDecodeError, TypeError):
+                                        continue
+                            kb_meta['top_keywords'] = [k for k,_ in sorted(kw_counts.items(), key=lambda x: x[1], reverse=True)[:10]]
+                        except Exception as e:
+                            logger.warning(f"Failed to get top keywords: {e}")
+                    
+                    return kb_meta
+        except Exception as e:
+            logger.error(f"Failed to get knowledgebase metadata: {e}")
+            return kb_meta
+    
+    def get_url_metadata_stats(self) -> Dict[str, Any]:
+        """Get aggregated URL metadata statistics from PostgreSQL."""
+        url_meta = {
+            'total': 0,
+            'active': 0,
+            'crawl_on': 0,
+            'robots_ignored': 0,
+            'scraped': 0,
+            'never_scraped': 0,
+            'due_now': 0,
+        }
+        
+        try:
+            with self.postgres.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    # Start with simple count
+                    cursor.execute("SELECT COUNT(*) as count FROM urls")
+                    result = cursor.fetchone()
+                    if result:
+                        url_meta['total'] = int(result['count'] or 0)
+                    
+                    # Only try more complex queries if we have URLs
+                    if url_meta['total'] > 0:
+                        try:
+                            # Get status counts
+                            cursor.execute("""
+                                SELECT
+                                    SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) AS active,
+                                    SUM(CASE WHEN last_crawled IS NOT NULL THEN 1 ELSE 0 END) AS scraped,
+                                    SUM(CASE WHEN last_crawled IS NULL THEN 1 ELSE 0 END) AS never_scraped
+                                FROM urls
+                            """)
+                            row = cursor.fetchone()
+                            if row:
+                                url_meta['active'] = int(row['active'] or 0)
+                                url_meta['scraped'] = int(row['scraped'] or 0)
+                                url_meta['never_scraped'] = int(row['never_scraped'] or 0)
+                        except Exception as e:
+                            logger.warning(f"Failed to get URL status counts: {e}")
+                        
+                        try:
+                            # Get metadata-based counts with safe boolean conversion
+                            cursor.execute("""
+                                SELECT
+                                    SUM(CASE 
+                                        WHEN metadata->>'crawl_domain' = 'true' OR (metadata->>'crawl_domain')::text = '1'
+                                        THEN 1 ELSE 0 
+                                    END) AS crawl_on,
+                                    SUM(CASE 
+                                        WHEN metadata->>'ignore_robots' = 'true' OR (metadata->>'ignore_robots')::text = '1'
+                                        THEN 1 ELSE 0 
+                                    END) AS robots_ignored
+                                FROM urls
+                            """)
+                            row = cursor.fetchone()
+                            if row:
+                                url_meta['crawl_on'] = int(row['crawl_on'] or 0)
+                                url_meta['robots_ignored'] = int(row['robots_ignored'] or 0)
+                        except Exception as e:
+                            logger.warning(f"Failed to get URL metadata counts: {e}")
+                        
+                        try:
+                            # Get due_now count (simplified)
+                            cursor.execute("""
+                                SELECT COUNT(*) as count FROM urls 
+                                WHERE metadata->>'refresh_interval_minutes' IS NOT NULL 
+                                AND (metadata->>'refresh_interval_minutes')::text ~ '^[0-9]+$'
+                                AND (metadata->>'refresh_interval_minutes')::int > 0
+                            """)
+                            result = cursor.fetchone()
+                            if result:
+                                url_meta['due_now'] = int(result['count'] or 0)
+                        except Exception as e:
+                            logger.warning(f"Failed to get due URLs count: {e}")
+                    
+                    return url_meta
+        except Exception as e:
+            logger.error(f"Failed to get URL metadata stats: {e}")
+            return url_meta

@@ -62,11 +62,14 @@ class PostgreSQLManager:
         conn = None
         try:
             conn = self.pool.getconn()
-            conn.autocommit = False
+            conn.autocommit = True  # Enable autocommit for read operations
             yield conn
         except Exception as e:
             if conn:
-                conn.rollback()
+                try:
+                    conn.rollback()
+                except:
+                    pass  # Ignore rollback errors in autocommit mode
             logger.error(f"Database operation failed: {e}")
             raise
         finally:
@@ -131,23 +134,21 @@ class PostgreSQLManager:
             updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
         );
         
-        -- Email accounts table
+        -- Email accounts table (compatible with EmailAccountManager interface)
         CREATE TABLE IF NOT EXISTS email_accounts (
-            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-            email_address VARCHAR(255) UNIQUE NOT NULL,
-            server_type VARCHAR(50) NOT NULL,
-            imap_server VARCHAR(255),
-            imap_port INTEGER,
-            use_ssl BOOLEAN DEFAULT true,
-            username VARCHAR(255),
-            password_encrypted TEXT,
-            refresh_interval_minutes INTEGER DEFAULT 60,
-            last_synced TIMESTAMP WITH TIME ZONE,
-            last_update_status VARCHAR(255),
-            is_active BOOLEAN DEFAULT true,
-            metadata JSONB DEFAULT '{}',
-            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+            id SERIAL PRIMARY KEY,
+            account_name TEXT UNIQUE NOT NULL,
+            server_type TEXT NOT NULL,
+            server TEXT NOT NULL,
+            port INTEGER NOT NULL,
+            email_address TEXT NOT NULL,
+            password TEXT NOT NULL,
+            mailbox TEXT,
+            batch_limit INTEGER,
+            use_ssl INTEGER,
+            refresh_interval_minutes INTEGER,
+            last_synced TIMESTAMP,
+            last_update_status TEXT
         );
         
         -- Create indexes for performance
@@ -167,7 +168,7 @@ class PostgreSQLManager:
         CREATE INDEX IF NOT EXISTS idx_urls_metadata ON urls USING GIN(metadata);
         
         CREATE INDEX IF NOT EXISTS idx_email_accounts_email ON email_accounts(email_address);
-        CREATE INDEX IF NOT EXISTS idx_email_accounts_active ON email_accounts(is_active);
+        CREATE INDEX IF NOT EXISTS idx_email_accounts_name ON email_accounts(account_name);
         
         -- Full-text search indexes
         CREATE INDEX IF NOT EXISTS idx_documents_fts ON documents 
