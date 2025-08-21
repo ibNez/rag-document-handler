@@ -145,6 +145,18 @@ class PostgreSQLURLManager:
                         # Normalize snapshot flags
                         url_dict['snapshot_enabled'] = 1 if url_dict.get('snapshot_enabled') else 0
                         
+                        # Extract commonly used metadata fields to top-level for UI convenience
+                        try:
+                            md = url_dict.get('metadata') or {}
+                            if isinstance(md, dict):
+                                url_dict['last_update_status'] = md.get('last_update_status')
+                            else:
+                                # If stored as JSON string for any reason, attempt to parse
+                                parsed = json.loads(md) if md else {}
+                                url_dict['last_update_status'] = parsed.get('last_update_status')
+                        except Exception:
+                            url_dict['last_update_status'] = None
+                        
                         # Convert datetime objects to strings for JSON serialization
                         for key, value in url_dict.items():
                             if isinstance(value, datetime):
@@ -259,6 +271,17 @@ class PostgreSQLURLManager:
                         # Map PostgreSQL columns to SQLite equivalents
                         url_dict['added_date'] = url_dict['created_at']
                         url_dict['last_scraped'] = url_dict['last_crawled']
+
+                        # Extract common metadata fields to top-level for convenience
+                        try:
+                            md = url_dict.get('metadata') or {}
+                            if isinstance(md, dict):
+                                url_dict['last_update_status'] = md.get('last_update_status')
+                            else:
+                                parsed = json.loads(md) if md else {}
+                                url_dict['last_update_status'] = parsed.get('last_update_status')
+                        except Exception:
+                            url_dict['last_update_status'] = None
                         
                         # Convert datetime objects to strings
                         for key, value in url_dict.items():

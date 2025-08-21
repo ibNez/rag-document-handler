@@ -53,53 +53,7 @@ class PostgreSQLEmailManager:
             postgresql_manager: PostgreSQL manager instance
         """
         self.postgresql_manager = postgresql_manager
-        self._ensure_table()
-
-    def _ensure_table(self) -> None:
-        """Create the emails table if it does not exist."""
-        try:
-            with self.postgresql_manager.get_connection() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        """
-                        CREATE TABLE IF NOT EXISTS emails (
-                            id SERIAL PRIMARY KEY,
-                            message_id TEXT UNIQUE NOT NULL,
-                            from_addr TEXT,
-                            subject TEXT,
-                            date_utc TIMESTAMP,
-                            header_hash TEXT UNIQUE NOT NULL,
-                            content_hash TEXT,
-                            content TEXT,
-                            attachments JSONB,
-                            headers JSONB,
-                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                        )
-                        """
-                    )
-                    conn.commit()
-                    logger.info("PostgreSQL emails table created successfully")
-                    
-                    # Create indexes for performance
-                    cur.execute("CREATE INDEX IF NOT EXISTS idx_emails_message_id ON emails(message_id)")
-                    cur.execute("CREATE INDEX IF NOT EXISTS idx_emails_header_hash ON emails(header_hash)")
-                    cur.execute("CREATE INDEX IF NOT EXISTS idx_emails_from_addr ON emails(from_addr)")
-                    cur.execute("CREATE INDEX IF NOT EXISTS idx_emails_date_utc ON emails(date_utc)")
-                    cur.execute("CREATE INDEX IF NOT EXISTS idx_emails_content_hash ON emails(content_hash)")
-                    
-                    # Create full-text search index
-                    cur.execute("""
-                        CREATE INDEX IF NOT EXISTS idx_emails_fts ON emails 
-                        USING GIN(to_tsvector('english', COALESCE(subject, '') || ' ' || COALESCE(content, '')))
-                    """)
-                    
-                    conn.commit()
-                    logger.info("PostgreSQL email indexes created successfully")
-                    
-        except Exception as e:
-            logger.error(f"Failed to create emails table: {e}")
-            raise
+        # Table creation is now handled by PostgreSQLManager._ensure_schema()
 
     def upsert_email(self, record: Dict[str, Any]) -> None:
         """Insert or update an email record.

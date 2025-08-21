@@ -86,7 +86,7 @@ class RAGKnowledgebaseManager:
         
         # Processing status tracking
         self.processing_status: Dict[str, DocumentProcessingStatus] = {}
-        self.url_processing_status: Dict[int, URLProcessingStatus] = {}
+        self.url_processing_status: Dict[str, URLProcessingStatus] = {}  # Changed to str for UUID keys
         self.email_processing_status: Dict[int, EmailProcessingStatus] = {}
         
         # Initialize the SchedulerManager (but don't start it yet)
@@ -315,12 +315,12 @@ class RAGKnowledgebaseManager:
             rp.parse([])
             return (rp, 1)
 
-    def _process_url_background(self, url_id: int) -> None:
+    def _process_url_background(self, url_id: str) -> None:
         """
         Process a URL in a background thread using the URL orchestrator.
         
         Args:
-            url_id: The ID of the URL to process
+            url_id: The UUID string ID of the URL to process
         """
         from datetime import datetime
         from .core.models import URLProcessingStatus
@@ -386,6 +386,92 @@ class RAGKnowledgebaseManager:
             if status:
                 status.status = "error"
                 status.message = f"Processing failed: {str(exc)}"
+                status.error_details = str(exc)
+                status.progress = 100
+                status.end_time = datetime.now()
+            
+            raise
+            
+        finally:
+            # Clean up processing status after a delay to allow UI to see completion
+            def cleanup_status():
+                import time
+                time.sleep(5)  # Allow 5 seconds for UI to see final status
+                try:
+                    if url_id in self.url_processing_status:
+                        del self.url_processing_status[url_id]
+                        logger.debug(f"Cleaned up processing status for URL {url_id}")
+                except Exception as e:
+                    logger.warning(f"Failed to cleanup status for URL {url_id}: {e}")
+            
+            # Run cleanup in background thread
+            cleanup_thread = threading.Thread(target=cleanup_status, daemon=True)
+            cleanup_thread.start()
+
+    def _delete_url_background(self, url_id: str) -> None:
+        """
+        Delete a URL and its embeddings in a background thread.
+        
+        Args:
+            url_id: The UUID string ID of the URL to delete
+        """
+        from datetime import datetime
+        from .core.models import URLProcessingStatus
+        
+        logger.info(f"Starting URL deletion background process for ID: {url_id}")
+        
+        # Initialize processing status
+        try:
+            # Get URL details for status tracking
+            url_record = self.url_manager.get_url_by_id(url_id)
+            
+            if not url_record:
+                logger.error(f"URL {url_id} not found for deletion")
+                return
+                
+            # Create status tracker
+            status = URLProcessingStatus(
+                url=url_record.get('url', ''),
+                title=url_record.get('title', '')
+            )
+            status.status = "processing"
+            status.message = "Starting URL deletion..."
+            status.progress = 10
+            status.start_time = datetime.now()
+            
+            self.url_processing_status[url_id] = status
+            
+            logger.info(f"Starting URL deletion for ID {url_id}: {url_record.get('url', '')}")
+            
+            # Delete from URL manager (includes embeddings cleanup)
+            status.message = "Deleting URL and embeddings..."
+            status.progress = 50
+            
+            result = self.url_manager.delete_url(url_id)
+            
+            # Complete successfully or with error
+            if result.get("success"):
+                status.status = "completed"
+                status.message = "URL deletion completed successfully"
+                status.progress = 100
+                status.end_time = datetime.now()
+                logger.info(f"URL deletion completed for ID {url_id}")
+            else:
+                status.status = "error"
+                status.message = f"Deletion failed: {result.get('message', 'Unknown error')}"
+                status.error_details = result.get('message')
+                status.progress = 100
+                status.end_time = datetime.now()
+                logger.error(f"URL deletion failed for ID {url_id}: {result.get('message')}")
+            
+        except Exception as exc:
+            logger.exception(f"URL deletion failed for ID {url_id}")
+            
+            # Update status with error
+            status = self.url_processing_status.get(url_id)
+            if status:
+                status.status = "error"
+                status.message = f"Deletion failed: {str(exc)}"
                 status.error_details = str(exc)
                 status.progress = 100
                 status.end_time = datetime.now()

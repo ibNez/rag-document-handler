@@ -13,7 +13,7 @@ from typing import Dict, List, Optional, Any
 
 from pymilvus import connections, utility, Collection
 from langchain_ollama import OllamaEmbeddings, ChatOllama
-from langchain_community.vectorstores import Milvus as LC_Milvus
+from langchain_milvus import Milvus
 from langchain_core.documents import Document
 from langchain_core.messages import SystemMessage, HumanMessage
 
@@ -69,8 +69,8 @@ class MilvusManager:
             pass
             
         # Lazy-created vector stores for documents and emails
-        self.vector_store: Optional[LC_Milvus] = None
-        self.email_vector_store: Optional[LC_Milvus] = None
+        self.vector_store: Optional[Milvus] = None
+        self.email_vector_store: Optional[Milvus] = None
         self.email_collection_name = f"{self.collection_name}_emails"
         
         try:
@@ -94,7 +94,7 @@ class MilvusManager:
         
         try:
             logger.debug("Attempting to connect to existing collection...")
-            self.vector_store = LC_Milvus(
+            self.vector_store = Milvus(
                 embedding_function=self.langchain_embeddings,
                 collection_name=self.collection_name,
                 connection_args=self.connection_args,
@@ -113,7 +113,7 @@ class MilvusManager:
             # Fallback: try from_texts with empty set to force creation
             try:
                 logger.debug("Creating new collection with initialization document...")
-                self.vector_store = LC_Milvus.from_texts(
+                self.vector_store = Milvus.from_texts(
                     texts=["__init__"],
                     embedding=self.langchain_embeddings,
                     metadatas=[{"source": "__init__", "document_id": "__init__", "chunk_id": "init", "page": 0}],
@@ -130,7 +130,7 @@ class MilvusManager:
         if self.email_vector_store:
             return
         try:
-            self.email_vector_store = LC_Milvus(
+            self.email_vector_store = Milvus(
                 embedding_function=self.langchain_embeddings,
                 collection_name=self.email_collection_name,
                 connection_args=self.connection_args,
@@ -149,7 +149,7 @@ class MilvusManager:
                     "page": 0,
                     "content_hash": "__init__"
                 }
-                self.email_vector_store = LC_Milvus.from_texts(
+                self.email_vector_store = Milvus.from_texts(
                     texts=["__init__"],
                     embedding=self.langchain_embeddings,
                     metadatas=[email_metadata],
@@ -161,7 +161,7 @@ class MilvusManager:
                 logger.error(f"Failed to initialize email vector store: {e}; {e2}")
                 raise
 
-    def get_email_vector_store(self) -> LC_Milvus:
+    def get_email_vector_store(self) -> Milvus:
         """Get the email vector store, creating it if necessary."""
         self._ensure_email_vector_store()
         if self.email_vector_store is None:
@@ -191,11 +191,27 @@ class MilvusManager:
         self._ensure_vector_store()
         logger.debug(f"Vector store ensured for collection: {self.collection_name}")
         
+        # Query existing content_hash values to enforce database-level uniqueness
+        existing_hashes = set()
+        try:
+            col = Collection(self.collection_name)
+            # Get all existing content_hash values
+            query_results = col.query(
+                expr="content_hash != ''",
+                output_fields=["content_hash"]
+            )
+            existing_hashes = {result.get("content_hash") for result in query_results if result.get("content_hash")}
+            logger.debug(f"Found {len(existing_hashes)} existing content_hash values in database")
+        except Exception as e:
+            logger.warning(f"Could not query existing content_hash values: {e}")
+            # Continue without database-level deduplication if query fails
+        
         # Build normalized texts & metadata
         seen_hashes = set()
         texts: List[str] = []
         metas: List[Dict[str, Any]] = []
         duplicates = 0
+        db_duplicates = 0
         
         logger.debug(f"Processing {len(docs)} documents for deduplication and metadata preparation")
         
@@ -212,9 +228,16 @@ class MilvusManager:
                 ch = hashlib.sha1(content.encode('utf-8')).hexdigest()[:16]
                 logger.debug(f"Generated content hash {ch} for chunk {idx}")
             
+            # Check database-level duplicates first
+            if ch in existing_hashes:
+                db_duplicates += 1
+                logger.debug(f"Content hash {ch} already exists in database, skipping chunk {idx}")
+                continue
+            
+            # Check in-memory duplicates within current batch
             if ch in seen_hashes:
                 duplicates += 1
-                logger.debug(f"Duplicate content hash {ch} found, skipping chunk {idx}")
+                logger.debug(f"Duplicate content hash {ch} found in current batch, skipping chunk {idx}")
                 continue
             seen_hashes.add(ch)
             
@@ -235,12 +258,14 @@ class MilvusManager:
             logger.debug(f"Prepared chunk {idx}: length={len(content)}, page={meta.get('page')}, chunk_id={meta.get('chunk_id')}")
         
         if duplicates:
-            logger.info(f"Skipped {duplicates} duplicate chunks for source '{source}'")
+            logger.info(f"Skipped {duplicates} duplicate chunks within current batch for source '{source}'")
+        if db_duplicates:
+            logger.info(f"Skipped {db_duplicates} chunks that already exist in database for source '{source}'")
         if not texts:
             logger.warning(f"No valid texts to insert after processing, source: '{source}'")
             return 0
         
-        logger.info(f"Prepared {len(texts)} unique chunks for insertion into Milvus")
+        logger.info(f"Prepared {len(texts)} unique chunks for insertion into Milvus (skipped {duplicates + db_duplicates} total duplicates)")
         
         start_time = time.perf_counter()
         try:
@@ -262,7 +287,7 @@ class MilvusManager:
                 self.vector_store.add_texts(texts=texts, metadatas=metas)
             else:
                 logger.debug("Using from_texts method for insertion (recreating vector store)")
-                self.vector_store = LC_Milvus.from_texts(
+                self.vector_store = Milvus.from_texts(
                     texts=texts,
                     embedding=self.langchain_embeddings,
                     metadatas=metas,
@@ -441,7 +466,7 @@ class MilvusManager:
         if not self.vector_store:
             logger.debug("Vector store not initialized, creating new connection...")
             try:
-                self.vector_store = LC_Milvus(
+                self.vector_store = Milvus(
                     embedding_function=self.langchain_embeddings,
                     collection_name=self.collection_name,
                     connection_args=self.connection_args,
@@ -567,6 +592,133 @@ class MilvusManager:
                 "error": str(e),
             }
 
+    def get_chunk_count_for_source(self, source: str) -> int:
+        """
+        Return number of chunks stored in Milvus for a given source/document_id.
+        Uses a direct Collection query to count matches with pagination.
+        """
+        try:
+            if not utility.has_collection(self.collection_name):
+                return 0
+            col = Collection(self.collection_name)
+            try:
+                col.load()
+            except Exception:
+                pass
+            # First try by 'source' (most consistent across schema versions)
+            expr_src = f'source == "{self._escape_literal(source)}"'
+            count = self._paginated_count(col, expr_src)
+            if count > 0:
+                return count
+
+            # Fallback: some older entries may have used hashed document_id
+            try:
+                legacy_id = hashlib.sha1(source.strip().encode('utf-8')).hexdigest()[:16]
+                expr_doc = f'document_id == "{legacy_id}"'
+                count = self._paginated_count(col, expr_doc)
+                return count
+            except Exception:
+                pass
+            return 0
+        except Exception:
+            return 0
+
+    def _escape_literal(self, s: str) -> str:
+        """Escape double quotes in literals for Milvus query expressions."""
+        try:
+            return s.replace('"', '\\"')
+        except Exception:
+            return s
+
+    def _paginated_count(self, collection: Collection, expr: str) -> int:
+        """
+        Count results with pagination to respect Milvus query limits.
+        Milvus has a max limit of 16384 for (offset+limit).
+        """
+        try:
+            max_limit = 16384
+            total_count = 0
+            offset = 0
+            
+            while True:
+                try:
+                    res = collection.query(
+                        expr=expr, 
+                        output_fields=["chunk_id"], 
+                        limit=max_limit,
+                        offset=offset
+                    )
+                    if not isinstance(res, list) or len(res) == 0:
+                        break
+                    total_count += len(res)
+                    # If we got less than max_limit, we've reached the end
+                    if len(res) < max_limit:
+                        break
+                    offset += len(res)
+                except Exception:
+                    break
+            return total_count
+        except Exception:
+            return 0
+
+    def get_chunk_count_for_url(self, url: str, url_id: Optional[str] = None) -> int:
+        """Count chunks for a URL using both source (URL) and document_id (UUID) + legacy hash fallback."""
+        try:
+            if not utility.has_collection(self.collection_name):
+                return 0
+            col = Collection(self.collection_name)
+            try:
+                col.load()
+            except Exception:
+                pass
+
+            exprs = []
+            if url:
+                exprs.append(f'source == "{self._escape_literal(url)}"')
+            if url_id:
+                exprs.append(f'document_id == "{self._escape_literal(url_id)}"')
+            try:
+                legacy_id = hashlib.sha1((url or '').strip().encode('utf-8')).hexdigest()[:16]
+                exprs.append(f'document_id == "{legacy_id}"')
+            except Exception:
+                pass
+
+            seen = set()
+            total = 0
+            max_limit = 16384
+            
+            for expr in exprs:
+                try:
+                    offset = 0
+                    while True:
+                        try:
+                            res = col.query(
+                                expr=expr, 
+                                output_fields=["chunk_id"], 
+                                limit=max_limit,
+                                offset=offset
+                            )
+                            if not isinstance(res, list) or len(res) == 0:
+                                break
+                            
+                            for r in res:
+                                cid = r.get('chunk_id')
+                                if cid and cid not in seen:
+                                    seen.add(cid)
+                                    total += 1
+                            
+                            # If we got less than max_limit, we've reached the end
+                            if len(res) < max_limit:
+                                break
+                            offset += len(res)
+                        except Exception:
+                            break
+                except Exception:
+                    continue
+            return total
+        except Exception:
+            return 0
+
     def check_connection(self) -> Dict[str, Any]:
         """
         Check Milvus server reachability and return status info.
@@ -604,7 +756,7 @@ class MilvusManager:
             logger.debug("Initializing vector store connection")
             if not self.vector_store:
                 logger.info("Vector store not initialized, creating new connection")
-                self.vector_store = LC_Milvus(
+                self.vector_store = Milvus(
                     embedding_function=self.langchain_embeddings,
                     collection_name=self.collection_name,
                     connection_args=self.connection_args,

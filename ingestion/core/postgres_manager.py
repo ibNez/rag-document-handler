@@ -102,28 +102,20 @@ class PostgreSQLManager:
         );
         
         -- Email documents table (migrated from SQLite)
-        -- NOTE: Commented out - emails table is now created by PostgreSQLEmailManager
-        -- to ensure proper schema compatibility with the new PostgreSQL-native design
-        /*
         CREATE TABLE IF NOT EXISTS emails (
-            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-            message_id VARCHAR(255) UNIQUE NOT NULL,
+            id SERIAL PRIMARY KEY,
+            message_id TEXT UNIQUE NOT NULL,
+            from_addr TEXT,
             subject TEXT,
-            sender VARCHAR(255),
-            recipient VARCHAR(255),
-            date_sent TIMESTAMP WITH TIME ZONE,
-            body_text TEXT,
-            body_html TEXT,
-            attachments JSONB DEFAULT '[]',
-            header_hash VARCHAR(64) UNIQUE,
-            server_type VARCHAR(50),
-            account_id VARCHAR(255),
-            folder VARCHAR(255),
-            metadata JSONB DEFAULT '{}',
-            processed_at TIMESTAMP WITH TIME ZONE,
-            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+            date_utc TIMESTAMP,
+            header_hash TEXT UNIQUE NOT NULL,
+            content_hash TEXT UNIQUE,
+            content TEXT,
+            attachments JSONB,
+            headers JSONB,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
-        */
         
                 -- URLs table (migrated from SQLite)
         CREATE TABLE IF NOT EXISTS urls (
@@ -170,15 +162,12 @@ class PostgreSQLManager:
         CREATE INDEX IF NOT EXISTS idx_documents_created ON documents(created_at);
         CREATE INDEX IF NOT EXISTS idx_documents_metadata ON documents USING GIN(metadata);
         
-        -- Email indexes (commented out - handled by PostgreSQLEmailManager)
-        -- NOTE: All email-related indexes are now created by PostgreSQLEmailManager
-        /*
+        -- Email indexes
         CREATE INDEX IF NOT EXISTS idx_emails_message_id ON emails(message_id);
         CREATE INDEX IF NOT EXISTS idx_emails_header_hash ON emails(header_hash);
-        CREATE INDEX IF NOT EXISTS idx_emails_sender ON emails(sender);
-        CREATE INDEX IF NOT EXISTS idx_emails_date_sent ON emails(date_sent);
-        CREATE INDEX IF NOT EXISTS idx_emails_metadata ON emails USING GIN(metadata);
-        */
+        CREATE INDEX IF NOT EXISTS idx_emails_from_addr ON emails(from_addr);
+        CREATE INDEX IF NOT EXISTS idx_emails_date_utc ON emails(date_utc);
+        CREATE INDEX IF NOT EXISTS idx_emails_content_hash ON emails(content_hash);
         
         CREATE INDEX IF NOT EXISTS idx_urls_url ON urls(url);
         CREATE INDEX IF NOT EXISTS idx_urls_status ON urls(status);
@@ -191,11 +180,9 @@ class PostgreSQLManager:
         CREATE INDEX IF NOT EXISTS idx_documents_fts ON documents 
         USING GIN(to_tsvector('english', COALESCE(title, '') || ' ' || COALESCE(content_preview, '')));
         
-        -- Email FTS index (commented out - handled by PostgreSQLEmailManager)
-        /*
+        -- Email FTS index
         CREATE INDEX IF NOT EXISTS idx_emails_fts ON emails 
-        USING GIN(to_tsvector('english', COALESCE(subject, '') || ' ' || COALESCE(body_text, '')));
-        */
+        USING GIN(to_tsvector('english', COALESCE(subject, '') || ' ' || COALESCE(content, '')));
         """
         
         with self.get_connection() as conn:

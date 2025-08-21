@@ -342,8 +342,11 @@
                                             <tr>
                                                 <th style="width: 40%">URL</th>
                                                 <th style="width: 20%">Robots & Crawl</th>
-                                                <th style="width: 20%">Schedule / Times</th>
-                                                <th style="width: 10%">Status</th>
+                                                <th style="width: 16%">Schedule / Times</th>
+                                                <th style="width: 8%" class="text-center">Pages</th>
+                                                <th style="width: 8%" class="text-center">Chunks</th>
+                                                <th style="width: 10%" class="text-center">Size</th>
+                                                <th style="width: 8%">Status</th>
                                                 <th style="width: 10%" class="text-end">Actions</th>
                                             </tr>
                                         </thead>
@@ -398,6 +401,21 @@
                                                     <div>Every {{ url.refresh_interval_minutes or 1440 }} min</div>
                                                     <div class="text-muted">Last: {{ (url.last_scraped or '')[:16] if url.last_scraped else '—' }}</div>
                                                     <div class="text-muted">Next: {{ (url.next_refresh or '')[:16] if url.next_refresh else '—' }}</div>
+                                                </td>
+                                                <td class="text-center">
+                                                    {{ url.pages if url.pages is not none else '—' }}
+                                                </td>
+                                                <td class="text-center">
+                                                    {{ url.chunk_count or 0 }}
+                                                </td>
+                                                <td class="text-center">
+                                                    {% if url.snapshot_total_size is not none %}
+                                                        {{ url.snapshot_total_size }}
+                                                    {% elif url.snapshot_count is not none %}
+                                                        {{ url.snapshot_count }} files
+                                                    {% else %}
+                                                        —
+                                                    {% endif %}
                                                 </td>
                                                 <td>
                                                     {% set up = url_processing_status.get(url.id) if url_processing_status else None %}
