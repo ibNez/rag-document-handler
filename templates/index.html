@@ -53,6 +53,10 @@
         .file-card:hover .dropdown-menu, .file-card.show .dropdown-menu {
             z-index: 3000; /* extra on hover/open */
         }
+    /* Keep localized date/time on a single line and let the column grow */
+    .dt-local { white-space: nowrap; }
+    .schedule-times { white-space: nowrap; }
+    .table th.schedule-times, .table td.schedule-times { width: 1%; }
     </style>
 </head>
 <body class="bg-light">
@@ -187,7 +191,7 @@
                                 {% endif %}
                                 {% if email_meta.latest_email_date %}
                                 <div class="kb-section-title mt-3">Latest Email</div>
-                                <div class="metric-sub">{{ email_meta.latest_email_date }}</div>
+                                <div class="metric-sub"><span class="dt-local" data-utc="{{ email_meta.latest_email_date or '' }}">{{ email_meta.latest_email_date or '—' }}</span></div>
                                 {% endif %}
                             </div>
                         </div>
@@ -271,7 +275,7 @@
                                                 
                                                 <small class="text-muted">
                                                     Size: {{ "%.1f"|format(file.size / 1024 / 1024) }} MB | 
-                                                    Modified: {{ file.modified.strftime('%Y-%m-%d %H:%M') }}
+                                                    Modified: <span class="dt-local" data-utc="{{ file.modified.isoformat() }}">{{ file.modified.isoformat() }}</span>
                                                 </small>
                                                 
                                                 {% if file.status %}
@@ -342,7 +346,7 @@
                                             <tr>
                                                 <th style="width: 40%">URL</th>
                                                 <th style="width: 20%">Robots & Crawl</th>
-                                                <th style="width: 16%">Schedule / Times</th>
+                                                <th class="schedule-times">Schedule / Times</th>
                                                 <th style="width: 8%" class="text-center">Pages</th>
                                                 <th style="width: 8%" class="text-center">Chunks</th>
                                                 <th style="width: 10%" class="text-center">Size</th>
@@ -397,10 +401,10 @@
                                                         {% endif %}
                                                     </div>
                                                 </td>
-                                                <td class="small">
+                                                <td class="small schedule-times">
                                                     <div>Every {{ url.refresh_interval_minutes or 1440 }} min</div>
-                                                    <div class="text-muted">Last: {{ (url.last_scraped or '')[:16] if url.last_scraped else '—' }}</div>
-                                                    <div class="text-muted">Next: {{ (url.next_refresh or '')[:16] if url.next_refresh else '—' }}</div>
+                                                    <div class="text-muted">Last: <span class="dt-local" data-utc="{{ url.last_scraped or '' }}">{{ url.last_scraped or '—' }}</span></div>
+                                                    <div class="text-muted">Next: <span class="dt-local" data-utc="{{ url.next_refresh or '' }}">{{ url.next_refresh or '—' }}</span></div>
                                                 </td>
                                                 <td class="text-center">
                                                     {{ url.pages if url.pages is not none else '—' }}
@@ -561,7 +565,7 @@
                                             <th>Server Type</th>
                                             <th>Server</th>
                                             <th>Email Address</th>
-                                            <th>Schedule / Time</th>
+                                            <th class="schedule-times">Schedule / Time</th>
                                             <th>Status</th>
                                             <th class="text-end">Actions</th>
                                         </tr>
@@ -573,10 +577,10 @@
                                             <td>{{ {'imap': 'IMAP', 'gmail': 'Gmail', 'exchange': 'Exchange'}.get(acct.server_type, acct.server_type) }}</td>
                                             <td>{{ acct.server }}:{{ acct.port }}</td>
                                             <td>{{ acct.email_address }}</td>
-                                            <td class="small">
+                                            <td class="small schedule-times">
                                                 <div>Every {{ acct.refresh_interval_minutes or config.EMAIL_DEFAULT_REFRESH_MINUTES }} min</div>
-                                                <div class="text-muted">Last: {{ (acct.last_synced or '')[:16] if acct.last_synced else '—' }}</div>
-                                                <div class="text-muted">Next: {{ (acct.next_run or '')[:16] if acct.next_run else '—' }}</div>
+                                                <div class="text-muted">Last: <span class="dt-local" data-utc="{{ acct.last_synced or '' }}">{{ acct.last_synced or '—' }}</span></div>
+                                                <div class="text-muted">Next: <span class="dt-local" data-utc="{{ acct.next_run or '' }}">{{ acct.next_run or '—' }}</span></div>
                                             </td>
                                             <td>
                                                 {% set up = email_processing_status.get(acct.id) if email_processing_status else None %}
@@ -852,7 +856,7 @@
                                                 </div>
                                             </td>
                                             <td>{{ "%.1f"|format(file.size / 1024 / 1024) }} MB</td>
-                                                                                        <td>{{ file.modified.strftime('%Y-%m-%d %H:%M') }}</td>
+                                                                                        <td><span class="dt-local" data-utc="{{ file.modified.isoformat() }}">{{ file.modified.isoformat() }}</span></td>
                                                                                         <td>{% if file.page_count is not none %}{{ file.page_count }}{% else %}-{% endif %}</td>
                                                                                         <td>{% if file.word_count is not none %}{{ file.word_count }}{% else %}-{% endif %}</td>
                                             <td>
@@ -1025,11 +1029,12 @@
                                                 const lines = timesCell.querySelectorAll('div');
                                                 if (lines && lines.length >= 3) {
                                                     // Update Last
-                                                    const lastVal = data.last_scraped ? String(data.last_scraped).slice(0,16) : '—';
-                                                    lines[1].textContent = `Last: ${lastVal}`;
+                                                    const lastVal = formatLocal(data.last_scraped);
+                                                    lines[1].innerHTML = `Last: <span class="dt-local" data-utc="${data.last_scraped || ''}">${lastVal}</span>`;
                                                     // Update Next
-                                                    const nextVal = data.next_refresh ? String(data.next_refresh).slice(0,16) : '—';
-                                                    lines[2].textContent = `Next: ${nextVal}`;
+                                                    const nextVal = formatLocal(data.next_refresh);
+                                                    lines[2].innerHTML = `Next: <span class="dt-local" data-utc="${data.next_refresh || ''}">${nextVal}</span>`;
+                                                    applyLocalTimes(lines[1].parentElement);
                                                 }
                                             }
                                         }
@@ -1091,10 +1096,11 @@
                                             if (timesCell) {
                                                 const lines = timesCell.querySelectorAll('div');
                                                 if (lines && lines.length >= 3) {
-                                                    const lastVal = data.last_synced ? String(data.last_synced).slice(0,16) : '—';
-                                                    lines[1].textContent = `Last: ${lastVal}`;
-                                                    const nextVal = data.next_run ? String(data.next_run).slice(0,16) : '—';
-                                                    lines[2].textContent = `Next: ${nextVal}`;
+                                                    const lastVal = formatLocal(data.last_synced);
+                                                    lines[1].innerHTML = `Last: <span class="dt-local" data-utc="${data.last_synced || ''}">${lastVal}</span>`;
+                                                    const nextVal = formatLocal(data.next_run);
+                                                    lines[2].innerHTML = `Next: <span class="dt-local" data-utc="${data.next_run || ''}">${nextVal}</span>`;
+                                                    applyLocalTimes(lines[1].parentElement);
                                                 }
                                             }
                                         }
@@ -1194,6 +1200,40 @@
                     document.getElementById('deleteAccountName').textContent = btn.dataset.name || '';
                 });
             });
+        </script>
+        <script>
+            const userLang = (navigator.language || 'en-US');
+            const use12h = /^en-US/i.test(userLang);
+            const dtf = new Intl.DateTimeFormat(userLang, {
+                year: 'numeric', month: '2-digit', day: '2-digit',
+                hour: '2-digit', minute: '2-digit', hour12: use12h
+            });
+
+            function normalizeUtc(utcString) {
+                let s = String(utcString || '').trim();
+                if (!s) return null;
+                // allow both 'YYYY-MM-DD HH:MM' and ISO; if no TZ assume UTC
+                if (!/[zZ]|[+\-]\d{2}:?\d{2}$/.test(s)) {
+                    s = s.replace(' ', 'T') + 'Z';
+                }
+                const d = new Date(s);
+                return isNaN(d.getTime()) ? null : d;
+            }
+
+            function formatLocal(utcString) {
+                const d = normalizeUtc(utcString);
+                if (!d) return '—';
+                try { return dtf.format(d); } catch { return d.toLocaleString(); }
+            }
+
+            function applyLocalTimes(scope=document) {
+                scope.querySelectorAll('.dt-local[data-utc]').forEach(el => {
+                    const utc = el.getAttribute('data-utc');
+                    el.textContent = formatLocal(utc);
+                });
+            }
+
+            document.addEventListener('DOMContentLoaded', function() { applyLocalTimes(); });
         </script>
 </body>
 </html>
