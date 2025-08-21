@@ -9,6 +9,7 @@ import os
 import logging
 import hashlib
 from typing import Any, Dict
+from datetime import datetime, timedelta
 
 from flask import Flask, request, render_template, flash, redirect, url_for, jsonify, send_from_directory, abort
 from werkzeug.utils import secure_filename
@@ -290,7 +291,6 @@ class WebRoutes:
                         last = rec.get('last_scraped')
                         interval = rec.get('refresh_interval_minutes')
                         if last and interval and int(interval) > 0:
-                            from datetime import datetime, timedelta
                             try:
                                 dt_last = datetime.fromisoformat(str(last))
                             except Exception:
@@ -300,10 +300,27 @@ class WebRoutes:
                     except Exception:
                         next_refresh = None
                     
+                    # Format last_scraped to human-readable format
+                    last_scraped = rec.get('last_scraped')
+                    if last_scraped:
+                        try:
+                            dt_last_scraped = datetime.fromisoformat(str(last_scraped))
+                            last_scraped = dt_last_scraped.strftime('%Y-%m-%d %H:%M')
+                        except Exception as e:
+                            logger.exception(f"Failed to format last_scraped '{last_scraped}': {e}")
+
+                    # Format next_refresh to human-readable format
+                    if next_refresh:
+                        try:
+                            dt_next_refresh = datetime.fromisoformat(str(next_refresh))
+                            next_refresh = dt_next_refresh.strftime('%Y-%m-%d %H:%M')
+                        except Exception as e:
+                            logger.exception(f"Failed to format next_refresh '{next_refresh}': {e}")
+
                     status_response = {
                         'status': 'not_found',
                         'last_update_status': rec.get('last_update_status'),
-                        'last_scraped': rec.get('last_scraped'),
+                        'last_scraped': last_scraped,
                         'next_refresh': next_refresh
                     }
                     logger.debug(f"Returning status response for URL ID '{url_id_str}': {status_response}")
@@ -313,7 +330,7 @@ class WebRoutes:
                     return jsonify({'status': 'deleted'})
             except Exception as e:
                 logger.error(f"Exception while fetching URL status for ID '{url_id_str}': {e}")
-                pass
+                return jsonify({'status': 'not_found'})
             logger.debug(f"Returning default 'not_found' status for URL ID: '{url_id_str}'")
             return jsonify({'status': 'not_found'})
 
