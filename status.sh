@@ -146,7 +146,7 @@ os.environ.setdefault('POSTGRES_PORT', '5432')
 os.environ.setdefault('POSTGRES_DB', 'rag_metadata')
 os.environ.setdefault('POSTGRES_USER', 'rag_user')
 os.environ.setdefault('POSTGRES_PASSWORD', 'secure_password')
-from ingestion.postgres_manager import PostgreSQLConfig, PostgreSQLManager
+from ingestion.core.postgres_manager import PostgreSQLConfig, PostgreSQLManager
 try:
     config = PostgreSQLConfig()
     manager = PostgreSQLManager(config)

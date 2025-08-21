@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 from unittest.mock import MagicMock
 
-import sqlite3
 import logging
 import pytest
 import sys
@@ -42,6 +41,27 @@ sys.modules.setdefault("cryptography.fernet", types.SimpleNamespace(Fernet=objec
 from ingestion.email.ingest import _normalize, run_email_ingestion
 from ingestion.email.processor import EmailProcessor
 import ingestion.email.orchestrator as orchestrator_module
+from ingestion.email.email_manager_postgresql import PostgreSQLEmailManager
+
+
+postgres_config = {
+    "host": "localhost",
+    "port": 5432,
+    "user": "test_user",
+    "password": "test_password",
+    "database": "test_db"
+}
+
+
+@pytest.fixture
+def email_manager():
+    return PostgreSQLEmailManager(postgres_config)
+
+
+@pytest.fixture
+def processor(email_manager):
+    milvus = MagicMock()
+    return EmailProcessor(milvus, email_manager, embedding_model=_DummyEmbeddings(), chunk_size=50, chunk_overlap=0)
 
 
 @pytest.fixture
@@ -254,8 +274,18 @@ def test_email_processor_process_uses_dependencies(raw_email_record: Dict[str, A
             return [[float(i)] for i, _ in enumerate(docs)]
 
     milvus = MagicMock()
-    sqlite_conn = sqlite3.connect(":memory:")
-    processor = EmailProcessor(milvus, sqlite_conn, embedding_model=FakeEmbedModel(), chunk_size=50, chunk_overlap=0)
+    from ingestion.email.email_manager_postgresql import PostgreSQLEmailManager
+
+    postgres_config = {
+        "host": "localhost",
+        "port": 5432,
+        "user": "test_user",
+        "password": "test_password",
+        "database": "test_db"
+    }
+
+    email_manager = PostgreSQLEmailManager(postgres_config)
+    processor = EmailProcessor(milvus, email_manager, embedding_model=FakeEmbedModel(), chunk_size=50, chunk_overlap=0)
     processor.manager.upsert_email = MagicMock()
 
     record = raw_email_record.copy()
@@ -268,19 +298,8 @@ def test_email_processor_process_uses_dependencies(raw_email_record: Dict[str, A
     milvus.add_embeddings.assert_called_once()
 
 
-def test_email_processor_logs_and_counts_missing_body(caplog: pytest.LogCaptureFixture) -> None:
+def test_email_processor_logs_and_counts_missing_body(caplog: pytest.LogCaptureFixture, processor) -> None:
     """Messages lacking body text should be logged and counted."""
-
-    class FakeEmbedModel:
-        def embed_documents(self, docs: List[str]) -> List[List[float]]:  # pragma: no cover - stub
-            return [[0.0] for _ in docs]
-
-    milvus = MagicMock()
-    sqlite_conn = sqlite3.connect(":memory:")
-    processor = EmailProcessor(
-        milvus, sqlite_conn, embedding_model=FakeEmbedModel(), chunk_size=50, chunk_overlap=0
-    )
-    processor.manager.upsert_email = MagicMock()
 
     record = {"message_id": "skip-1", "body_text": "   "}
 
@@ -541,6 +560,7 @@ def test_run_email_ingestion_header_hash_dedup(monkeypatch: pytest.MonkeyPatch) 
     assert failures == 0
     assert len(processor.processed) == 1
     assert manager.get_email_by_header_hash.call_count == 2
+
 
 def test_email_orchestrator_uses_gmail_connector(monkeypatch: pytest.MonkeyPatch) -> None:
     """Gmail accounts should invoke ``GmailConnector`` and not the IMAP connector."""

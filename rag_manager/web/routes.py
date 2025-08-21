@@ -1,0 +1,958 @@
+"""
+Web routes module for RAG Knowledgebase Manager.
+
+This module contains Flask route definitions and handlers, separated from the main
+application logic following development rules for better organization.
+"""
+
+import os
+import logging
+import hashlib
+from typing import Any, Dict
+
+from flask import Flask, request, render_template, flash, redirect, url_for, jsonify, send_from_directory, abort
+from werkzeug.utils import secure_filename
+
+from ..core.config import Config
+from ..core.models import DocumentProcessingStatus, URLProcessingStatus, EmailProcessingStatus
+
+# Configure logging
+logger = logging.getLogger(__name__)
+
+
+class WebRoutes:
+    """
+    Manages Flask web routes and handlers for the RAG Knowledgebase Manager.
+    
+    This class follows the development rules with proper separation of concerns,
+    type hints, and comprehensive logging.
+    """
+    
+    def __init__(self, app: Flask, config: Config, rag_manager: Any) -> None:
+        """
+        Initialize web routes.
+        
+        Args:
+            app: Flask application instance
+            config: Application configuration
+            rag_manager: Main RAG application manager instance
+        """
+        self.app = app
+        self.config = config
+        self.rag_manager = rag_manager
+        self._register_routes()
+        logger.info("Web routes initialized")
+    
+    def _register_routes(self) -> None:
+        """Register Flask routes for the web interface."""
+        
+        @self.app.route('/')
+        def index():
+            """Rag Knowledgebase Management System."""
+            # Get files in staging and uploaded folders
+            staging_files = self._get_directory_files(self.config.UPLOAD_FOLDER)
+            uploaded_files = self._get_directory_files(self.config.UPLOADED_FOLDER)
+            
+            # Get collection statistics
+            collection_stats = self.rag_manager.milvus_manager.get_collection_stats()
+
+            # Connection health statuses
+            sql_status = self._get_database_status()
+            milvus_status = self.rag_manager.milvus_manager.check_connection()
+
+            # Aggregate knowledgebase metadata
+            kb_meta = self._get_knowledgebase_metadata()
+            url_meta = self._get_url_metadata()
+            email_meta = self._get_email_metadata()
+
+            # Get URLs and email accounts for display
+            urls = self._get_enriched_urls()
+            email_accounts = self._get_email_accounts()
+
+            return render_template(
+                'index.html',
+                staging_files=staging_files,
+                uploaded_files=uploaded_files,
+                collection_stats=collection_stats,
+                sql_status=sql_status,
+                milvus_status=milvus_status,
+                kb_meta=kb_meta,
+                url_meta=url_meta,
+                email_meta=email_meta,
+                processing_status=self.rag_manager.processing_status,
+                url_processing_status=self.rag_manager.url_processing_status,
+                urls=urls,
+                email_accounts=email_accounts,
+                email_processing_status=self.rag_manager.email_processing_status,
+                config=self.config,
+            )
+        
+        @self.app.route('/upload', methods=['POST'])
+        def upload_file():
+            """Handle file upload to staging area."""
+            if 'file' not in request.files:
+                flash('No file selected', 'error')
+                return redirect(url_for('index'))
+            
+            file = request.files['file']
+            if file.filename == '':
+                flash('No file selected', 'error')
+                return redirect(url_for('index'))
+            
+            if file and file.filename and self._allowed_file(file.filename):
+                filename = secure_filename(file.filename)
+                file_path = os.path.join(self.config.UPLOAD_FOLDER, filename)
+                
+                try:
+                    file.save(file_path)
+                    flash(f'File "{filename}" uploaded successfully', 'success')
+                    logger.info(f"File uploaded: {filename}")
+                except Exception as e:
+                    flash(f'Error uploading file: {str(e)}', 'error')
+                    logger.error(f"Upload error: {str(e)}")
+            else:
+                flash('Invalid file type', 'error')
+            
+            return redirect(url_for('index'))
+
+        @self.app.route('/download/<path:filename>')
+        def download_file(filename):
+            """Download a processed (uploaded) document by filename."""
+            try:
+                return send_from_directory(self.config.UPLOADED_FOLDER, filename, as_attachment=True)
+            except FileNotFoundError:
+                logger.warning(f"Download requested for non-existent file: {filename}")
+                abort(404)
+
+        @self.app.route('/search', methods=['GET', 'POST'])
+        def search():
+            """Handle search requests and display results."""
+            logger.info(f"Search endpoint called with method: {request.method}")
+            
+            if request.method == 'POST':
+                query = request.form.get('query', '').strip()
+                top_k = int(request.form.get('top_k', 10))
+                search_type = request.form.get('search_type', 'rag')  # 'rag' or 'similarity'
+                
+                logger.info(f"Processing search request - Query: '{query}', Top K: {top_k}, Type: {search_type}")
+                
+                if query:
+                    try:
+                        if search_type == 'rag':
+                            # RAG search with answer generation
+                            logger.debug("Initiating RAG search with answer generation")
+                            results = self.rag_manager.milvus_manager.rag_search_and_answer(query, top_k)
+                            
+                            # Log results for debugging
+                            if results.get('error'):
+                                error_message = results.get('error')
+                                if 'No documents found in vector database' in error_message:
+                                    logger.warning(f"RAG search returned warning: {error_message}")
+                                else:
+                                    logger.error(f"RAG search returned error: {error_message}")
+                                logger.debug(f"Debug info: {results.get('debug_info', {})}")
+                            else:
+                                logger.info(f"RAG search successful - Found {results.get('num_sources', 0)} sources")
+                            
+                            return render_template('search.html', 
+                                                 query=query, 
+                                                 rag_results=results, 
+                                                 search_type=search_type)
+                        else:
+                            # Similarity search only
+                            logger.debug("Initiating similarity search")
+                            results = self.rag_manager.milvus_manager.search_documents(query, top_k)
+                            logger.info(f"Similarity search successful - Found {len(results) if results else 0} results")
+                            
+                            return render_template('search.html', 
+                                                 query=query, 
+                                                 results=results, 
+                                                 search_type=search_type)
+                                                 
+                    except Exception as e:
+                        logger.error(f"Search request failed for query '{query}': {str(e)}", exc_info=True)
+                        logger.error(f"Error type: {type(e).__name__}")
+                        
+                        # Create error result for display
+                        error_result = {
+                            "answer": f"Search failed with error: {str(e)}",
+                            "sources": [],
+                            "context_used": False,
+                            "error": str(e),
+                            "error_type": type(e).__name__
+                        }
+                        
+                        flash(f'Search error: {str(e)}', 'error')
+                        return render_template('search.html', 
+                                             query=query, 
+                                             rag_results=error_result if search_type == 'rag' else None,
+                                             results=[] if search_type != 'rag' else None,
+                                             search_type=search_type)
+                else:
+                    logger.warning("Empty search query submitted")
+                    flash('Please enter a search query', 'error')
+            
+            logger.debug("Rendering empty search page")
+            return render_template('search.html')
+
+        @self.app.route('/status/<filename>')
+        def get_status(filename):
+            """Get processing status for a specific file."""
+            if filename in self.rag_manager.processing_status:
+                status = self.rag_manager.processing_status[filename]
+                return jsonify({
+                    'status': status.status,
+                    'progress': status.progress,
+                    'message': status.message,
+                    'chunks_count': status.chunks_count,
+                    'error_details': status.error_details,
+                    'title': status.title
+                })
+            else:
+                return jsonify({'status': 'not_found'}), 404
+
+        @self.app.route('/admin/scheduler_status')
+        def scheduler_status():
+            """Diagnostic endpoint for scheduler status."""
+            return jsonify(self.rag_manager._scheduler_status())
+        
+        @self.app.route('/document/<path:filename>/update', methods=['POST'])
+        def update_document_metadata(filename):
+            """Update editable document metadata like title."""
+            title = request.form.get('title','').strip()
+            if '..' in filename or filename.startswith('/'):
+                abort(400)
+            uploaded_path = os.path.join(self.config.UPLOADED_FOLDER, filename)
+            if not os.path.isfile(uploaded_path):
+                flash('Document not found', 'error')
+                return redirect(url_for('index'))
+            try:
+                if title:
+                    self.rag_manager.url_manager.upsert_document_metadata(filename, title=title)
+                    flash('Document title updated', 'success')
+                else:
+                    flash('No title provided', 'info')
+            except Exception as e:
+                flash(f'Update failed: {e}', 'error')
+            return redirect(url_for('index'))
+        
+        @self.app.route('/process/<filename>')
+        def process_file(filename):
+            """Process a file from staging to database."""
+            if filename not in self.rag_manager.processing_status:
+                self.rag_manager.processing_status[filename] = DocumentProcessingStatus(filename=filename)
+            
+            # Start processing in background thread
+            import threading
+            thread = threading.Thread(target=self.rag_manager._process_document_background, args=(filename,))
+            thread.daemon = True
+            thread.start()
+            
+            flash(f'Processing started for "{filename}"', 'info')
+            return redirect(url_for('index'))
+        
+        @self.app.route('/url_status/<url_id>')
+        def get_url_status(url_id):
+            """Get processing status for a URL refresh."""
+            try:
+                url_id_int = int(url_id)
+            except ValueError:
+                return jsonify({'status': 'not_found'})
+                
+            status = self.rag_manager.url_processing_status.get(url_id_int)
+            if status:
+                return jsonify({
+                    'status': status.status,
+                    'progress': status.progress,
+                    'message': status.message,
+                    'error_details': status.error_details
+                })
+            
+            # No in-memory status; fetch final state from DB for in-place UI update
+            try:
+                rec = self.rag_manager.url_manager.get_url_by_id(url_id_int)
+                if rec:
+                    # Compute next_refresh similar to list view
+                    next_refresh = None
+                    try:
+                        last = rec.get('last_scraped')
+                        interval = rec.get('refresh_interval_minutes')
+                        if last and interval and int(interval) > 0:
+                            from datetime import datetime, timedelta
+                            try:
+                                dt_last = datetime.fromisoformat(str(last))
+                            except Exception:
+                                dt_last = datetime.fromisoformat(str(last)[:19])
+                            dt_next = dt_last + timedelta(minutes=int(interval))
+                            next_refresh = dt_next.strftime('%Y-%m-%d %H:%M')
+                    except Exception:
+                        next_refresh = None
+                    return jsonify({
+                        'status': 'not_found',
+                        'last_update_status': rec.get('last_update_status'),
+                        'last_scraped': rec.get('last_scraped'),
+                        'next_refresh': next_refresh
+                    })
+                else:
+                    return jsonify({'status': 'deleted'})
+            except Exception:
+                pass
+            return jsonify({'status': 'not_found'})
+
+        @self.app.route('/email_status/<int:account_id>')
+        def get_email_status(account_id: int):
+            """Get processing status for an email account refresh."""
+            status = self.rag_manager.email_processing_status.get(account_id)
+            if status:
+                return jsonify({
+                    'status': status.status,
+                    'progress': status.progress,
+                    'message': status.message,
+                    'error_details': status.error_details
+                })
+            try:
+                if hasattr(self.rag_manager, 'email_account_manager') and self.rag_manager.email_account_manager:
+                    for acct in self.rag_manager.email_account_manager.list_accounts(include_password=False):
+                        if acct.get('id') == account_id:
+                            return jsonify({
+                                'status': 'not_found',
+                                'last_update_status': acct.get('last_update_status'),
+                                'last_synced': acct.get('last_synced'),
+                                'next_run': acct.get('next_run')
+                            })
+                return jsonify({'status': 'deleted'})
+            except Exception:
+                return jsonify({'status': 'not_found'})
+        
+        @self.app.route('/delete/<folder>/<filename>')
+        def delete_file(folder, filename):
+            """Delete a file from staging or uploaded folder."""
+            if folder not in ['staging', 'uploaded']:
+                flash('Invalid folder', 'error')
+                return redirect(url_for('index'))
+            
+            folder_path = self.config.UPLOAD_FOLDER if folder == 'staging' else self.config.UPLOADED_FOLDER
+            file_path = os.path.join(folder_path, filename)
+            
+            try:
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                    flash(f'File "{filename}" deleted successfully', 'success')
+                    logger.info(f"File deleted: {filename} from {folder}")
+                else:
+                    flash('File not found', 'error')
+            except Exception as e:
+                flash(f'Error deleting file: {str(e)}', 'error')
+                logger.error(f"Delete error: {str(e)}")
+            
+            return redirect(url_for('index'))
+
+        @self.app.route('/delete_file_bg/<folder>/<filename>', methods=['POST','GET'])
+        def delete_file_bg(folder: str, filename: str):
+            """Start background (soft) deletion for a file."""
+            if folder not in ['staging', 'uploaded']:
+                flash('Invalid folder', 'error')
+                return redirect(url_for('index'))
+            if request.method == 'GET':
+                logger.info(f"GET fallback invoked for deletion of {filename} in {folder}")
+            
+            # Seed processing status so the card shows a bar immediately
+            st = self.rag_manager.processing_status.get(filename)
+            if not st:
+                self.rag_manager.processing_status[filename] = DocumentProcessingStatus(filename=filename)
+            
+            # Start background worker
+            import threading
+            th = threading.Thread(target=self.rag_manager._delete_file_background, args=(folder, filename))
+            th.daemon = True
+            th.start()
+            flash('Deletion started in background', 'info')
+            return redirect(url_for('index'))
+        
+        @self.app.route('/delete_embeddings/<filename>', methods=['POST'])
+        def delete_embeddings(filename):
+            """Delete all embeddings for a document from Milvus database."""
+            try:
+                result = self.rag_manager.milvus_manager.delete_document(filename=filename)
+                
+                if result.get("success"):
+                    deleted_count = result.get("deleted_count", 0)
+                    flash(f'Successfully deleted {deleted_count} embeddings for "{filename}"', 'success')
+                    logger.info(f"Embeddings deleted for {filename}: {deleted_count} chunks")
+                else:
+                    error_msg = result.get("error", "Unknown error occurred")
+                    flash(f'Failed to delete embeddings for "{filename}": {error_msg}', 'error')
+                    logger.error(f"Embedding deletion failed for {filename}: {error_msg}")
+                    
+            except Exception as e:
+                flash(f'Error deleting embeddings: {str(e)}', 'error')
+                logger.error(f"Embedding deletion error for {filename}: {str(e)}")
+
+            return redirect(url_for('index'))
+
+        @self.app.route('/add_url', methods=['POST'])
+        def add_url():
+            """Add a new URL with automatic title extraction."""
+            url = request.form.get('url', '').strip()
+            
+            if not url:
+                flash('URL is required', 'error')
+                return redirect(url_for('index'))
+            
+            result = self.rag_manager.url_manager.add_url(url)
+            if result['success']:
+                extracted_title = result.get('title', 'Unknown')
+                flash(f'URL added successfully with title: "{extracted_title}"', 'success')
+            else:
+                flash(f'Failed to add URL: {result["message"]}', 'error')
+            
+            return redirect(url_for('index'))
+        
+        @self.app.route('/delete_url/<url_id>', methods=['POST'])
+        def delete_url(url_id):
+            """Delete a URL."""
+            try:
+                url_id_int = int(url_id)
+            except ValueError:
+                flash('Invalid URL ID', 'error')
+                return redirect(url_for('index'))
+                
+            # Load the URL and any crawled pages
+            url_rec = self.rag_manager.url_manager.get_url_by_id(url_id_int)
+            if not url_rec:
+                flash('URL not found', 'error')
+                return redirect(url_for('index'))
+            url = url_rec.get('url')
+            
+            # Delete embeddings for the single URL
+            try:
+                import hashlib
+                doc_id = hashlib.sha1(url.strip().encode('utf-8')).hexdigest()[:16]
+                self.rag_manager.milvus_manager.delete_document(document_id=doc_id)
+            except Exception as e:
+                logger.warning(f"Failed to delete primary URL embeddings: {e}")
+            
+            # If domain crawl, delete each page embeddings
+            try:
+                pages = self.rag_manager.url_manager.get_pages_for_parent(url_id_int)
+                for page_url in pages:
+                    try:
+                        page_doc_id = hashlib.sha1(page_url.strip().encode('utf-8')).hexdigest()[:16]
+                        self.rag_manager.milvus_manager.delete_document(document_id=page_doc_id)
+                    except Exception as de:
+                        logger.warning(f"Failed to delete page embeddings for {page_url}: {de}")
+                # Remove page records
+                self.rag_manager.url_manager.delete_pages_for_parent(url_id_int)
+            except Exception as e:
+                logger.warning(f"Failed to clean up url_pages: {e}")
+
+            # Finally remove the URL record
+            result = self.rag_manager.url_manager.delete_url(url_id_int)
+            if result['success']:
+                flash('URL and related embeddings deleted successfully', 'success')
+            else:
+                flash(f'Failed to delete URL: {result["message"]}', 'error')
+            return redirect(url_for('index'))
+
+        @self.app.route('/delete_url_bg/<url_id>', methods=['POST'])
+        def delete_url_bg(url_id):
+            """Start background deletion of a URL and its embeddings, with progress bar."""
+            try:
+                url_id_int = int(url_id)
+            except ValueError:
+                flash('Invalid URL ID', 'error')
+                return redirect(url_for('index'))
+                
+            url_rec = self.rag_manager.url_manager.get_url_by_id(url_id_int)
+            if not url_rec:
+                flash('URL not found', 'error')
+                return redirect(url_for('index'))
+            
+            # If already processing something (refresh or delete), don't start another
+            if url_id_int in self.rag_manager.url_processing_status:
+                flash('An operation is already in progress for this URL', 'info')
+                return redirect(url_for('index'))
+            
+            # Seed a status entry so the UI shows a progress bar immediately after redirect
+            self.rag_manager.url_processing_status[url_id_int] = URLProcessingStatus(
+                url=url_rec.get('url', ''),
+                title=url_rec.get('title')
+            )
+            
+            import threading
+            th = threading.Thread(target=self.rag_manager._delete_url_background, args=(url_id_int,))
+            th.daemon = True
+            th.start()
+            flash('Deletion started in background', 'info')
+            return redirect(url_for('index'))
+
+        @self.app.route('/update_url/<url_id>', methods=['POST'])
+        def update_url(url_id):
+            """Update URL metadata including title, description, and refresh schedule."""
+            try:
+                url_id_int = int(url_id)
+            except ValueError:
+                flash('Invalid URL ID', 'error')
+                return redirect(url_for('index'))
+                
+            title = request.form.get('title')
+            description = request.form.get('description')
+            refresh_raw = request.form.get('refresh_interval_minutes')
+            crawl_domain_flag = 1 if request.form.get('crawl_domain') in ('on', '1', 'true', 'True') else 0
+            ignore_robots_flag = 1 if request.form.get('ignore_robots') in ('on', '1', 'true', 'True') else 0
+            snapshot_enabled_flag = 1 if request.form.get('snapshot_enabled') in ('on', '1', 'true', 'True') else 0
+            
+            # Optional retention fields
+            sr_raw = request.form.get('snapshot_retention_days')
+            sm_raw = request.form.get('snapshot_max_snapshots')
+            
+            refresh_interval_minutes = None
+            if refresh_raw:
+                try:
+                    refresh_interval_minutes = int(refresh_raw)
+                    if refresh_interval_minutes < 0:
+                        refresh_interval_minutes = None
+                except ValueError:
+                    refresh_interval_minutes = None
+            
+            snapshot_retention_days = None
+            snapshot_max_snapshots = None
+            try:
+                if sr_raw and sr_raw.strip() != '':
+                    v = int(sr_raw)
+                    if v >= 0:
+                        snapshot_retention_days = v
+            except ValueError:
+                snapshot_retention_days = None
+            try:
+                if sm_raw and sm_raw.strip() != '':
+                    v = int(sm_raw)
+                    if v >= 0:
+                        snapshot_max_snapshots = v
+            except ValueError:
+                snapshot_max_snapshots = None
+
+            result = self.rag_manager.url_manager.update_url_metadata(
+                url_id_int, title, description, refresh_interval_minutes,
+                crawl_domain_flag, ignore_robots_flag,
+                snapshot_enabled_flag, snapshot_retention_days, snapshot_max_snapshots
+            )
+            if result.get('success'):
+                flash('URL metadata updated', 'success')
+            else:
+                flash(f"Failed to update URL: {result.get('message','Unknown error')}", 'error')
+            return redirect(url_for('index'))
+
+        @self.app.route('/ingest_url/<url_id>', methods=['POST'])
+        def ingest_url(url_id):
+            """Trigger immediate ingestion/refresh for a URL."""
+            try:
+                url_id_int = int(url_id)
+            except ValueError:
+                flash('Invalid URL ID', 'error')
+                return redirect(url_for('index'))
+                
+            url_rec = self.rag_manager.url_manager.get_url_by_id(url_id_int)
+            if not url_rec:
+                flash('URL not found', 'error')
+                return redirect(url_for('index'))
+            
+            # Initialize and start background refresh with progress if not already running
+            if url_id_int in self.rag_manager.url_processing_status:
+                flash('Refresh already in progress for this URL', 'info')
+                return redirect(url_for('index'))
+            
+            self.rag_manager.url_processing_status[url_id_int] = URLProcessingStatus(
+                url=url_rec.get('url', ''),
+                title=url_rec.get('title')
+            )
+            
+            import threading
+            th = threading.Thread(target=self.rag_manager._process_url_background, args=(url_rec['id'],))
+            th.daemon = True
+            th.start()
+            flash('Refresh started in background', 'info')
+            return redirect(url_for('index'))
+
+        @self.app.route('/email_accounts', methods=['GET'])
+        def list_email_accounts():
+            """Return JSON list of configured email accounts."""
+            try:
+                if hasattr(self.rag_manager, 'email_account_manager') and self.rag_manager.email_account_manager:
+                    accounts = self.rag_manager.email_account_manager.list_accounts(include_password=False)
+                    return jsonify(accounts)
+                else:
+                    return jsonify([])
+            except Exception as e:
+                logger.error(f"Failed to fetch email accounts: {e}")
+                return jsonify({"error": "Failed to fetch email accounts"}), 500
+
+        @self.app.route('/email_accounts', methods=['POST'])
+        def add_email_account():
+            """Create a new email account configuration."""
+            account_name = request.form.get('account_name', '').strip()
+            server_type = request.form.get('server_type', 'imap').strip().lower() or 'imap'
+            server = request.form.get('server', '').strip()
+            email_address = request.form.get('email_address', '').strip()
+            password = request.form.get('password', '').strip()
+            port_str = request.form.get('port', '').strip()
+            mailbox = request.form.get('mailbox', '').strip() or None
+            batch_limit_str = request.form.get('batch_limit', '').strip()
+            refresh_raw = request.form.get('refresh_interval_minutes', '').strip()
+            use_ssl = request.form.get('use_ssl') in ('1', 'on')
+
+            logger.info(
+                "Request to add email account '%s' (%s) on %s for %s",
+                account_name, server_type, server, email_address,
+            )
+
+            if not all([account_name, server, email_address, password, port_str]):
+                flash('Missing required fields', 'error')
+                return redirect(url_for('index'))
+
+            try:
+                port = int(port_str)
+                batch_limit = int(batch_limit_str) if batch_limit_str else None
+                refresh_interval = int(refresh_raw) if refresh_raw else self.config.EMAIL_DEFAULT_REFRESH_MINUTES
+            except ValueError:
+                flash('Port, batch limit and refresh interval must be numbers', 'error')
+                return redirect(url_for('index'))
+
+            record = {
+                'account_name': account_name,
+                'server_type': server_type,
+                'server': server,
+                'port': port,
+                'email_address': email_address,
+                'password': password,
+                'mailbox': mailbox,
+                'batch_limit': batch_limit,
+                'use_ssl': 1 if use_ssl else 0,
+                'refresh_interval_minutes': refresh_interval,
+            }
+
+            try:
+                if hasattr(self.rag_manager, 'email_account_manager') and self.rag_manager.email_account_manager:
+                    self.rag_manager.email_account_manager.create_account(record)
+                    logger.info("Email account '%s' added successfully", account_name)
+                    flash('Email account added successfully', 'success')
+                else:
+                    flash('Email account manager not available', 'error')
+            except Exception as e:
+                logger.exception("Failed to add email account '%s': %s", account_name, e)
+                flash(f'Failed to add email account: {e}', 'error')
+
+            return redirect(url_for('index'))
+
+        @self.app.route('/email_accounts/<int:account_id>', methods=['POST'])
+        def update_email_account(account_id: int):
+            """Update an existing email account configuration."""
+            account_name = request.form.get('account_name', '').strip()
+            server = request.form.get('server', '').strip()
+            email_address = request.form.get('email_address', '').strip()
+            password = request.form.get('password', '').strip()
+            port_str = request.form.get('port', '').strip()
+            mailbox = request.form.get('mailbox', '').strip() or None
+            batch_limit_str = request.form.get('batch_limit', '').strip()
+            refresh_raw = request.form.get('refresh_interval_minutes', '').strip()
+            use_ssl = request.form.get('use_ssl') in ('1', 'on')
+            server_type = request.form.get('server_type', '').strip()
+
+            updates: Dict[str, Any] = {}
+            if account_name:
+                updates['account_name'] = account_name
+            if server:
+                updates['server'] = server
+            if server_type:
+                updates['server_type'] = server_type.lower()
+            if email_address:
+                updates['email_address'] = email_address
+            if password:
+                updates['password'] = password
+            if mailbox is not None:
+                updates['mailbox'] = mailbox
+            if batch_limit_str:
+                try:
+                    updates['batch_limit'] = int(batch_limit_str)
+                except ValueError:
+                    flash('Batch limit must be a number', 'error')
+                    return redirect(url_for('index'))
+            if port_str:
+                try:
+                    updates['port'] = int(port_str)
+                except ValueError:
+                    flash('Port must be a number', 'error')
+                    return redirect(url_for('index'))
+            if refresh_raw:
+                try:
+                    updates['refresh_interval_minutes'] = int(refresh_raw)
+                except ValueError:
+                    flash('Refresh interval must be a number', 'error')
+                    return redirect(url_for('index'))
+            updates['use_ssl'] = 1 if use_ssl else 0
+
+            if not updates:
+                flash('No fields to update', 'error')
+                return redirect(url_for('index'))
+
+            try:
+                if hasattr(self.rag_manager, 'email_account_manager') and self.rag_manager.email_account_manager:
+                    self.rag_manager.email_account_manager.update_account(account_id, updates)
+                    flash('Email account updated successfully', 'success')
+                else:
+                    flash('Email account manager not available', 'error')
+            except Exception as e:
+                flash(f'Failed to update email account: {e}', 'error')
+
+            return redirect(url_for('index'))
+
+        @self.app.route('/email_accounts/<int:account_id>/delete', methods=['POST'])
+        def delete_email_account(account_id: int):
+            """Remove an email account configuration."""
+            try:
+                if hasattr(self.rag_manager, 'email_account_manager') and self.rag_manager.email_account_manager:
+                    self.rag_manager.email_account_manager.delete_account(account_id)
+                    flash('Email account deleted', 'success')
+                else:
+                    flash('Email account manager not available', 'error')
+            except Exception as e:
+                flash(f'Failed to delete email account: {e}', 'error')
+
+            return redirect(url_for('index'))
+
+        @self.app.route('/email_accounts/<int:account_id>/refresh', methods=['POST'])
+        def refresh_email_account(account_id: int):
+            """Trigger immediate sync for an email account."""
+            if not hasattr(self.rag_manager, 'email_account_manager') or not self.rag_manager.email_account_manager:
+                flash('Email ingestion not configured', 'error')
+                return redirect(url_for('index'))
+                
+            import threading
+            th = threading.Thread(target=self.rag_manager._refresh_email_account_background, args=(account_id,))
+            th.daemon = True
+            th.start()
+            flash('Email refresh started in background', 'info')
+            return redirect(url_for('index'))
+
+    def _get_directory_files(self, directory: str) -> list:
+        """
+        Get list of files in a directory with metadata enrichment.
+        
+        Args:
+            directory: Directory path to scan
+            
+        Returns:
+            List of file dictionaries with metadata for uploaded files
+        """
+        from datetime import datetime
+        
+        files = []
+        try:
+            if not os.path.exists(directory):
+                return files
+                
+            for filename in os.listdir(directory):
+                file_path = os.path.join(directory, filename)
+                if not os.path.isfile(file_path):
+                    continue
+                    
+                stat = os.stat(file_path)
+                entry = {
+                    'name': filename,
+                    'size': stat.st_size,
+                    'modified': datetime.fromtimestamp(stat.st_mtime),
+                    'status': self.rag_manager.processing_status.get(filename)
+                }
+                
+                # Enrich uploaded files with metadata from database
+                if directory == self.config.UPLOADED_FOLDER:
+                    try:
+                        meta = self.rag_manager.url_manager.get_document_metadata(filename) or {}
+                        entry['title'] = meta.get('title') or self._fallback_title_from_filename(filename)
+                        entry['chunks_count'] = meta.get('chunk_count')
+                        entry['page_count'] = meta.get('page_count')
+                        entry['word_count'] = meta.get('word_count')
+                        
+                        # Ensure top_keywords is a list, not a string
+                        top_keywords = meta.get('top_keywords')
+                        
+                        if isinstance(top_keywords, str):
+                            # Handle JSON string or comma-separated string
+                            import json
+                            try:
+                                parsed = json.loads(top_keywords)
+                                entry['top_keywords'] = parsed
+                            except (json.JSONDecodeError, ValueError):
+                                # Fall back to comma-split
+                                entry['top_keywords'] = [kw.strip() for kw in top_keywords.split(',') if kw.strip()]
+                        elif isinstance(top_keywords, list):
+                            entry['top_keywords'] = top_keywords
+                        else:
+                            entry['top_keywords'] = []
+                            
+                        # Skip files marked for deletion
+                        st = entry['status']
+                        if st and st.status == 'completed' and (st.message or '').lower().startswith('deletion complete'):
+                            continue
+                    except Exception as e:
+                        logger.warning(f"Failed to get metadata for {filename}: {e}")
+                        entry['title'] = self._fallback_title_from_filename(filename)
+                        entry['top_keywords'] = []
+                        
+                files.append(entry)
+                
+            return sorted(files, key=lambda x: x['modified'], reverse=True)
+        except Exception as e:
+            logger.error(f"Error reading directory {directory}: {e}")
+            return []
+
+    def _allowed_file(self, filename: str) -> bool:
+        """
+        Check if file extension is allowed.
+        
+        Args:
+            filename: Name of the file to check
+            
+        Returns:
+            True if file extension is allowed, False otherwise
+        """
+        return ('.' in filename and 
+                filename.rsplit('.', 1)[1].lower() in self.config.ALLOWED_EXTENSIONS)
+
+    def _get_database_status(self) -> Dict[str, Any]:
+        """Get PostgreSQL database connection status."""
+        try:
+            if hasattr(self.rag_manager, 'database_manager') and hasattr(self.rag_manager.database_manager, 'postgresql_manager'):
+                return self.rag_manager.database_manager.postgresql_manager.get_version_info()
+            else:
+                # Fallback - create a temporary PostgreSQL manager to get version
+                from ingestion.core.postgres_manager import PostgreSQLManager
+                temp_pg_manager = PostgreSQLManager()
+                status = temp_pg_manager.get_version_info()
+                temp_pg_manager.close()
+                return status
+        except Exception as e:
+            return {"connected": False, "error": f"PostgreSQL: {str(e)}"}
+
+    def _get_knowledgebase_metadata(self) -> Dict[str, Any]:
+        """Get knowledgebase metadata statistics."""
+        kb_meta = {
+            'documents_total': 0,
+            'avg_words_per_doc': 0,
+            'avg_chunks_per_doc': 0,
+            'median_chunk_chars': 0,
+            'top_keywords': []
+        }
+        try:
+            kb_stats = self.rag_manager.url_manager.get_knowledgebase_metadata()
+            kb_meta.update(kb_stats)
+        except Exception as e:
+            logger.warning(f"KB meta aggregation failed: {e}")
+        return kb_meta
+
+    def _get_url_metadata(self) -> Dict[str, Any]:
+        """Get URL management statistics."""
+        url_meta = {
+            'total': 0,
+            'active': 0,
+            'crawl_on': 0,
+            'robots_ignored': 0,
+            'scraped': 0,
+            'never_scraped': 0,
+            'due_now': 0,
+        }
+        try:
+            url_stats = self.rag_manager.url_manager.get_url_metadata_stats()
+            url_meta.update(url_stats)
+        except Exception as e:
+            logger.warning(f"URL meta aggregation failed: {e}")
+        return url_meta
+
+    def _get_email_metadata(self) -> Dict[str, Any]:
+        """Get email processing statistics."""
+        email_meta = {
+            'total_accounts': 0,
+            'active_accounts': 0,
+            'total_emails': 0,
+            'processed_emails': 0,
+            'unprocessed_emails': 0,
+            'emails_with_attachments': 0,
+            'never_synced': 0,
+            'due_now': 0,
+            'avg_emails_per_account': 0,
+            'latest_email_date': None,
+            'most_active_account': None
+        }
+        try:
+            if (hasattr(self.rag_manager, 'email_account_manager') and 
+                self.rag_manager.email_account_manager and
+                hasattr(self.rag_manager.email_account_manager, 'get_account_stats')):
+                email_stats = self.rag_manager.email_account_manager.get_account_stats()
+                email_meta.update(email_stats)
+                logger.debug("Email meta aggregation completed using PostgreSQL")
+        except Exception as e:
+            logger.warning(f"Email meta aggregation failed: {e}")
+        return email_meta
+
+    def _get_enriched_urls(self) -> list:
+        """Get URLs enriched with robots.txt information."""
+        try:
+            urls = self.rag_manager.url_manager.get_all_urls()
+            enriched_urls = []
+            for u in urls:
+                try:
+                    rp, crawl_delay = self.rag_manager._get_robots(u.get('url', ''))
+                    try:
+                        allowed = rp.can_fetch(self.config.CRAWL_USER_AGENT, u.get('url', ''))
+                    except Exception:
+                        allowed = True
+                    try:
+                        has_entries = bool(getattr(rp, 'default_entry', None) or getattr(rp, 'entries', []))
+                    except Exception:
+                        has_entries = False
+                    u['robots_allowed'] = 1 if allowed else 0
+                    u['robots_has_rules'] = 1 if (has_entries or crawl_delay is not None) else 0
+                    u['robots_crawl_delay'] = crawl_delay
+                except Exception:
+                    u['robots_allowed'] = None
+                    u['robots_has_rules'] = None
+                    u['robots_crawl_delay'] = None
+                enriched_urls.append(u)
+            return enriched_urls
+        except Exception as e:
+            logger.warning(f"Failed to get enriched URLs: {e}")
+            return []
+
+    def _get_email_accounts(self) -> list:
+        """Get configured email accounts."""
+        try:
+            if hasattr(self.rag_manager, 'email_account_manager') and self.rag_manager.email_account_manager:
+                return self.rag_manager.email_account_manager.list_accounts(include_password=False)
+            else:
+                logger.info("PostgreSQL email manager not available")
+                return []
+        except Exception as e:
+            logger.warning(f"Failed to load email accounts: {e}")
+            return []
+
+    def _fallback_title_from_filename(self, filename: str) -> str:
+        """
+        Generate a fallback title from filename when no metadata is available.
+        
+        Args:
+            filename: The filename to convert to a title
+            
+        Returns:
+            A human-readable title derived from the filename
+        """
+        base = os.path.splitext(filename)[0]
+        base = base.replace('_', ' ').replace('-', ' ').strip()
+        if not base:
+            return filename
+        words = []
+        for w in base.split():
+            if len(w) > 3 and w.isupper():
+                words.append(w)
+            else:
+                words.append(w.capitalize())
+        return ' '.join(words)

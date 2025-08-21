@@ -10,10 +10,10 @@ import requests
 import json
 import hashlib
 import uuid
-from datetime import datetime
-from typing import Dict, List, Optional, Any
-from bs4 import BeautifulSoup
 import re
+from datetime import datetime
+from typing import Dict, List, Optional, Any, Union
+from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +27,14 @@ class PostgreSQLURLManager:
         # For compatibility with SQLite URLManager
         self.db_path = "postgresql://rag_metadata"  # Fake path for compatibility
         logger.info("PostgreSQL URLManager initialized")
+    
+    def _is_valid_uuid_format(self, uuid_string: str) -> bool:
+        """Validate if a string is a valid UUID format."""
+        try:
+            uuid_obj = uuid.UUID(uuid_string)
+            return str(uuid_obj) == uuid_string
+        except (ValueError, TypeError):
+            return False
     
     def validate_url(self, url: str) -> bool:
         """Validate if the provided string is a valid URL."""
@@ -48,8 +56,8 @@ class PostgreSQLURLManager:
             
             soup = BeautifulSoup(response.content, 'html.parser')
             title_tag = soup.find('title')
-            if title_tag and title_tag.string:
-                title = title_tag.string.strip()
+            if title_tag and title_tag.get_text():
+                title = title_tag.get_text().strip()
                 title = re.sub(r'\s+', ' ', title)  # Normalize whitespace
                 title = title[:200]  # Limit length
                 return title
@@ -148,30 +156,60 @@ class PostgreSQLURLManager:
             logger.error(f"Error retrieving URLs: {str(e)}")
             return []
     
-    def delete_url(self, url_id: int) -> Dict[str, Any]:
+    def delete_url(self, url_id: str) -> Dict[str, Any]:
         """Delete a URL from the database."""
+        logger.info(f"Starting URL deletion process for ID: {url_id}")
+        
+        # Input validation
+        if not url_id:
+            logger.error("URL deletion failed: No URL ID provided")
+            return {"success": False, "message": "Invalid URL ID: ID cannot be empty"}
+        
+        # Basic UUID format validation
+        if not self._is_valid_uuid_format(url_id):
+            logger.error(f"URL deletion failed: Invalid UUID format for ID: {url_id}")
+            return {"success": False, "message": "Invalid URL ID format"}
+        
         try:
+            logger.debug(f"Attempting to delete URL with ID: {url_id}")
             with self.postgres.get_connection() as conn:
                 with conn.cursor() as cursor:
-                    cursor.execute("DELETE FROM urls WHERE id = %s", (str(url_id),))
-                    if cursor.rowcount > 0:
+                    # First check if the URL exists
+                    cursor.execute("SELECT url, title FROM urls WHERE id = %s", (url_id,))
+                    existing_url = cursor.fetchone()
+                    
+                    if not existing_url:
+                        logger.warning(f"URL deletion failed: No URL found with ID: {url_id}")
+                        return {"success": False, "message": "URL not found"}
+                    
+                    logger.info(f"Found URL to delete - ID: {url_id}, URL: {existing_url['url']}, Title: {existing_url['title']}")
+                    
+                    # Perform the deletion
+                    cursor.execute("DELETE FROM urls WHERE id = %s", (url_id,))
+                    deleted_count = cursor.rowcount
+                    
+                    if deleted_count > 0:
                         conn.commit()
-                        logger.info(f"Deleted URL with ID: {url_id}")
+                        logger.info(f"Successfully deleted URL with ID: {url_id} (URL: {existing_url['url']})")
                         return {"success": True, "message": "URL deleted successfully"}
                     else:
+                        logger.error(f"URL deletion failed: No rows affected for ID: {url_id}")
                         return {"success": False, "message": "URL not found"}
+                        
         except Exception as e:
-            logger.error(f"Error deleting URL: {str(e)}")
+            logger.error(f"Database error during URL deletion for ID {url_id}: {str(e)}", exc_info=True)
             return {"success": False, "message": f"Database error: {str(e)}"}
 
-    def get_pages_for_parent(self, parent_url_id: int) -> List[str]:
+    def get_pages_for_parent(self, parent_url_id: str) -> List[str]:
         """Get all pages for a parent URL (not implemented in current PostgreSQL schema)."""
+        logger.debug(f"Getting pages for parent URL ID: {parent_url_id}")
         # The current PostgreSQL schema doesn't have url_pages table
         # Return empty list for now
         return []
 
-    def delete_pages_for_parent(self, parent_url_id: int) -> None:
+    def delete_pages_for_parent(self, parent_url_id: str) -> None:
         """Delete all pages for a parent URL (not implemented in current PostgreSQL schema)."""
+        logger.debug(f"Deleting pages for parent URL ID: {parent_url_id}")
         # The current PostgreSQL schema doesn't have url_pages table
         # No-op for now
         pass
@@ -187,12 +225,27 @@ class PostgreSQLURLManager:
             logger.error(f"Error getting URL count: {str(e)}")
             return 0
 
-    def get_url_by_id(self, url_id: int) -> Optional[Dict[str, Any]]:
+    def get_url_by_id(self, url_id: Union[str, int]) -> Optional[Dict[str, Any]]:
         """Get URL by ID."""
+        logger.debug(f"Getting URL by ID: {url_id}")
+        
+        # Input validation
+        if not url_id:
+            logger.error("get_url_by_id failed: No URL ID provided")
+            return None
+            
+        # Convert to string for UUID handling
+        url_id_str = str(url_id)
+        
+        # Basic UUID format validation
+        if not self._is_valid_uuid_format(url_id_str):
+            logger.error(f"get_url_by_id failed: Invalid UUID format for ID: {url_id_str}")
+            return None
+            
         try:
             with self.postgres.get_connection() as conn:
                 with conn.cursor() as cursor:
-                    cursor.execute("SELECT * FROM urls WHERE id = %s", (str(url_id),))
+                    cursor.execute("SELECT * FROM urls WHERE id = %s", (url_id_str,))
                     row = cursor.fetchone()
                     if row:
                         url_dict = dict(row)
@@ -211,10 +264,14 @@ class PostgreSQLURLManager:
                         for key, value in url_dict.items():
                             if isinstance(value, datetime):
                                 url_dict[key] = value.isoformat() if value else None
+                        
+                        logger.debug(f"Found URL: {url_dict['url']} (ID: {url_id_str})")
                         return url_dict
-                    return None
+                    else:
+                        logger.warning(f"No URL found with ID: {url_id_str}")
+                        return None
         except Exception as e:
-            logger.error(f"Error getting URL by id: {e}")
+            logger.error(f"Database error getting URL by ID {url_id_str}: {str(e)}", exc_info=True)
             return None
 
     def update_url_metadata(self, url_id: int, title: Optional[str], description: Optional[str], 

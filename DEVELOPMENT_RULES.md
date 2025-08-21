@@ -4,6 +4,8 @@
 This document contains the development standards, patterns, and requirements for a python project. These rules ensure consistency, maintainability, and proper functionality across all components.
 
 ---
+SOURCE THE ENVIRONMENT! 
+source .venv/bin/activate
 
 ## 🐍 Python Development Best Practices (MANDATORY)
 

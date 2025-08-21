@@ -10,9 +10,10 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from bs4 import BeautifulSoup
 
-from .connector import EmailConnector, IMAPConnector
-from .email_manager import compute_header_hash
+from .connectors import EmailConnector, IMAPConnector
+from .utils import compute_header_hash
 from .processor import EmailProcessor
+from ingestion.email.email_manager_postgresql import PostgreSQLEmailManager
 
 CONTENT_HASH_RECIPE_VERSION = 1
 
@@ -146,7 +147,7 @@ def main() -> None:
     parser.add_argument("--imap-password", required=True)
     parser.add_argument("--mailbox", default="INBOX")
     parser.add_argument("--since-days", type=int, default=1)
-    parser.add_argument("--sqlite-path", default="emails.db")
+    parser.add_argument("--postgres-config", required=True, help="Path to PostgreSQL configuration file")
     args = parser.parse_args()
 
     connector = IMAPConnector(
@@ -157,7 +158,9 @@ def main() -> None:
         mailbox=args.mailbox,
     )
 
-    sqlite_conn = sqlite3.connect(args.sqlite_path)
+    # Load PostgreSQL configuration
+    with open(args.postgres_config, "r") as config_file:
+        postgres_config = json.load(config_file)
 
     class _NoopMilvus:
         def add_embeddings(
@@ -169,7 +172,8 @@ def main() -> None:
             pass
 
     milvus = _NoopMilvus()
-    processor = EmailProcessor(milvus, sqlite_conn)
+    email_manager = PostgreSQLEmailManager(postgres_config)
+    processor = EmailProcessor(milvus, email_manager)
     since = datetime.now(UTC) - timedelta(days=args.since_days)
     run_email_ingestion(connector, processor, since_date=since)
 

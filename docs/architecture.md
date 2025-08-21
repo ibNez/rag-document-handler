@@ -1,16 +1,84 @@
 # System Architecture
 
-The RAG Document Handler uses a dual database architecture with Flask web application, PostgreSQL for metadata, and Milvus for vector embeddings.
+The RAG Document Handler uses a dual database architecture with Flask web application, PostgreSQL for metadata, and Milvus for vector embeddings. The codebase has been refactored to follow Python development best practices with proper module organization and separation of concerns.
+
+## Refactored Code Structure
+
+The application has been reorganized into logical modules following Python best practices:
+
+```
+rag_manager/
+├── __init__.py                    # Package initialization
+├── app.py                         # Main application orchestrator
+├── core/
+│   ├── __init__.py
+│   ├── config.py                  # Centralized configuration management
+│   └── models.py                  # Data models and dataclasses
+├── managers/
+│   ├── __init__.py
+│   └── milvus_manager.py          # Milvus database operations and RAG search
+└── web/
+    ├── __init__.py
+    └── routes.py                  # Flask routes and web handlers
+
+ingestion/
+├── __init__.py                    # Ingestion package initialization
+├── core/
+│   ├── __init__.py
+│   ├── database_manager.py        # Core database abstraction layer
+│   ├── postgres_manager.py        # PostgreSQL connection and operations
+│   └── db_utils.py                # Database utility functions
+├── email/
+│   ├── __init__.py
+│   ├── manager.py                 # PostgreSQL-based email account management
+│   ├── email_manager_postgresql.py # Email message storage and retrieval
+│   ├── processor.py               # Email content processing and embedding
+│   ├── orchestrator.py            # Email processing coordination
+│   └── connectors/                # Email protocol implementations
+│       ├── __init__.py
+│       ├── imap_connector.py      # IMAP protocol handler
+│       ├── gmail_connector.py     # Gmail API integration
+│       └── exchange_connector.py  # Exchange server integration
+├── url/
+│   ├── __init__.py
+│   ├── manager.py                 # URL metadata and scheduling management
+│   └── orchestrator.py            # URL processing and document integration
+├── document/
+│   ├── __init__.py
+│   └── processor.py               # Document content extraction and chunking
+└── utils/
+    ├── __init__.py
+    ├── crypto.py                  # Encryption utilities for sensitive data
+    └── scheduler_utils.py          # Scheduling and timing utilities
+```
+
+### Key Architectural Improvements
+
+1. **Separation of Concerns**: Each module has a single responsibility
+2. **Consistent Structure**: All ingestion types (email, URL, document) follow the same pattern
+3. **Dependency Injection**: Components are properly injected rather than tightly coupled
+4. **Type Safety**: All modules use proper type hints and annotations
+5. **Error Handling**: Comprehensive exception handling with specific error types
+6. **Comprehensive Logging**: Detailed logging throughout all components following DEVELOPMENT_RULES.md
+7. **Configuration Management**: Centralized configuration with environment variable support
+8. **Crypto Separation**: Sensitive data encryption isolated in dedicated crypto module
 
 ## Components
 
 | Component | Description |
 |-----------|-------------|
-| `app.py` | Main Flask application with `RAGDocumentHandler` class implementing upload, URL management, embedding generation, and search |
-| `ingestion/` | Database management modules for PostgreSQL and Milvus integration |
+| `app.py` | Main Flask application entry point |
+| `rag_manager/app.py` | Main application orchestrator class |
+| `rag_manager/managers/milvus_manager.py` | Vector database operations and RAG search functionality |
+| `rag_manager/web/routes.py` | Web interface and route handlers |
+| `ingestion/core/` | Core database abstraction and PostgreSQL management |
+| `ingestion/email/` | Email account management, processing, and connectors |
+| `ingestion/url/` | URL crawling, scheduling, and content processing |
+| `ingestion/document/` | Document content extraction and chunking |
+| `ingestion/utils/` | Shared utilities including encryption and scheduling |
 | `templates/` | Jinja2 templates for the responsive web UI |
 | `static/` | Static assets (CSS, JS, images) used by the templates |
-| `setup.sh` | Enhanced setup script with `--all`, `--dev`, and `--help` flags |
+| `start.sh` | Application startup script with service checks |
 | `uninstall.sh` | Safe removal script with `--dry-run` and project-specific cleanup |
 | `docker-compose.yml` | Container orchestration for PostgreSQL and Milvus |
 
@@ -87,29 +155,29 @@ The Milvus collection uses a unified schema for all content types (documents, UR
 
 ### Document Upload Flow
 1. **File Upload**: Users upload documents through web interface
-2. **Content Extraction**: Text extracted using unstructured library
-3. **Text Chunking**: Content split into overlapping chunks for embedding
-4. **PostgreSQL Storage**: Document metadata stored in documents table
-5. **Vector Generation**: Text chunks embedded using Ollama (mxbai-embed-large)
-6. **Milvus Storage**: Embeddings stored with mapped metadata fields
+2. **Content Extraction**: Text extracted using DocumentProcessor with unstructured library
+3. **Text Chunking**: Content split into overlapping chunks optimized for embedding
+4. **PostgreSQL Storage**: Document metadata stored in documents table via RAGDatabaseManager
+5. **Vector Generation**: Text chunks embedded using Ollama (mxbai-embed-large model)
+6. **Milvus Storage**: Embeddings stored through MilvusManager with mapped metadata fields
 
 ### URL Crawling Flow
 1. **URL Submission**: Users submit URLs through web interface
-2. **Content Crawling**: Web pages fetched and parsed for text content
-3. **Metadata Extraction**: Title, headers, and page info extracted
-4. **PostgreSQL Storage**: URL metadata stored in urls table with JSONB attributes
-5. **Text Processing**: Page content chunked for optimal embedding
-6. **Vector Storage**: Embeddings stored in Milvus with url category
+2. **URL Management**: URLs stored and scheduled via ingestion/url/manager.py
+3. **Content Crawling**: URLOrchestrator coordinates web page fetching and parsing
+4. **Document Processing**: Content processed through ingestion/document/processor.py
+5. **PostgreSQL Storage**: URL metadata stored in urls table with scheduling information
+6. **Vector Storage**: Page content embedded and stored in Milvus with url category
 
 ### Email Processing Flow
-1. **Account Configuration**: Email accounts stored encrypted in email_accounts table
-2. **IMAP/POP3 Connection**: Connector establishes secure connection to mail server
-3. **Smart Batch Processing**: Emails fetched in batches to avoid duplicates
-4. **Content Processing**: Email body text extracted and chunked
+1. **Account Configuration**: Email accounts encrypted and stored via ingestion/email/manager.py
+2. **Connector Selection**: Appropriate connector (IMAP, Gmail, Exchange) instantiated
+3. **Smart Batch Processing**: EmailProcessor coordinates batched email retrieval
+4. **Content Processing**: Email content extracted and chunked for optimal embedding
 5. **Dual Storage**: 
-   - **PostgreSQL**: Email metadata in email_messages table
-   - **Milvus**: Text embeddings with email category and mapped schema
-6. **Scheduled Sync**: Background scheduler triggers periodic email syncing
+   - **PostgreSQL**: Email metadata via email_manager_postgresql.py
+   - **Milvus**: Text embeddings through dedicated email vector store
+6. **Orchestrated Sync**: EmailOrchestrator manages periodic synchronization
 
 ### Search and Retrieval Flow
 1. **Query Processing**: User search queries processed through web interface
@@ -383,7 +451,6 @@ Email content is mapped to the unified Milvus document schema as follows:
 ## Configuration Management
 
 ### Environment Variables
-- **`USE_POSTGRESQL_URL_MANAGER`**: Toggles between SQLite and PostgreSQL backends
 - **`EMAIL_ENCRYPTION_KEY`**: Fernet key for encrypting stored email passwords
 - **`MILVUS_HOST/PORT`**: Vector database connection settings
 - **`POSTGRES_HOST/PORT/DB/USER/PASSWORD`**: Relational database connection
@@ -470,11 +537,6 @@ Email content is mapped to the unified Milvus document schema as follows:
 
 ## Future Enhancements
 
-### Code Organization
-- [ ] Split `app.py` into smaller modules for maintainability
-- [ ] Separate email processing into standalone service
-- [ ] Create unified database abstraction layer
-
 ### Performance and Scaling
 - [ ] Add Milvus clustering support for large datasets
 - [ ] Optimize PostgreSQL queries with proper indexing
@@ -482,12 +544,9 @@ Email content is mapped to the unified Milvus document schema as follows:
 
 ### Monitoring and Observability
 - [ ] Add structured logging with correlation IDs
-- [ ] Implement health check endpoints for all services
-- [ ] Add metrics collection (Prometheus/Grafana)
 - [ ] Create alerting for failed email syncs and vector insertions
 
 ### Documentation Improvements
-- [x] Document complete database schema with field descriptions
 - [ ] Add sequence diagrams describing data flow
 - [ ] Document troubleshooting procedures for common issues
 - [ ] Add schema migration documentation

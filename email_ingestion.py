@@ -8,13 +8,13 @@ and the actual ingestion.email package structure.
 """
 
 import logging
-import sqlite3
 import os
 from typing import Any, Dict, Optional
 from datetime import datetime, UTC
 
-from ingestion.email import EmailOrchestrator, EmailAccountManager
-from ingestion.email.processor import EmailProcessor
+from ingestion.email import EmailOrchestrator
+from ingestion.email.manager import PostgreSQLEmailManager
+from ingestion.core.postgres_manager import PostgreSQLManager, PostgreSQLConfig
 
 logger = logging.getLogger(__name__)
 
@@ -31,44 +31,33 @@ class EmailConfig:
 class EmailIngestion:
     """Compatibility wrapper for the ingestion.email system"""
     
-    def __init__(self):
-        """Initialize the email ingestion system"""
+    def __init__(self, postgres_manager):
+        """Initialize the email ingestion system with dependency injection."""
         
-        # Initialize database connection
-        db_path = os.path.join('databases', 'Knowledgebase.db')
-        self.conn = sqlite3.connect(db_path)
-        self.conn.row_factory = sqlite3.Row  # Enable dict-like access
+        # Store postgres_manager as an instance attribute
+        self.postgres_manager = postgres_manager
         
-        # Initialize components
-        self.config = EmailConfig()
-        self.account_manager = EmailAccountManager(self.conn)
+        # Initialize PostgreSQL email account manager
+        self.email_account_manager = PostgreSQLEmailManager(postgres_manager)
         
-        # Initialize EmailProcessor with proper database connections
-        # Create a simple Milvus-compatible interface for the processor
-        class MilvusCompatibleStore:
-            """Simple interface compatible with EmailProcessor's Milvus requirements."""
-            
-            def add_embeddings(self, embeddings, ids, metadatas):
-                """Store embeddings - simplified for email processor compatibility."""
-                # For now, we'll focus on getting email metadata stored correctly
-                # Vector storage can be enhanced later
-                pass
-            
-            def add_texts(self, texts, metadatas, ids):
-                """Store texts - simplified for email processor compatibility."""
-                pass
+        # Initialize PostgreSQL-based email message manager
+        from ingestion.email.email_manager_postgresql import PostgreSQLEmailManager as EmailMessageManager
+        email_message_manager = EmailMessageManager(postgres_manager)
         
-        # Initialize processor with proper SQLite connection
-        self.milvus_store = MilvusCompatibleStore()
-        self.processor = EmailProcessor(
-            milvus=self.milvus_store,
-            sqlite_conn=self.conn
+        # Inject dependencies into EmailProcessor
+        from ingestion.email.processor import EmailProcessor
+        self.email_processor = EmailProcessor(
+            milvus=None,  # Replace with actual vector store if needed
+            email_manager=email_message_manager,
+            embedding_model=None  # Replace with actual embedding model if needed
         )
         
-        self.orchestrator = EmailOrchestrator(
-            config=self.config,
-            account_manager=self.account_manager,
-            processor=self.processor
+        # Inject dependencies into EmailOrchestrator
+        from ingestion.email.orchestrator import EmailOrchestrator
+        self.email_orchestrator = EmailOrchestrator(
+            config=None,  # Replace with actual config if needed
+            account_manager=self.email_account_manager,
+            processor=self.email_processor
         )
         
         logger.info("EmailIngestion compatibility wrapper initialized")
@@ -87,7 +76,7 @@ class EmailIngestion:
             logger.info(f"Starting sync for email account ID: {account_id}")
             
             # Get account details - need to get all accounts and find the one we want
-            accounts = self.account_manager.list_accounts(include_password=True)
+            accounts = self.email_account_manager.list_accounts(include_password=True)
             account = None
             for acc in accounts:
                 if acc['id'] == account_id:
@@ -100,16 +89,12 @@ class EmailIngestion:
             logger.info(f"Syncing account: {account['account_name']}")
             
             # Perform the sync using orchestrator - pass the account dict
-            self.orchestrator.sync_account(account)
+            self.email_orchestrator.sync_account(account)
             
-            # Update last_synced timestamp
-            cursor = self.conn.cursor()
-            cursor.execute("""
-                UPDATE email_accounts 
-                SET last_synced = datetime('now') 
-                WHERE id = ?
-            """, (account_id,))
-            self.conn.commit()
+            # Update last_synced timestamp using PostgreSQL
+            self.email_account_manager.update_account(account_id, {
+                'last_synced': datetime.now(UTC).isoformat()
+            })
             
             logger.info(f"Email sync completed for account {account_id}")
             
@@ -141,7 +126,7 @@ class EmailIngestion:
             logger.info("Starting sync for all email accounts")
             
             # Get all accounts
-            accounts = self.account_manager.list_accounts(include_password=False)
+            accounts = self.email_account_manager.list_accounts(include_password=False)
             
             results = []
             total_success = 0
@@ -187,20 +172,13 @@ class EmailIngestion:
             List of account IDs due for sync
         """
         try:
-            cursor = self.conn.cursor()
+            # Use orchestrator's method for getting due accounts
+            due_accounts = self.email_orchestrator.get_due_accounts()
+            due_account_ids = [account['id'] for account in due_accounts]
             
-            # Query for accounts due for sync
-            cursor.execute("""
-                SELECT id FROM email_accounts 
-                WHERE last_synced IS NULL 
-                   OR datetime(last_synced, '+' || refresh_interval_minutes || ' minutes') <= datetime('now')
-            """)
+            logger.debug(f"Found {len(due_account_ids)} accounts due for sync")
             
-            due_accounts = [row[0] for row in cursor.fetchall()]
-            
-            logger.debug(f"Found {len(due_accounts)} accounts due for sync")
-            
-            return due_accounts
+            return due_account_ids
             
         except Exception as e:
             logger.error(f"Failed to get due accounts: {e}")
@@ -208,5 +186,5 @@ class EmailIngestion:
     
     def __del__(self):
         """Close database connection on cleanup"""
-        if hasattr(self, 'conn'):
-            self.conn.close()
+        if hasattr(self, 'postgres_manager'):
+            self.postgres_manager.close()

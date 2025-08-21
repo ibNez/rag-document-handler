@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Utility functions for encrypting and decrypting sensitive email data."""
 
 import os
@@ -20,13 +18,13 @@ def _get_fernet() -> Fernet:
     return Fernet(key.encode())
 
 
-def encrypt(value: str) -> str:
-    """Encrypt ``value`` using Fernet symmetric encryption."""
+def encrypt(data: str) -> str:
+    """Encrypt the given data using Fernet symmetric encryption."""
     fernet = _get_fernet()
-    return fernet.encrypt(value.encode()).decode()
+    return fernet.encrypt(data.encode()).decode()
 
 
-def decrypt(token: str) -> str:
-    """Decrypt a Fernet ``token`` back into plaintext."""
+def decrypt(data: str) -> str:
+    """Decrypt the given data using Fernet symmetric encryption."""
     fernet = _get_fernet()
-    return fernet.decrypt(token.encode()).decode()
+    return fernet.decrypt(data.encode()).decode()

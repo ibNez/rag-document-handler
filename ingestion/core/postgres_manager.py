@@ -34,7 +34,6 @@ class PostgreSQLManager:
     def __init__(self, config: Optional[PostgreSQLConfig] = None):
         """Initialize PostgreSQL manager with connection pooling."""
         self.config = config or PostgreSQLConfig()
-        self.pool: Optional[ThreadedConnectionPool] = None
         self._initialize_pool()
         self._ensure_schema()
     
@@ -61,6 +60,9 @@ class PostgreSQLManager:
         """Context manager for database connections."""
         conn = None
         try:
+            # Log connection attempt (but avoid accessing private pool attributes)
+            logger.debug("Requesting database connection from pool")
+            
             conn = self.pool.getconn()
             conn.autocommit = True  # Enable autocommit for read operations
             yield conn
@@ -70,7 +72,7 @@ class PostgreSQLManager:
                     conn.rollback()
                 except:
                     pass  # Ignore rollback errors in autocommit mode
-            logger.error(f"Database operation failed: {e}")
+            logger.error(f"Database operation failed: {e} (type: {type(e)}) (args: {e.args})")
             raise
         finally:
             if conn:
@@ -100,6 +102,9 @@ class PostgreSQLManager:
         );
         
         -- Email documents table (migrated from SQLite)
+        -- NOTE: Commented out - emails table is now created by PostgreSQLEmailManager
+        -- to ensure proper schema compatibility with the new PostgreSQL-native design
+        /*
         CREATE TABLE IF NOT EXISTS emails (
             id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
             message_id VARCHAR(255) UNIQUE NOT NULL,
@@ -118,6 +123,7 @@ class PostgreSQLManager:
             processed_at TIMESTAMP WITH TIME ZONE,
             created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
         );
+        */
         
                 -- URLs table (migrated from SQLite)
         CREATE TABLE IF NOT EXISTS urls (
@@ -164,11 +170,15 @@ class PostgreSQLManager:
         CREATE INDEX IF NOT EXISTS idx_documents_created ON documents(created_at);
         CREATE INDEX IF NOT EXISTS idx_documents_metadata ON documents USING GIN(metadata);
         
+        -- Email indexes (commented out - handled by PostgreSQLEmailManager)
+        -- NOTE: All email-related indexes are now created by PostgreSQLEmailManager
+        /*
         CREATE INDEX IF NOT EXISTS idx_emails_message_id ON emails(message_id);
         CREATE INDEX IF NOT EXISTS idx_emails_header_hash ON emails(header_hash);
         CREATE INDEX IF NOT EXISTS idx_emails_sender ON emails(sender);
         CREATE INDEX IF NOT EXISTS idx_emails_date_sent ON emails(date_sent);
         CREATE INDEX IF NOT EXISTS idx_emails_metadata ON emails USING GIN(metadata);
+        */
         
         CREATE INDEX IF NOT EXISTS idx_urls_url ON urls(url);
         CREATE INDEX IF NOT EXISTS idx_urls_status ON urls(status);
@@ -181,8 +191,11 @@ class PostgreSQLManager:
         CREATE INDEX IF NOT EXISTS idx_documents_fts ON documents 
         USING GIN(to_tsvector('english', COALESCE(title, '') || ' ' || COALESCE(content_preview, '')));
         
+        -- Email FTS index (commented out - handled by PostgreSQLEmailManager)
+        /*
         CREATE INDEX IF NOT EXISTS idx_emails_fts ON emails 
         USING GIN(to_tsvector('english', COALESCE(subject, '') || ' ' || COALESCE(body_text, '')));
+        */
         """
         
         with self.get_connection() as conn:

@@ -1,13 +1,22 @@
+"""
+This module defines the EmailOrchestrator class, which is responsible for managing the periodic
+synchronization of emails from configured accounts. It interacts with PostgreSQL for account
+management and uses connectors for email retrieval.
+
+Classes:
+    EmailOrchestrator: Handles email synchronization tasks, including refreshing account
+    configurations and determining accounts due for synchronization.
+"""
+
 import logging
-import sqlite3
 from datetime import UTC, datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 
-from .connector import IMAPConnector, GmailConnector, ExchangeConnector
-from .account_manager import EmailAccountManager
+from .connectors import IMAPConnector, GmailConnector, ExchangeConnector
+from .manager import PostgreSQLEmailManager
 from .processor import EmailProcessor
 from .ingest import _normalize
 
@@ -20,7 +29,7 @@ class EmailOrchestrator:
     def __init__(
         self,
         config,
-        account_manager: Optional[EmailAccountManager] = None,
+        account_manager: Optional[PostgreSQLEmailManager] = None,
         processor: Optional[EmailProcessor] = None,
     ) -> None:
         self.config = config
@@ -34,7 +43,9 @@ class EmailOrchestrator:
         if not self.account_manager:
             return
         try:
+            logger.debug("Refreshing email accounts.")
             self.accounts = self.account_manager.list_accounts(include_password=True)
+            logger.debug("Accounts retrieved: %s", self.accounts)
         except Exception as exc:  # pragma: no cover - defensive
             logger.error(f"Failed to load email accounts: {exc}")
             self.accounts = []
@@ -143,7 +154,14 @@ class EmailOrchestrator:
                     pass
 
             try:
-                processor = EmailProcessor(_NoopMilvus(), sqlite3.connect(":memory:"))
+                # Use the existing PostgreSQL connection from the account manager
+                conn = getattr(self.account_manager, 'conn', None) if hasattr(self, 'account_manager') else None
+                if conn is not None:
+                    processor = EmailProcessor(_NoopMilvus(), conn)
+                else:
+                    # Fallback - this should not happen in normal operation
+                    logger.warning("No PostgreSQL connection available, EmailProcessor cannot be initialized")
+                    processor = None
             except Exception as exc:  # pragma: no cover - defensive
                 logger.error("Failed to initialize EmailProcessor: %s", exc)
                 processor = None

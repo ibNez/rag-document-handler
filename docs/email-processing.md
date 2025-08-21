@@ -1,53 +1,57 @@
 # Email Processing Documentation
 
-This document describes the email ingestion pipeline, schema mapping, and troubleshooting procedures.
+This document describes the refactored email ingestion pipeline, modular architecture, and troubleshooting procedures.
 
 ## Overview
 
-The email processing system supports IMAP and POP3 protocols with encrypted credential storage, smart batch processing, and automatic scheduling.
+The email processing system has been refactored into a modular architecture supporting IMAP, POP3, Gmail API, and Exchange protocols with encrypted credential storage, smart batch processing, and automatic scheduling.
 
-## Architecture Components
+## Refactored Architecture Components
 
 ```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Mail Server   │    │   PostgreSQL    │    │     Milvus      │
-│   (IMAP/POP3)   │    │   (Metadata)    │    │   (Vectors)     │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
-         │                       │                       │
-         └───────────────────────┼───────────────────────┘
-                                 │
-                 ┌─────────────────────────────────┐
-                 │      Email Processor            │
-                 │   - Account Manager             │
-                 │   - IMAP/POP3 Connector         │
-                 │   - Text Chunking               │
-                 │   - Schema Mapping              │
-                 │   - Embedding Generation        │
-                 └─────────────────────────────────┘
+ingestion/email/
+├── manager.py                     # PostgreSQL-based account management
+├── email_manager_postgresql.py    # Email message storage and retrieval
+├── processor.py                   # Email content processing and embedding
+├── orchestrator.py                # Email processing coordination
+└── connectors/
+    ├── imap_connector.py          # IMAP protocol handler
+    ├── gmail_connector.py         # Gmail API integration
+    └── exchange_connector.py      # Exchange server integration
 ```
+
+### Component Responsibilities
+
+| Component | Purpose |
+|-----------|---------|
+| `manager.py` | Account credentials and configuration management |
+| `email_manager_postgresql.py` | Email message metadata storage |
+| `processor.py` | Content extraction, chunking, and embedding |
+| `orchestrator.py` | Coordinates processing pipeline |
+| `connectors/` | Protocol-specific email retrieval implementations |
 
 ## Processing Pipeline
 
-### 1. Account Configuration
-- **Storage**: Email accounts stored in `email_accounts` table
-- **Encryption**: Passwords encrypted using `EMAIL_ENCRYPTION_KEY` (Fernet)
-- **Validation**: Connection tested before saving account
-- **Scheduling**: Automatic sync intervals configured per account
+### 1. Account Configuration (manager.py)
+- **Storage**: Email accounts stored in `email_accounts` table via PostgreSQL manager
+- **Encryption**: Passwords encrypted using `ingestion/utils/crypto.py` utilities
+- **Validation**: Connection tested through appropriate connector before saving
+- **Scheduling**: Automatic sync intervals managed by orchestrator
 
-### 2. Email Fetching
-- **Protocols**: IMAP, POP3 with SSL/TLS support
-- **Batch Processing**: Smart batching to avoid duplicate processing
+### 2. Email Fetching (connectors/)
+- **Protocol Support**: IMAP, POP3, Gmail API, Exchange with modular connector architecture
+- **Batch Processing**: Smart batching implemented in processor.py to avoid duplicates
 - **Offset Management**: Tracks processed emails to resume from last position
-- **Error Handling**: Retries with exponential backoff on connection issues
+- **Error Handling**: Connector-specific retry logic with exponential backoff
 
-### 3. Content Processing
-- **Text Extraction**: Plain text extracted from email body
-- **Chunking**: Text split into overlapping chunks for optimal embedding
-- **Deduplication**: Content hashes prevent duplicate processing
-- **Metadata Extraction**: Subject, sender, recipients, dates preserved
+### 3. Content Processing (processor.py)
+- **Text Extraction**: Plain text extracted from email body with proper encoding handling
+- **Chunking**: Text split using DocumentProcessor for optimal embedding
+- **Deduplication**: Content hashes prevent duplicate processing across accounts
+- **Metadata Preservation**: Subject, sender, recipients, dates maintained in PostgreSQL
 
-### 4. Dual Storage
-- **PostgreSQL**: Email metadata stored in `email_messages` table
+### 4. Dual Storage Architecture
+- **PostgreSQL**: Email metadata stored via `email_manager_postgresql.py`
 - **Milvus**: Text embeddings stored with mapped schema fields
 - **Consistency**: Both operations wrapped in error handling for data integrity
 
@@ -105,7 +109,6 @@ def map_email_to_milvus_schema(record: Dict[str, Any], chunk_idx: int, text_chun
 | Variable | Description | Default | Required |
 |----------|-------------|---------|----------|
 | `EMAIL_ENCRYPTION_KEY` | Fernet key for password encryption | None | Yes |
-| `USE_POSTGRESQL_URL_MANAGER` | Enable PostgreSQL backend | `false` | No |
 | `SCHEDULER_POLL_SECONDS_BUSY` | Polling interval when active | `10` | No |
 | `SCHEDULER_POLL_SECONDS_IDLE` | Polling interval when idle | `30` | No |
 

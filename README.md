@@ -1,23 +1,40 @@
 # RAG Document Handler
 
-A comprehensive document management system for storing and retrieving document embeddings in a Milvus vector database and metadata in PostgreSQL for use with RAG (Retrieval-Augmented Generation) applications.
+A comprehensive document management system with refactored modular architecture for storing and retrieving document embeddings in a Milvus vector database and metadata in PostgreSQL for use with RAG (Retrieval-Augmented Generation) applications.
 
 For extended guides and architecture notes, see the [documentation directory](docs/README.md).
 
+## 🏗️ Refactored Architecture
+
+The application has been restructured into clean, modular components:
+
+```
+ingestion/              # Modular data ingestion
+├── core/              # Database abstractions
+├── email/             # Email processing pipeline
+├── url/               # URL crawling and management  
+├── document/          # Document extraction
+└── utils/             # Shared utilities
+
+rag_manager/           # RAG functionality
+├── managers/          # Vector operations
+└── web/              # Web interface
+```
+
 ## 🚀 Features
 
-- **Document Upload & Management**: Upload documents to a staging area with support for multiple file formats: PDF, DOCX, DOC, TXT, and Markdown files
-- **Smart URL Management**: Store and organize important URLs with automatic title extraction from web pages
+- **Modular Architecture**: Clean separation of concerns with dedicated modules for email, URL, and document processing
+- **Document Upload & Management**: Enhanced document processing with improved chunking and metadata extraction
+- **Smart URL Management**: Refactored URL orchestrator with PostgreSQL-based scheduling and content processing
 - **Vector Embeddings**: Automatic text extraction and embedding generation using Ollama embeddings
 - **Dual Database Architecture**: 
-  - **Milvus**: Vector embeddings and similarity search
-  - **PostgreSQL**: Document metadata, analytics, and full-text search
-- **Email Integration**: Smart batch processing with duplicate detection and complete mailbox coverage
-- **Conversational AI**: RAG-powered chat interface using Ollama for intelligent document querying
-- **Semantic Search**: Find relevant documents using natural language queries
-- **Web Interface**: Clean, responsive Flask web application with Bootstrap UI
-- **Single Interface**: No backend API - all functionality through web interface
-- **Background Processing**: Threading prevents UI freezing during long operations
+  - **Milvus**: Vector embeddings and similarity search with comprehensive logging
+  - **PostgreSQL**: Document metadata, analytics managed through dedicated managers
+- **Email Integration**: Modular email system supporting IMAP, Gmail API, and Exchange with encrypted credential storage
+- **Conversational AI**: Enhanced RAG-powered chat interface with improved error handling and debugging
+- **Semantic Search**: Find relevant documents using natural language queries with detailed logging
+- **Web Interface**: Clean, responsive Flask web application with Bootstrap UI and proper error handling
+- **Background Processing**: Coordinated processing through orchestrator classes
 
 ## 📋 How It Works
 
@@ -61,7 +78,7 @@ cd rag-document-handler
 **Automated Setup Options:**
 ```bash
 ./setup.sh --all        # Install everything without prompts
-./setup.sh --dev        # Development mode (skip webui container)
+./setup.sh --dev        # Development mode (infrastructure only)
 ./setup.sh --help       # Show installation help
 ```
 
@@ -73,17 +90,17 @@ The setup script will:
 - Test database connections
 - Configure environment files
 
-**Development Mode:**
+**Development Mode (Recommended):**
 ```bash
-./setup.sh --dev        # Start only infrastructure containers
-source .venv/bin/activate
-python app.py           # Run application locally for development
+./setup.sh --dev               # Start only infrastructure containers
+source .venv/bin/activate      # ALWAYS source environment first (DEVELOPMENT_RULES.md)
+./start.sh                     # Use proper startup script with service checks
 ```
 
 **Start the Application:**
 ```bash
-source .venv/bin/activate
-python app.py
+source .venv/bin/activate    # Always source environment first
+./start.sh                   # Use startup script with service checks
 ```
 Visit: http://localhost:3000
 
@@ -148,14 +165,16 @@ docker compose logs       # View container logs
 |--------|---------|-------------|
 | **Install** | `./setup.sh` | Complete interactive setup |
 | **Install All** | `./setup.sh --all` | Automated setup without prompts |
-| **Dev Setup** | `./setup.sh --dev` | Development mode (local app) |
-| **Start** | `python app.py` | Start the web application |
-| **Test** | `python test_postgres.py` | Test database connectivity |
+| **Dev Setup** | `./setup.sh --dev` | Development mode (infrastructure only) |
+| **Start** | `./start.sh` | Start application with service checks |
+| **Status** | `./status.sh` | Check system health and connectivity |
 | **Preview** | `./uninstall.sh --dry-run` | Preview removal without changes |
 | **Uninstall** | `./uninstall.sh` | Safe project removal |
 | **Services** | `docker compose up -d` | Start all database services |
 | **Stop** | `docker compose down` | Stop all services |
 | **Clean** | `docker compose down --volumes` | Stop and remove data |
+
+**Remember**: Always `source .venv/bin/activate` before running Python commands (DEVELOPMENT_RULES.md)
 
 ### 🗃️ Database Architecture
 
@@ -223,19 +242,19 @@ VECTOR_DIM=384
 
 ### Starting the Application
 
-1. **Ensure Milvus is running**:
+1. **Ensure services are running**:
    ```bash
-   docker ps | grep milvus
+   docker compose ps  # Check Milvus and PostgreSQL
    ```
 
 2. **Activate virtual environment**:
    ```bash
-   source .venv/bin/activate
+   source .venv/bin/activate  # Always source first (DEVELOPMENT_RULES.md)
    ```
 
 3. **Start the web server**:
    ```bash
-   python app.py
+   ./start.sh  # Use startup script with service checks
    ```
 
 4. **Access the application**:
