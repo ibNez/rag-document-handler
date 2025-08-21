@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 """
 PostgreSQL Email Account Manager
 Following DEVELOPMENT_RULES.md for all development requirements
@@ -8,44 +8,21 @@ to replace SQLite-based email operations when using PostgreSQL backend.
 """
 
 import logging
-import json
 from datetime import datetime, UTC
 from typing import Any, Dict, List, Optional
-from cryptography.fernet import Fernet
-import os
+
+from ingestion.utils.db_utils import PostgreSQLManager
+from ingestion.utils.crypto import encrypt, decrypt
 
 logger = logging.getLogger(__name__)
-
-
-def encrypt(password: str) -> str:
-    """Encrypt password using Fernet encryption."""
-    key = os.getenv('EMAIL_ENCRYPTION_KEY')
-    if not key:
-        # Generate a key for development - in production this should be properly managed
-        key = Fernet.generate_key().decode()
-        logger.warning("Generated temporary encryption key - set EMAIL_ENCRYPTION_KEY environment variable")
-    
-    f = Fernet(key.encode() if isinstance(key, str) else key)
-    return f.encrypt(password.encode()).decode()
-
-
-def decrypt(encrypted_password: str) -> str:
-    """Decrypt password using Fernet encryption."""
-    key = os.getenv('EMAIL_ENCRYPTION_KEY')
-    if not key:
-        logger.error("EMAIL_ENCRYPTION_KEY not set - cannot decrypt password")
-        return ""
-    
-    f = Fernet(key.encode() if isinstance(key, str) else key)
-    return f.decrypt(encrypted_password.encode()).decode()
 
 
 class PostgreSQLEmailManager:
     """PostgreSQL-based email account manager compatible with EmailAccountManager interface."""
 
-    def __init__(self, postgresql_manager) -> None:
+    def __init__(self, postgres_manager: Any) -> None:
         """Initialize with PostgreSQL manager."""
-        self.postgresql_manager = postgresql_manager
+        self.db_manager = PostgreSQLManager(postgres_manager.pool)
         logger.info("PostgreSQL EmailManager initialized")
 
     def create_account(self, record: Dict[str, Any]) -> int:
@@ -77,7 +54,7 @@ class PostgreSQLEmailManager:
         )
 
         try:
-            with self.postgresql_manager.get_connection() as conn:
+            with self.db_manager.get_connection() as conn:
                 with conn.cursor() as cur:
                     cur.execute("""
                         INSERT INTO email_accounts (
@@ -102,13 +79,13 @@ class PostgreSQLEmailManager:
                 logger.info("Created email account %s (%s)", account_id, record.get("account_name"))
                 return account_id
         except Exception as e:
-            logger.error(f"Failed to create email account {record.get('account_name')}: {e}")
+            logger.error("Failed to create email account: %s", e)
             raise
 
     def list_accounts(self, include_password: bool = False) -> List[Dict[str, Any]]:
         """List all email accounts (PostgreSQL implementation)."""
         try:
-            with self.postgresql_manager.get_connection() as conn:
+            with self.db_manager.get_connection() as conn:
                 with conn.cursor() as cur:
                     if include_password:
                         cur.execute("""
@@ -150,9 +127,8 @@ class PostgreSQLEmailManager:
                         accounts.append(account)
                     
                     logger.info(
-                        "Retrieved %d email accounts (%s passwords)",
+                        "Retrieved %d email accounts",
                         len(accounts),
-                        "including" if include_password else "excluding",
                     )
                     return accounts
         except Exception as e:
@@ -165,7 +141,7 @@ class PostgreSQLEmailManager:
             return
         
         try:
-            with self.postgresql_manager.get_connection() as conn:
+            with self.db_manager.get_connection() as conn:
                 with conn.cursor() as cur:
                     # Build dynamic update query
                     set_clauses = []
@@ -186,7 +162,7 @@ class PostgreSQLEmailManager:
     def delete_account(self, account_id: int) -> None:
         """Delete an email account (PostgreSQL implementation)."""
         try:
-            with self.postgresql_manager.get_connection() as conn:
+            with self.db_manager.get_connection() as conn:
                 with conn.cursor() as cur:
                     cur.execute("DELETE FROM email_accounts WHERE id = %s", (account_id,))
                 conn.commit()
@@ -197,11 +173,14 @@ class PostgreSQLEmailManager:
 
     def get_account_count(self) -> int:
         """Get the total number of email accounts (PostgreSQL implementation)."""
+        logger.debug("get_account_count called.")
         try:
-            with self.postgresql_manager.get_connection() as conn:
+            with self.db_manager.get_connection() as conn:
                 with conn.cursor() as cur:
                     cur.execute("SELECT COUNT(*) as count FROM email_accounts")
                     result = cur.fetchone()
+                    logger.debug("Executing query to count email accounts.")
+                    logger.debug("Query result: %s", result)
                     return result['count'] if result else 0
         except Exception as e:
             logger.error(f"Failed to get email account count: {e}")
@@ -210,7 +189,7 @@ class PostgreSQLEmailManager:
     def get_account_stats(self) -> Dict[str, Any]:
         """Get email account statistics (PostgreSQL implementation)."""
         try:
-            with self.postgresql_manager.get_connection() as conn:
+            with self.db_manager.get_connection() as conn:
                 with conn.cursor() as cur:
                     # Basic account stats
                     cur.execute("""

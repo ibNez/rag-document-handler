@@ -1,6 +1,6 @@
 # Installation
 
-This guide covers setting up the RAG Document Handler in a development environment.
+This guide covers setting up the RAG Document Handler with the refactored architecture.
 
 ## Prerequisites
 
@@ -24,12 +24,12 @@ cd rag-document-handler
 ./setup.sh --help       # Show installation options
 ```
 
-### Development Mode
+### Development Mode (Recommended for Development)
 For active development where you want to run the Flask app locally:
 ```bash
-./setup.sh --dev        # Start only infrastructure containers
-source .venv/bin/activate
-python app.py           # Run application locally
+./setup.sh --dev                # Start only infrastructure containers
+source .venv/bin/activate       # Always source environment (DEVELOPMENT_RULES.md)
+./start.sh                      # Use proper startup script with service checks
 ```
 
 The setup script will:
@@ -39,6 +39,15 @@ The setup script will:
 - Start Docker containers (Milvus + PostgreSQL)
 - Test database connections
 - Configure environment files
+
+## Startup Process
+
+The refactored application uses `./start.sh` which:
+- Activates the virtual environment
+- Checks Milvus and PostgreSQL connectivity
+- Verifies Docker container status
+- Starts the Flask application with proper configuration
+- Displays service status and access URLs
 
 ## Docker Compose Deployment
 

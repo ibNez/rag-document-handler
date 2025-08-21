@@ -1,18 +1,23 @@
-"""Email ingestion connectors and orchestration utilities."""
+"""Email ingestion connectors and orchestration utilities.
 
-from .connector import EmailConnector, IMAPConnector, GmailConnector, ExchangeConnector
+Modern email processing architecture:
+- EmailOrchestrator: High-level account synchronization coordination
+- EmailProcessor: Email content processing and embedding generation  
+- EmailConnector variants: Protocol-specific email retrieval
+- run_email_ingestion: CLI entry point for direct email processing
+"""
+
+from .connectors import EmailConnector, IMAPConnector, GmailConnector, ExchangeConnector
 from .orchestrator import EmailOrchestrator
-from .email_manager import EmailManager
-from .account_manager import EmailAccountManager
+from .processor import EmailProcessor
 from .ingest import run_email_ingestion
 
 __all__ = [
     "EmailConnector",
-    "IMAPConnector",
+    "IMAPConnector", 
     "GmailConnector",
     "ExchangeConnector",
     "EmailOrchestrator",
-    "EmailManager",
-    "EmailAccountManager",
+    "EmailProcessor",
     "run_email_ingestion",
 ]

@@ -1,10 +1,8 @@
-from __future__ import annotations
+"""IMAP email connector implementation.
 
-"""Email connector implementations.
-
-This module provides a base :class:`EmailConnector` abstract class and an
-:class:`IMAPConnector` implementation capable of fetching emails from an IMAP
-server and returning records in the canonical schema used by the project.
+This module provides the :class:`IMAPConnector` implementation capable of 
+fetching emails from an IMAP server and returning records in the canonical 
+schema used by the project.
 
 The implementation mirrors the logic demonstrated in the
 ``examples/Email-ETL-Process.ipynb`` notebook. Only lightweight parsing and
@@ -12,8 +10,8 @@ normalisation is performed – heavy processing such as summarisation or keyword
 extraction is intentionally deferred to downstream stages.
 """
 
-from abc import ABC, abstractmethod
-from datetime import datetime, timezone
+from __future__ import annotations
+
 import ssl
 from email import message_from_bytes
 from email.header import decode_header, make_header
@@ -23,31 +21,12 @@ import base64
 import imaplib
 import logging
 import quopri
+from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional
 
-from google.oauth2.credentials import Credentials
-from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
-try:  # pragma: no cover - optional dependency
-    from exchangelib import Account, Configuration, Credentials as EWSCredentials, DELEGATE
-except Exception:  # pragma: no cover - optional dependency
-    Account = Configuration = EWSCredentials = DELEGATE = None  # type: ignore
+from .base import EmailConnector
 
 logger = logging.getLogger(__name__)
-
-
-class EmailConnector(ABC):
-    """Abstract base class for fetching email records."""
-
-    @abstractmethod
-    def fetch_emails(self, since_date: Optional[datetime] = None) -> List[Dict[str, Any]]:
-        """Fetch emails and return a list of canonical records.
-
-        Parameters
-        ----------
-        since_date:
-            If provided, only messages on or after this date are retrieved.
-        """
 
 
 class IMAPConnector(EmailConnector):
@@ -462,6 +441,9 @@ class IMAPConnector(EmailConnector):
                 return [], False
             
             unique_emails: List[Dict[str, Any]] = []
+            # In-memory dedupe within this batch to avoid read-before-write.
+            # We rely on DB idempotent upserts for final dedupe.
+            seen_hashes = set()
             current_offset = start_offset
             
             # Keep fetching until we have enough unique emails or reach end of mailbox
@@ -501,14 +483,15 @@ class IMAPConnector(EmailConnector):
                             header_hash = self._generate_header_hash(rec)
                             rec["header_hash"] = header_hash
                             
-                            # Check if email already exists in database
-                            if not self._email_exists_in_database(email_manager, header_hash):
+                            # In-memory dedupe only; rely on DB upsert for idempotency
+                            if header_hash not in seen_hashes:
+                                seen_hashes.add(header_hash)
                                 unique_emails.append(rec)
                                 batch_unique_count += 1
-                                logger.debug("Added unique email %s", rec.get("message_id", "unknown"))
+                                logger.debug("Added email %s (deduped in-memory)", rec.get("message_id", "unknown"))
                             else:
                                 batch_duplicate_count += 1
-                                logger.debug("Skipped duplicate email %s", rec.get("message_id", "unknown"))
+                                logger.debug("Skipped duplicate in batch %s", rec.get("message_id", "unknown"))
                         else:
                             logger.warning("Invalid message data type for email %s", eid)
                             
@@ -596,148 +579,6 @@ class IMAPConnector(EmailConnector):
         str:
             SHA256 hash of normalized email headers
         """
-        # Import compute_header_hash from email_manager to maintain consistency
-        from .email_manager import compute_header_hash
+        # Import compute_header_hash from utils to maintain consistency
+        from ..utils import compute_header_hash
         return compute_header_hash(record)
-
-
-class ExchangeConnector(EmailConnector):
-    """Retrieve emails from an Exchange server using EWS."""
-
-    _decode_header_value = IMAPConnector._decode_header_value
-    _decode_part = IMAPConnector._decode_part
-    _derive_thread_id = IMAPConnector._derive_thread_id
-    _parse_email = IMAPConnector._parse_email
-
-    def __init__(
-        self,
-        server: str,
-        email_address: str,
-        password: str,
-        *,
-        batch_limit: Optional[int] = 50,
-    ) -> None:
-        if Account is None:
-            raise ImportError("exchangelib is required for ExchangeConnector")
-        creds = EWSCredentials(username=email_address, password=password)
-        config = Configuration(server=server, credentials=creds)
-        self.account = Account(
-            primary_smtp_address=email_address,
-            config=config,
-            autodiscover=False,
-            access_type=DELEGATE,
-        )
-        self.batch_limit = batch_limit
-        self.primary_mailbox = None
-        self.server = server
-        self.email_address = email_address
-
-    # ------------------------------------------------------------------
-    def fetch_emails(self, since_date: Optional[datetime] = None) -> List[Dict[str, Any]]:
-        """Fetch emails via Exchange Web Services and return canonical records."""
-        logger.info(
-            "Fetching emails from Exchange server %s for %s",
-            self.server,
-            self.email_address,
-        )
-        qs = self.account.inbox.all().order_by("-datetime_received")
-        if since_date is not None:
-            qs = qs.filter(datetime_received__gte=since_date)
-        if self.batch_limit is not None:
-            qs = qs[: self.batch_limit]
-
-        results: List[Dict[str, Any]] = []
-        for item in qs:
-            try:
-                msg = message_from_bytes(item.mime_content)
-                rec = self._parse_email(msg)
-                rec["server_type"] = "exchange"
-                results.append(rec)
-            except Exception:
-                continue
-        logger.info(
-            "Retrieved %d emails from Exchange server %s for %s",
-            len(results),
-            self.server,
-            self.email_address,
-        )
-        return results
-
-
-class GmailConnector(EmailConnector):
-    """Retrieve emails using the Gmail API."""
-
-    _decode_header_value = IMAPConnector._decode_header_value
-    _decode_part = IMAPConnector._decode_part
-    _derive_thread_id = IMAPConnector._derive_thread_id
-    _parse_email = IMAPConnector._parse_email
-
-    def __init__(
-        self,
-        credentials: Optional[Credentials] = None,
-        token_path: Optional[str] = None,
-        *,
-        user_id: str = "me",
-        batch_limit: Optional[int] = 50,
-    ) -> None:
-        if credentials is None and token_path is None:
-            raise ValueError("Either credentials or token_path must be provided")
-        if credentials is None and token_path is not None:
-            credentials = Credentials.from_authorized_user_file(token_path)
-        self.creds = credentials
-        self.service = build("gmail", "v1", credentials=credentials)
-        self.user_id = user_id
-        self.batch_limit = batch_limit
-
-    # ------------------------------------------------------------------
-    def fetch_emails(self, since_date: Optional[datetime] = None) -> List[Dict[str, Any]]:
-        """Fetch emails via Gmail API and return canonical records."""
-        logger.info("Fetching emails from Gmail for user %s", self.user_id)
-        results: List[Dict[str, Any]] = []
-        page_token: Optional[str] = None
-        fetched = 0
-        query = None
-        if since_date is not None:
-            query = f"after:{since_date.strftime('%Y/%m/%d')}"
-        try:
-            while True:
-                list_kwargs: Dict[str, Any] = {"userId": self.user_id, "maxResults": 500}
-                if query:
-                    list_kwargs["q"] = query
-                if page_token:
-                    list_kwargs["pageToken"] = page_token
-                response = self.service.users().messages().list(**list_kwargs).execute()
-                messages = response.get("messages", [])
-                for meta in messages:
-                    if self.batch_limit is not None and fetched >= self.batch_limit:
-                        return results
-                    try:
-                        msg_data = (
-                            self.service.users()
-                            .messages()
-                            .get(userId=self.user_id, id=meta["id"], format="raw")
-                            .execute()
-                        )
-                    except HttpError:
-                        continue
-                    try:
-                        raw = base64.urlsafe_b64decode(msg_data.get("raw", "").encode("utf-8"))
-                        msg = message_from_bytes(raw)
-                        rec = self._parse_email(msg)
-                        rec["server_type"] = "gmail"
-                        results.append(rec)
-                    except Exception:
-                        continue
-                    fetched += 1
-                page_token = response.get("nextPageToken")
-                if not page_token or (
-                    self.batch_limit is not None and fetched >= self.batch_limit
-                ):
-                    break
-        except HttpError as exc:
-            logger.warning("Gmail API error: %s", exc)
-            return []
-        logger.info(
-            "Retrieved %d emails from Gmail for user %s", len(results), self.user_id
-        )
-        return results

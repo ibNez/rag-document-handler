@@ -6,21 +6,28 @@ email records. It splits message bodies into smaller chunks using
 configurable model (default :class:`OllamaEmbeddings`).
 
 Embeddings are inserted into Milvus while the original email metadata is
-persisted to a SQLite database.  Both the Milvus client and the SQLite
-connection are provided by the caller, keeping this processor free of any
+persisted to PostgreSQL. Both the Milvus client and the PostgreSQL 
+email manager are provided by the caller, keeping this processor free of any
 application specific initialization.
+
+Field Naming Convention:
+All email processing uses consistent email protocol field names:
+- from_addr: Email sender address  
+- to_addrs: List of recipient addresses
+- date_utc: Email date in UTC ISO format
+- message_id: Unique email message identifier
+- subject: Email subject line
 """
 
 from __future__ import annotations
 
 import logging
+import hashlib
 import os
 from typing import Any, Dict, Iterable, List, Optional
 
-import sqlite3
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_ollama import OllamaEmbeddings
-from .email_manager import EmailManager
 
 logger = logging.getLogger(__name__)
 
@@ -33,8 +40,8 @@ class EmailProcessor:
     milvus : Any
         A connected Milvus client or vector store supporting ``add_texts`` or
         ``insert`` style APIs.
-    sqlite_conn : sqlite3.Connection
-        Connection object for the metadata SQLite database.
+    email_manager : Any
+        PostgreSQL-based email manager for metadata persistence.
     embedding_model : Optional[Any]
         Embedding model implementing ``embed_documents``. Defaults to
         :class:`OllamaEmbeddings` with the provider's defaults.
@@ -47,14 +54,14 @@ class EmailProcessor:
     def __init__(
         self,
         milvus: Any,
-        sqlite_conn: sqlite3.Connection,
+        email_manager: Any,  # PostgreSQL-based email manager
         *,
         embedding_model: Optional[Any] = None,
         chunk_size: int = 800,
         chunk_overlap: int = 100,
     ) -> None:
         self.milvus = milvus
-        self.sqlite_conn = sqlite_conn
+        self.email_manager = email_manager
         self.embedding_model = embedding_model or OllamaEmbeddings(
             model=os.getenv("EMBEDDING_MODEL", "mxbai-embed-large"),
             base_url=f"http://{os.getenv('OLLAMA_EMBEDDING_HOST', 'localhost')}:{os.getenv('OLLAMA_EMBEDDING_PORT', '11434')}"
@@ -62,7 +69,10 @@ class EmailProcessor:
         self.splitter = RecursiveCharacterTextSplitter(
             chunk_size=chunk_size, chunk_overlap=chunk_overlap
         )
-        self.manager = EmailManager(sqlite_conn)
+        
+        # Use the PostgreSQL-based email manager directly
+        self.manager = email_manager
+            
         self.skipped_messages = 0
         logger.info(
             "EmailProcessor initialized with embedding model %s",
@@ -83,44 +93,75 @@ class EmailProcessor:
         logger.debug(
             "Storing %d embeddings for message %s", len(chunks), message_id
         )
-        metadatas = []
-        ids = []
-        for idx, _ in enumerate(chunks):
+        metadatas: List[Dict[str, Any]] = []
+        ids: List[str] = []
+        subject = record.get("subject", "")
+        # Use consistent email protocol field names throughout
+        from_addr = record.get("from_addr", "")
+        date_utc = record.get("date_utc", "")
+
+        # Build chunks with deterministic content hashes; dedupe within this batch 
+        # (Removes empty content)
+        seen_ids = set()
+        prepared = []  # list of tuples (chunk_text, metadata_dict, id)
+        for idx, chunk in enumerate(chunks):
+            chunk = (chunk or "").strip()
+            if not chunk:
+                continue
+            chunk_hash = hashlib.sha256(chunk.encode("utf-8")).hexdigest()
+            if chunk_hash in seen_ids:
+                continue
+            seen_ids.add(chunk_hash)
             cid = f"{message_id}:{idx}"
-            ids.append(cid)
-            # Map email metadata to document schema fields
-            subject = record.get("subject", "")
-            from_addr = record.get("from_addr", "")
-            date_utc = record.get("date_utc", "")
-            
             meta = {
-                "document_id": message_id,  # Use message_id as document_id
-                "source": f"email:{from_addr}",  # Use from_addr as source
-                "page": idx,  # Use chunk index as page number
-                "chunk_id": cid,
-                "topic": subject,  # Use subject as topic
-                "category": "email",  # Fixed category for emails
-                "content_hash": f"email_{message_id}_{idx}",  # Generate content hash
-                "content_length": len(chunks[idx]) if idx < len(chunks) else 0,
-                # Keep original email fields for backward compatibility
                 "message_id": message_id,
+                "source": f"email:{from_addr}",
                 "subject": subject,
-                "from_addr": from_addr,
-                "to_addrs": record.get("to_addrs"),
-                "date_utc": date_utc,
-                "server_type": record.get("server_type"),
+                "from_addr": from_addr,  # Use email protocol field name
+                "date_utc": date_utc,    # Use email protocol field name
+                "chunk_id": cid,
+                "page": idx,
+                "content_hash": chunk_hash,
             }
-            metadatas.append(meta)
+            prepared.append((chunk, meta, chunk_hash))
+
+        if not prepared:
+            logger.debug("No chunks prepared for message %s", message_id)
+            return
+
+        # Unzip prepared lists
+        chunks_to_add = [t for (t, _, _) in prepared]
+        metadatas = [m for (_, m, _) in prepared]
+        ids = [i for (_, _, i) in prepared]
 
         try:
             if hasattr(self.milvus, "add_texts"):
-                # Preferred: Use LangChain interface which handles schema mapping
-                self.milvus.add_texts(texts=chunks, metadatas=metadatas, ids=ids)
+                try:
+                    # Try batch insert first
+                    self.milvus.add_texts(texts=chunks_to_add, metadatas=metadatas, ids=ids)
+                except Exception as batch_exc:
+                    # Fall back to per-chunk inserts, skipping duplicates by catching errors
+                    logger.warning(
+                        "Batch add_texts failed for message %s, attempting per-chunk with duplicate skip: %s",
+                        message_id, batch_exc
+                    )
+                    inserted = 0
+                    skipped_dups = 0
+                    for t, m, i in prepared:
+                        try:
+                            self.milvus.add_texts(texts=[t], metadatas=[m], ids=[i])
+                            inserted += 1
+                        except Exception as ex:
+                            skipped_dups += 1
+                            logger.info("Duplicate or failed insert skipped for id=%s: %s", i, ex)
+                            continue
+                    logger.debug(
+                        "Per-chunk add complete for message %s: %d inserted, %d skipped",
+                        message_id, inserted, skipped_dups
+                    )
             elif hasattr(self.milvus, "add_embeddings"):
-                # Fallback: Use embeddings if available
-                self.milvus.add_embeddings(
-                    embeddings=list(embeddings), ids=ids, metadatas=metadatas
-                )
+                # No batch retry here; provider API may vary. Try once.
+                self.milvus.add_embeddings(embeddings=list(embeddings), ids=ids, metadatas=metadatas)
             elif self.milvus is None:
                 logger.warning("Milvus client is None, skipping embedding storage for %s", message_id)
                 return
@@ -129,7 +170,7 @@ class EmailProcessor:
         except Exception as exc:  # pragma: no cover - defensive
             logger.error("Milvus insertion failed for %s: %s", message_id, exc)
         else:
-            logger.debug("Stored embeddings for message %s", message_id)
+            logger.debug("Stored %d new embeddings for message %s", len(ids), message_id)
 
     # ------------------------------------------------------------------
     def process(self, record: Dict[str, Any]) -> None:

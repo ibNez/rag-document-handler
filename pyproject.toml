@@ -64,10 +64,10 @@ Repository = "https://github.com/tonyphilip/rag-document-handler"
 Documentation = "https://github.com/tonyphilip/rag-document-handler#readme"
 
 [tool.setuptools]
-py-modules = ["app"]
+packages = ["rag_manager", "rag_manager.core", "rag_manager.processors", "rag_manager.managers", "rag_manager.web", "ingestion"]
 
 [project.scripts]
-rag-document-handler = "app:main"
+rag-document-handler = "main:main"
 
 [tool.black]
 line-length = 88

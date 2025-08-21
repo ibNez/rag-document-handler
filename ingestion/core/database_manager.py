@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime
 import json
 
-from ingestion.postgres_manager import PostgreSQLManager, PostgreSQLConfig
+from .postgres_manager import PostgreSQLManager, PostgreSQLConfig
 
 logger = logging.getLogger(__name__)
 

@@ -99,8 +99,8 @@
                             <h5 class="mb-0">
                                 <i class="fas fa-robot me-2 text-primary"></i>AI Response
                             </h5>
-                            {% if rag_result and rag_result.context_used %}
-                                <span class="badge bg-success">{{ rag_result.num_sources }} sources used</span>
+                            {% if rag_results and rag_results.context_used %}
+                                <span class="badge bg-success">{{ rag_results.num_sources }} sources used</span>
                             {% else %}
                                 <span class="badge bg-warning">No context available</span>
                             {% endif %}
@@ -127,8 +127,8 @@
                                 </div>
                                 <div class="flex-grow-1 ms-3">
                                     <div class="bg-primary bg-opacity-10 p-3 rounded">
-                                        {% if rag_result %}
-                                            {{ rag_result.answer }}
+                                        {% if rag_results %}
+                                            {{ rag_results.answer }}
                                         {% else %}
                                             I encountered an error processing your question. Please try again.
                                         {% endif %}
@@ -139,7 +139,7 @@
                     </div>
 
                     <!-- Sources Card -->
-                    {% if rag_result and rag_result.sources %}
+                    {% if rag_results and rag_results.sources %}
                         <div class="card">
                             <div class="card-header">
                                 <h6 class="mb-0">
@@ -147,7 +147,7 @@
                                 </h6>
                             </div>
                             <div class="card-body">
-                                {% for source in rag_result.sources %}
+                                {% for source in rag_results.sources %}
                                     <div class="card mb-2">
                                         <div class="card-body py-2">
                                             <div class="d-flex justify-content-between align-items-start">

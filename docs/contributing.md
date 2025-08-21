@@ -1,15 +1,35 @@
 # Contributing
 
-Contributions are welcome! Follow these guidelines to participate.
+Contributions are welcome! Follow these guidelines to participate in the refactored architecture.
 
 ## Development Standards
 
-The project adheres to strict development rules documented in [`DEVELOPMENT_RULES.md`](../DEVELOPMENT_RULES.md). In summary:
+The project adheres to strict development rules documented in [`DEVELOPMENT_RULES.md`](../DEVELOPMENT_RULES.md). Key requirements:
 
-- Use type hints and docstrings
+- **Always source environment**: `source .venv/bin/activate` before any Python commands
+- Use type hints and comprehensive docstrings
+- Follow modular architecture patterns in `ingestion/` and `rag_manager/`
 - Keep dependencies in `pyproject.toml`
 - Format code with Black and import-sort with isort
 - Add tests for new features using `pytest`
+- Implement comprehensive logging per DEVELOPMENT_RULES.md
+
+## Refactored Architecture
+
+Understanding the new structure is essential for contributions:
+
+```
+ingestion/           # Data ingestion modules
+├── core/           # Database abstractions
+├── email/          # Email processing pipeline  
+├── url/            # URL crawling and processing
+├── document/       # Document extraction and chunking
+└── utils/          # Shared utilities
+
+rag_manager/        # RAG functionality
+├── managers/       # Vector operations and search
+└── web/           # Web interface and routes
+```
 
 ## Development Setup
 
@@ -21,7 +41,7 @@ The project adheres to strict development rules documented in [`DEVELOPMENT_RULE
 
 2. **Set up development environment**
    ```bash
-   ./setup.sh --dev    # Recommended for development
+   ./setup.sh --dev    # Infrastructure only
    ```
    This will:
    - Create virtual environment
@@ -31,12 +51,13 @@ The project adheres to strict development rules documented in [`DEVELOPMENT_RULE
 
 3. **Start development server**
    ```bash
-   source .venv/bin/activate
-   python app.py       # Run Flask app locally
+   source .venv/bin/activate  # ALWAYS source first
+   ./start.sh                 # Use proper startup script
    ```
 
 4. **Install dev dependencies**
    ```bash
+   source .venv/bin/activate  # Always source environment
    pip install -e .[dev]
    ```
 
