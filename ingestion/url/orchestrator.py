@@ -113,7 +113,7 @@ class URLOrchestrator:
                     # Store chunks in vector database if milvus_manager is available
                     if self.milvus_manager and chunks:
                         try:
-                            self.milvus_manager.insert_documents(chunks)
+                            self.milvus_manager.insert_documents(url_string, chunks)
                             logger.info(f"Successfully stored {len(chunks)} chunks from URL {url_id} in vector database")
                         except Exception as e:
                             logger.error(f"Failed to store chunks from URL {url_id} in vector database: {e}")

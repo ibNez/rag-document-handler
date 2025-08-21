@@ -8,7 +8,7 @@ echo "========================================"
 echo ""
 
 # Check if we're in the right directory
-if [ ! -f "app.py" ]; then
+if [ ! -f "main.py" ]; then
     echo "❌ Not in the RAG Document Handler directory"
     echo "   Run this script from the project root"
     exit 1
@@ -190,14 +190,14 @@ if [ ! -d ".venv" ]; then
 elif ! docker info >/dev/null 2>&1; then
     echo "   1. Start Docker daemon"
     echo "   2. Run docker compose up -d"
-    echo "   3. Start the application with: python app.py"
+    echo "   3. Start the application with: python main.py"
 elif [ -z "$(docker compose ps -q)" ]; then
     echo "   1. Start services: docker compose up -d"
     echo "   2. Test connectivity: python test_postgres.py"
-    echo "   3. Start the application: python app.py"
+    echo "   3. Start the application: python main.py"
 else
     echo "   ✅ System appears ready!"
-    echo "   → Start the application: python app.py"
+    echo "   → Start the application: python main.py"
     echo "   → Visit: http://localhost:3000"
 fi
 

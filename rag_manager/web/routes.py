@@ -254,13 +254,23 @@ class WebRoutes:
         @self.app.route('/url_status/<url_id>')
         def get_url_status(url_id):
             """Get processing status for a URL refresh."""
+            logger.debug(f"get_url_status called with url_id: '{url_id}' (type: {type(url_id)})")
+            
+            # UUID validation - ensure it's a valid UUID string
             try:
-                url_id_int = int(url_id)
-            except ValueError:
+                import uuid
+                # Test if url_id is a valid UUID
+                uuid.UUID(url_id)
+                url_id_str = str(url_id)
+                logger.debug(f"Valid UUID string for status check: '{url_id_str}'")
+            except ValueError as e:
+                logger.error(f"Invalid URL ID format for status check: '{url_id}' - {e}")
                 return jsonify({'status': 'not_found'})
                 
-            status = self.rag_manager.url_processing_status.get(url_id_int)
+            logger.debug(f"Checking processing status for URL ID: '{url_id_str}'")
+            status = self.rag_manager.url_processing_status.get(url_id_str)
             if status:
+                logger.debug(f"Found active processing status for URL ID '{url_id_str}': {status.status}")
                 return jsonify({
                     'status': status.status,
                     'progress': status.progress,
@@ -269,9 +279,11 @@ class WebRoutes:
                 })
             
             # No in-memory status; fetch final state from DB for in-place UI update
+            logger.debug(f"No active processing status, fetching URL record for ID: '{url_id_str}'")
             try:
-                rec = self.rag_manager.url_manager.get_url_by_id(url_id_int)
+                rec = self.rag_manager.url_manager.get_url_by_id(url_id_str)
                 if rec:
+                    logger.debug(f"Found URL record for status update: {rec.get('url', 'N/A')}")
                     # Compute next_refresh similar to list view
                     next_refresh = None
                     try:
@@ -287,16 +299,22 @@ class WebRoutes:
                             next_refresh = dt_next.strftime('%Y-%m-%d %H:%M')
                     except Exception:
                         next_refresh = None
-                    return jsonify({
+                    
+                    status_response = {
                         'status': 'not_found',
                         'last_update_status': rec.get('last_update_status'),
                         'last_scraped': rec.get('last_scraped'),
                         'next_refresh': next_refresh
-                    })
+                    }
+                    logger.debug(f"Returning status response for URL ID '{url_id_str}': {status_response}")
+                    return jsonify(status_response)
                 else:
+                    logger.warning(f"URL record not found for ID: '{url_id_str}'")
                     return jsonify({'status': 'deleted'})
-            except Exception:
+            except Exception as e:
+                logger.error(f"Exception while fetching URL status for ID '{url_id_str}': {e}")
                 pass
+            logger.debug(f"Returning default 'not_found' status for URL ID: '{url_id_str}'")
             return jsonify({'status': 'not_found'})
 
         @self.app.route('/email_status/<int:account_id>')
@@ -411,88 +429,134 @@ class WebRoutes:
         @self.app.route('/delete_url/<url_id>', methods=['POST'])
         def delete_url(url_id):
             """Delete a URL."""
+            logger.info(f"delete_url route called with url_id: '{url_id}' (type: {type(url_id)})")
+            
+            # UUID validation - ensure it's a valid UUID string
             try:
-                url_id_int = int(url_id)
-            except ValueError:
-                flash('Invalid URL ID', 'error')
+                import uuid
+                # Test if url_id is a valid UUID
+                uuid.UUID(url_id)
+                url_id_str = str(url_id)
+                logger.debug(f"Valid UUID string for deletion: '{url_id_str}'")
+            except ValueError as e:
+                logger.error(f"Invalid URL ID format for deletion: '{url_id}' - {e}")
+                flash('Invalid URL ID format', 'error')
                 return redirect(url_for('index'))
                 
             # Load the URL and any crawled pages
-            url_rec = self.rag_manager.url_manager.get_url_by_id(url_id_int)
+            logger.debug(f"Looking up URL for deletion with ID: '{url_id_str}'")
+            url_rec = self.rag_manager.url_manager.get_url_by_id(url_id_str)
             if not url_rec:
+                logger.error(f"URL not found for deletion with ID: '{url_id_str}'")
                 flash('URL not found', 'error')
                 return redirect(url_for('index'))
             url = url_rec.get('url')
+            logger.info(f"Deleting URL: {url} (ID: {url_id_str})")
             
             # Delete embeddings for the single URL
             try:
-                import hashlib
                 doc_id = hashlib.sha1(url.strip().encode('utf-8')).hexdigest()[:16]
+                logger.debug(f"Deleting primary URL embeddings for doc_id: {doc_id}")
                 self.rag_manager.milvus_manager.delete_document(document_id=doc_id)
             except Exception as e:
                 logger.warning(f"Failed to delete primary URL embeddings: {e}")
             
             # If domain crawl, delete each page embeddings
             try:
-                pages = self.rag_manager.url_manager.get_pages_for_parent(url_id_int)
+                logger.debug(f"Checking for crawled pages for URL ID: '{url_id_str}'")
+                pages = self.rag_manager.url_manager.get_pages_for_parent(url_id_str)
+                logger.debug(f"Found {len(pages)} pages to delete for URL ID: '{url_id_str}'")
                 for page_url in pages:
                     try:
                         page_doc_id = hashlib.sha1(page_url.strip().encode('utf-8')).hexdigest()[:16]
+                        logger.debug(f"Deleting page embeddings for: {page_url} (doc_id: {page_doc_id})")
                         self.rag_manager.milvus_manager.delete_document(document_id=page_doc_id)
                     except Exception as de:
                         logger.warning(f"Failed to delete page embeddings for {page_url}: {de}")
                 # Remove page records
-                self.rag_manager.url_manager.delete_pages_for_parent(url_id_int)
+                logger.debug(f"Deleting page records for URL ID: '{url_id_str}'")
+                self.rag_manager.url_manager.delete_pages_for_parent(url_id_str)
             except Exception as e:
                 logger.warning(f"Failed to clean up url_pages: {e}")
 
             # Finally remove the URL record
-            result = self.rag_manager.url_manager.delete_url(url_id_int)
+            logger.debug(f"Deleting URL record for ID: '{url_id_str}'")
+            result = self.rag_manager.url_manager.delete_url(url_id_str)
             if result['success']:
+                logger.info(f"URL deletion completed successfully for ID: '{url_id_str}'")
                 flash('URL and related embeddings deleted successfully', 'success')
             else:
+                logger.error(f"Failed to delete URL ID '{url_id_str}': {result['message']}")
                 flash(f'Failed to delete URL: {result["message"]}', 'error')
             return redirect(url_for('index'))
 
-        @self.app.route('/delete_url_bg/<url_id>', methods=['POST'])
+        @self.app.route('/delete_url_bg/<url_id>', methods=['GET', 'POST'])
         def delete_url_bg(url_id):
             """Start background deletion of a URL and its embeddings, with progress bar."""
+            logger.info(f"DELETE_URL_BG ROUTE HIT: url_id={url_id}, method={request.method}")
+            
+            if request.method == 'GET':
+                logger.warning(f"GET request received for delete_url_bg (should be POST): url_id={url_id}")
+                flash('Invalid request method. Please use the delete button.', 'error')
+                return redirect(url_for('index'))
+                
             try:
-                url_id_int = int(url_id)
-            except ValueError:
+                logger.info(f"URL ID is UUID string: {url_id}")
+                # URL ID is a UUID string, don't convert to int
+                url_id_str = str(url_id)
+                logger.info(f"Using UUID string for deletion: {url_id_str}")
+            except Exception as e:
+                logger.error(f"Failed to process URL ID: {url_id}, error: {e}")
                 flash('Invalid URL ID', 'error')
                 return redirect(url_for('index'))
                 
-            url_rec = self.rag_manager.url_manager.get_url_by_id(url_id_int)
+            logger.info(f"Getting URL record for ID: {url_id_str}")
+            url_rec = self.rag_manager.url_manager.get_url_by_id(url_id_str)
+            logger.info(f"URL record retrieved: {url_rec is not None}")
             if not url_rec:
+                logger.warning(f"URL not found for ID: {url_id_str}")
                 flash('URL not found', 'error')
                 return redirect(url_for('index'))
             
             # If already processing something (refresh or delete), don't start another
-            if url_id_int in self.rag_manager.url_processing_status:
+            logger.info(f"Checking if URL {url_id_str} is already being processed")
+            if url_id_str in self.rag_manager.url_processing_status:
+                logger.info(f"URL {url_id_str} already being processed, skipping")
                 flash('An operation is already in progress for this URL', 'info')
                 return redirect(url_for('index'))
             
             # Seed a status entry so the UI shows a progress bar immediately after redirect
-            self.rag_manager.url_processing_status[url_id_int] = URLProcessingStatus(
+            logger.info(f"Creating processing status for URL {url_id_str}")
+            self.rag_manager.url_processing_status[url_id_str] = URLProcessingStatus(
                 url=url_rec.get('url', ''),
                 title=url_rec.get('title')
             )
             
+            logger.info(f"Starting background deletion thread for URL {url_id_str}")
             import threading
-            th = threading.Thread(target=self.rag_manager._delete_url_background, args=(url_id_int,))
+            th = threading.Thread(target=self.rag_manager._delete_url_background, args=(url_id_str,))
             th.daemon = True
             th.start()
+            logger.info(f"Background deletion thread started for URL {url_id_str}")
             flash('Deletion started in background', 'info')
+            logger.info(f"DELETE_URL_BG completing successfully for URL {url_id_str}")
             return redirect(url_for('index'))
 
         @self.app.route('/update_url/<url_id>', methods=['POST'])
         def update_url(url_id):
             """Update URL metadata including title, description, and refresh schedule."""
+            logger.info(f"update_url route called with url_id: '{url_id}' (type: {type(url_id)})")
+            
+            # UUID validation - ensure it's a valid UUID string
             try:
-                url_id_int = int(url_id)
-            except ValueError:
-                flash('Invalid URL ID', 'error')
+                import uuid
+                # Test if url_id is a valid UUID
+                uuid.UUID(url_id)
+                url_id_str = str(url_id)
+                logger.debug(f"Valid UUID string for update: '{url_id_str}'")
+            except ValueError as e:
+                logger.error(f"Invalid URL ID format for update: '{url_id}' - {e}")
+                flash('Invalid URL ID format', 'error')
                 return redirect(url_for('index'))
                 
             title = request.form.get('title')
@@ -532,45 +596,66 @@ class WebRoutes:
             except ValueError:
                 snapshot_max_snapshots = None
 
+            logger.debug(f"Updating URL metadata for ID: '{url_id_str}'")
+            logger.debug(f"Form data - title: '{title}', description: '{description}', refresh: {refresh_interval_minutes}")
+            
             result = self.rag_manager.url_manager.update_url_metadata(
-                url_id_int, title, description, refresh_interval_minutes,
+                url_id_str, title, description, refresh_interval_minutes,
                 crawl_domain_flag, ignore_robots_flag,
                 snapshot_enabled_flag, snapshot_retention_days, snapshot_max_snapshots
             )
             if result.get('success'):
+                logger.info(f"URL metadata updated successfully for ID: '{url_id_str}'")
                 flash('URL metadata updated', 'success')
             else:
+                logger.error(f"Failed to update URL metadata for ID '{url_id_str}': {result.get('message','Unknown error')}")
                 flash(f"Failed to update URL: {result.get('message','Unknown error')}", 'error')
             return redirect(url_for('index'))
 
         @self.app.route('/ingest_url/<url_id>', methods=['POST'])
         def ingest_url(url_id):
             """Trigger immediate ingestion/refresh for a URL."""
+            logger.info(f"ingest_url route called with url_id: '{url_id}' (type: {type(url_id)})")
+            
+            # UUID validation - ensure it's a valid UUID string
             try:
-                url_id_int = int(url_id)
-            except ValueError:
-                flash('Invalid URL ID', 'error')
+                import uuid
+                # Test if url_id is a valid UUID
+                uuid.UUID(url_id)
+                url_id_str = str(url_id)
+                logger.debug(f"Valid UUID string: '{url_id_str}'")
+            except ValueError as e:
+                logger.error(f"Invalid URL ID format: '{url_id}' - {e}")
+                flash('Invalid URL ID format', 'error')
                 return redirect(url_for('index'))
                 
-            url_rec = self.rag_manager.url_manager.get_url_by_id(url_id_int)
+            logger.debug(f"Looking up URL with ID: '{url_id_str}'")
+            url_rec = self.rag_manager.url_manager.get_url_by_id(url_id_str)
             if not url_rec:
+                logger.error(f"URL not found for ID: '{url_id_str}'")
                 flash('URL not found', 'error')
                 return redirect(url_for('index'))
             
+            logger.info(f"Found URL record: {url_rec.get('url', 'N/A')} (title: {url_rec.get('title', 'N/A')})")
+            
             # Initialize and start background refresh with progress if not already running
-            if url_id_int in self.rag_manager.url_processing_status:
+            if url_id_str in self.rag_manager.url_processing_status:
+                logger.warning(f"Refresh already in progress for URL ID: '{url_id_str}'")
                 flash('Refresh already in progress for this URL', 'info')
                 return redirect(url_for('index'))
             
-            self.rag_manager.url_processing_status[url_id_int] = URLProcessingStatus(
+            logger.debug(f"Creating processing status for URL ID: '{url_id_str}'")
+            self.rag_manager.url_processing_status[url_id_str] = URLProcessingStatus(
                 url=url_rec.get('url', ''),
                 title=url_rec.get('title')
             )
             
+            logger.info(f"Starting background refresh thread for URL ID: '{url_id_str}'")
             import threading
             th = threading.Thread(target=self.rag_manager._process_url_background, args=(url_rec['id'],))
             th.daemon = True
             th.start()
+            logger.info(f"Background refresh thread started successfully for URL: {url_rec.get('url', 'N/A')}")
             flash('Refresh started in background', 'info')
             return redirect(url_for('index'))
 
@@ -917,6 +1002,50 @@ class WebRoutes:
                     u['robots_allowed'] = None
                     u['robots_has_rules'] = None
                     u['robots_crawl_delay'] = None
+                # Add vector DB metrics: chunk count per URL (by source + document_id with legacy fallback)
+                try:
+                    src = u.get('url')
+                    url_id = u.get('id')
+                    u['chunk_count'] = self.rag_manager.milvus_manager.get_chunk_count_for_url(src, url_id) if src else 0
+                except Exception:
+                    u['chunk_count'] = 0
+                # Placeholder metric for pages discovered (requires url_pages schema)
+                u.setdefault('pages_discovered', None)
+                # Expose a simple pages value for the UI (default to 1 until we track discovered pages)
+                try:
+                    u['pages'] = u['pages_discovered'] if u['pages_discovered'] is not None else 1
+                except Exception:
+                    u['pages'] = 1
+                # Snapshot metrics via filesystem convention: SNAPSHOT_DIR/<url_id>/...
+                try:
+                    base_dir = getattr(self.config, 'SNAPSHOT_DIR', os.path.join('uploaded', 'snapshots'))
+                    url_dir = os.path.join(base_dir, u['id']) if u.get('id') else None
+                    count = 0
+                    total_bytes = 0
+                    if url_dir and os.path.isdir(url_dir):
+                        for root, _, files in os.walk(url_dir):
+                            for f in files:
+                                fpath = os.path.join(root, f)
+                                try:
+                                    total_bytes += os.path.getsize(fpath)
+                                    count += 1
+                                except Exception:
+                                    continue
+                    u['snapshot_count'] = count if count > 0 else None
+                    # Human readable size
+                    if total_bytes > 0:
+                        units = ['B', 'KB', 'MB', 'GB', 'TB']
+                        size = float(total_bytes)
+                        unit_idx = 0
+                        while size >= 1024 and unit_idx < len(units) - 1:
+                            size /= 1024.0
+                            unit_idx += 1
+                        u['snapshot_total_size'] = f"{size:.1f} {units[unit_idx]}"
+                    else:
+                        u['snapshot_total_size'] = None
+                except Exception:
+                    u.setdefault('snapshot_count', None)
+                    u.setdefault('snapshot_total_size', None)
                 enriched_urls.append(u)
             return enriched_urls
         except Exception as e:
