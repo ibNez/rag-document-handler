@@ -258,16 +258,18 @@
                                                         </button>
                                                         <ul class="dropdown-menu">
                                                             <li>
-                                                                <a class="dropdown-item" href="{{ url_for('process_file', filename=file.name) }}">
+                                                                <button type="button" class="dropdown-item process-file-btn" 
+                                                                        data-filename="{{ file.name }}"
+                                                                        data-url="{{ url_for('process_file', filename=file.name) }}">
                                                                     <i class="fas fa-play me-1"></i>Process
-                                                                </a>
+                                                                </button>
                                                             </li>
                                                             <li>
-                                                                <form method="POST" action="{{ url_for('delete_file_bg', folder='staging', filename=file.name) }}" onsubmit="return confirm('Delete this file?')">
-                                                                    <button type="submit" class="dropdown-item text-danger">
-                                                                        <i class="fas fa-trash me-1"></i>Delete
-                                                                    </button>
-                                                                </form>
+                                                                <button type="button" class="dropdown-item text-danger delete-file-btn" 
+                                                                        data-filename="{{ file.name }}"
+                                                                        data-url="{{ url_for('delete_file_bg', folder='staging', filename=file.name) }}">
+                                                                    <i class="fas fa-trash me-1"></i>Delete
+                                                                </button>
                                                             </li>
                                                         </ul>
                                                     </div>
@@ -295,6 +297,11 @@
                                                         {% endif %}
                                                     </div>
                                                 {% endif %}
+                                                
+                                                <!-- Dynamic status area for deletion progress -->
+                                                <div class="mt-2 staging-status-area" data-filename="{{ file.name }}" style="display: none;">
+                                                    <!-- Status will be populated via JavaScript -->
+                                                </div>
                                             </div>
                                         </div>
                                     </div>
@@ -811,7 +818,7 @@
         <!-- Uploaded Files -->
         <div class="row">
             <div class="col-md-12">
-                <div class="card">
+                <div class="card" id="processed-documents-section">
                     <div class="card-header d-flex justify-content-between align-items-center">
                         <h5 class="mb-0"><i class="fas fa-check-circle me-2"></i>Processed Documents</h5>
                         <span class="badge bg-success">{{ uploaded_files|length }} files</span>
@@ -828,6 +835,7 @@
                                             <th scope="col">Pages</th>
                                             <th scope="col">Words</th>
                                             <th scope="col">Chunks</th>
+                                            <th scope="col">Status</th>
                                             <th scope="col" class="text-end">Actions</th>
                                         </tr>
                                     </thead>
@@ -864,7 +872,7 @@
                                                     <span class="badge bg-info text-dark">{{ file.chunks_count }}</span>
                                                 {% else %}-{% endif %}
                                             </td>
-                                            <td class="text-end">
+                                            <td>
                                                 {% set st = file.status %}
                                                 {% if st and ('deletion' in (st.message or '').lower() or 'archiving' in (st.message or '').lower() or 'removing embeddings' in (st.message or '').lower()) %}
                                                     <div class="small mb-1">{{ st.message }}</div>
@@ -875,12 +883,23 @@
                                                              style="width: 0%"></div>
                                                     </div>
                                                 {% else %}
+                                                    <span class="text-muted small">Ready</span>
+                                                {% endif %}
+                                            </td>
+                                            <td class="text-end">
+                                                {% set st = file.status %}
+                                                {% if st and ('deletion' in (st.message or '').lower() or 'archiving' in (st.message or '').lower() or 'removing embeddings' in (st.message or '').lower()) %}
+                                                    <button type="button" class="btn btn-outline-danger btn-sm" disabled>
+                                                        <i class="fas fa-spinner fa-spin"></i>
+                                                    </button>
+                                                {% else %}
                                                     <div class="btn-group btn-group-sm" role="group">
-                                                        <form method="POST" action="{{ url_for('delete_file_bg', folder='uploaded', filename=file.name) }}" onsubmit="return confirm('Delete this file and remove from database?')" style="display:inline;">
-                                                            <button type="submit" class="btn btn-outline-danger action-btn" title="Delete">
-                                                                <i class="fas fa-trash"></i>
-                                                            </button>
-                                                        </form>
+                                                        <button type="button" class="btn btn-outline-danger action-btn delete-file-btn" 
+                                                                title="Delete" 
+                                                                data-filename="{{ file.name }}"
+                                                                data-url="{{ url_for('delete_file_bg', folder='uploaded', filename=file.name) }}">
+                                                            <i class="fas fa-trash"></i>
+                                                        </button>
                                                     </div>
                                                 {% endif %}
                                             </td>
@@ -929,11 +948,54 @@
     
     <!-- Auto-refresh for processing status -->
     <script>
+        // Function to refresh just the processed documents section via AJAX
+        function refreshProcessedDocuments() {
+            fetch(window.location.href, {
+                method: 'GET',
+                headers: {
+                    'Accept': 'text/html',
+                }
+            })
+            .then(response => response.text())
+            .then(html => {
+                // Parse the response HTML to extract just the processed documents section
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(html, 'text/html');
+                const newProcessedSection = doc.querySelector('#processed-documents-section');
+                const currentProcessedSection = document.querySelector('#processed-documents-section');
+                
+                if (newProcessedSection && currentProcessedSection) {
+                    // Replace the entire processed documents section
+                    currentProcessedSection.innerHTML = newProcessedSection.innerHTML;
+                    console.log('Processed documents section refreshed via AJAX');
+                    
+                    // Re-apply local time formatting to any new timestamps
+                    applyLocalTimes(currentProcessedSection);
+                } else {
+                    console.error('Could not find processed documents section to refresh');
+                }
+            })
+            .catch(error => {
+                console.error('Error refreshing processed documents:', error);
+            });
+        }
         function refreshProcessingStatus() {
             const fileCards = document.querySelectorAll('.file-card');
             fileCards.forEach(card => {
-                const filename = card.querySelector('.card-title').textContent.trim();
-                if (card.querySelector('.status-processing, .status-chunking, .status-embedding, .status-storing')) {
+                // Extract filename from card title, excluding any status indicator
+                const cardTitle = card.querySelector('.card-title');
+                let filename = '';
+                if (cardTitle) {
+                    // Clone the title element to avoid modifying the original
+                    const titleClone = cardTitle.cloneNode(true);
+                    // Remove any status indicator spans
+                    const statusIndicators = titleClone.querySelectorAll('.status-indicator');
+                    statusIndicators.forEach(indicator => indicator.remove());
+                    // Get clean filename
+                    filename = titleClone.textContent.trim();
+                }
+                
+                if (filename && card.querySelector('.status-processing, .status-chunking, .status-embedding, .status-storing')) {
                     fetch(`/status/${encodeURIComponent(filename)}`)
                         .then(response => response.json())
                         .then(data => {
@@ -944,41 +1006,91 @@
                                     indicator.className = `status-indicator status-${data.status}`;
                                 }
                                 
-                                // Update progress and message
-                                const messageEl = card.querySelector('small');
-                                if (messageEl && data.message) {
-                                    messageEl.textContent = data.message;
-                                }
+                                // Check if this is a staging file or uploaded file
+                                const stagingStatusArea = card.querySelector('.staging-status-area');
+                                const isStaging = !!stagingStatusArea;
                                 
-                                const progressBar = card.querySelector('.progress-bar');
-                                if (progressBar && typeof data.progress === 'number') {
-                                    progressBar.style.width = `${data.progress}%`;
-                                    progressBar.setAttribute('aria-valuenow', String(data.progress));
-                                    // Toggle animation depending on state
-                                    if (["queued","processing","chunking","embedding","storing"].includes(data.status)) {
-                                        progressBar.classList.add('progress-animated');
-                                    } else {
-                                        progressBar.classList.remove('progress-animated');
+                                if (isStaging) {
+                                    // Handle staging file status updates
+                                    stagingStatusArea.style.display = 'block';
+                                    
+                                    let statusHtml = '';
+                                    if (data.message) {
+                                        const statusClass = data.status === 'error' ? 'text-danger' : 
+                                                          data.status === 'completed' ? 'text-success' : 'text-info';
+                                        statusHtml += `<small class="d-block ${statusClass}">${data.message}</small>`;
+                                    }
+                                    
+                                    // Add progress bar for staging files during processing
+                                    if (typeof data.progress === 'number' && data.progress >= 0) {
+                                        const progressClass = data.status === 'error' ? 'bg-danger' : 'bg-success';
+                                        const animationClass = ["queued","processing","chunking","embedding","storing"].includes(data.status) ? 'progress-animated' : '';
+                                        statusHtml += `<div class="progress progress-custom mt-1" style="height:6px;">
+                                            <div class="progress-bar ${progressClass} ${animationClass}"
+                                                 role="progressbar" aria-valuemin="0" aria-valuemax="100"
+                                                 aria-valuenow="${data.progress}"
+                                                 style="width: ${data.progress}%"></div>
+                                        </div>`;
+                                    }
+                                    
+                                    stagingStatusArea.innerHTML = statusHtml;
+                                } else {
+                                    // Handle uploaded file status updates (existing logic)
+                                    const messageEl = card.querySelector('small');
+                                    if (messageEl && data.message) {
+                                        messageEl.textContent = data.message;
+                                    }
+                                    
+                                    const progressBar = card.querySelector('.progress-bar');
+                                    if (progressBar && typeof data.progress === 'number') {
+                                        progressBar.style.width = `${data.progress}%`;
+                                        progressBar.setAttribute('aria-valuenow', String(data.progress));
+                                        if (["queued","processing","chunking","embedding","storing"].includes(data.status)) {
+                                            progressBar.classList.add('progress-animated');
+                                        } else {
+                                            progressBar.classList.remove('progress-animated');
+                                        }
                                     }
                                 }
                                 
                                 // If this card is in a deletion flow, remove it when done
                                 if (data.message && data.message.toLowerCase().includes('deletion complete')) {
-                                    card.style.transition = 'opacity 200ms ease';
-                                    card.style.opacity = '0';
-                                    setTimeout(() => card.remove(), 220);
+                                    if (isStaging) {
+                                        const cardCol = card.closest('.col-md-6');
+                                        if (cardCol) {
+                                            cardCol.style.transition = 'opacity 200ms ease';
+                                            cardCol.style.opacity = '0';
+                                            setTimeout(() => cardCol.remove(), 220);
+                                        }
+                                    } else {
+                                        card.style.transition = 'opacity 200ms ease';
+                                        card.style.opacity = '0';
+                                        setTimeout(() => card.remove(), 220);
+                                    }
                                     return;
                                 }
-                                // Only reload when completed/error if the user isn't typing in any input to avoid disrupting URL adds
+                                
+                                // Handle processing completion
                                 if (data.status === 'completed' || data.status === 'error') {
-                                    const focused = document.querySelector('input:focus, textarea:focus, select:focus, [contenteditable="true"]:focus');
-                                    if (!focused) {
+                                    if (isStaging) {
+                                        // For staging files, remove the file and refresh processed documents section
                                         setTimeout(() => {
-                                            const stillFocused = document.querySelector('input:focus, textarea:focus, select:focus, [contenteditable="true"]:focus');
-                                            if (!stillFocused) {
-                                                location.reload();
+                                            // Remove the staging file from UI
+                                            const cardCol = card.closest('.col-md-6');
+                                            if (cardCol) {
+                                                cardCol.style.transition = 'opacity 200ms ease';
+                                                cardCol.style.opacity = '0';
+                                                setTimeout(() => cardCol.remove(), 220);
                                             }
-                                        }, 1000);
+                                            
+                                            // Refresh the processed documents section via AJAX
+                                            if (data.status === 'completed') {
+                                                refreshProcessedDocuments();
+                                            }
+                                        }, 3000); // 3 second delay to show final status
+                                    } else {
+                                        // For uploaded files in processed documents, no action needed
+                                        // The file stays in place with final status
                                     }
                                 }
                             }
@@ -1137,41 +1249,197 @@
         });
     </script>
         <script>
+            // Track completion detection timestamps to prevent premature removal
+            const completionTracker = new Map();
+            
             // Poll for deletion progress of uploaded files
             function pollUploadedDeletion() {
-                document.querySelectorAll('.uploaded-delete-progress').forEach(pb => {
-                    const filename = pb.getAttribute('data-filename');
-                            // Lazy initialize width animation
-                            if (pb.dataset.initialized !== '1') {
-                                const init = parseInt(pb.getAttribute('data-initial-progress')||'0',10);
-                                pb.style.width = init + '%';
-                                pb.setAttribute('aria-valuenow', String(init));
-                                pb.dataset.initialized = '1';
-                            }
-                    fetch(`/status/${encodeURIComponent(filename)}`)
-                        .then(r=>r.json())
-                        .then(data => {
-                            if(!data) return;
-                            if(typeof data.progress === 'number') {
-                                pb.style.width = data.progress + '%';
-                                pb.setAttribute('aria-valuenow', String(data.progress));
-                            }
-                            if (data.message) {
-                                const msgDiv = pb.closest('td').querySelector('.small.mb-1');
-                                if (msgDiv) msgDiv.textContent = data.message;
-                            }
-                            if (data.status === 'completed' && (data.message||'').toLowerCase().includes('deletion complete')) {
-                                const row = pb.closest('tr[data-uploaded-row]');
-                                if (row) {
-                                    row.style.transition = 'opacity 200ms ease';
-                                    row.style.opacity = '0';
-                                    setTimeout(()=> row.remove(), 220);
+                // Find all rows that are in deletion state (have spinner in action column)
+                document.querySelectorAll('tr[data-uploaded-row]').forEach(row => {
+                    const filename = row.getAttribute('data-uploaded-row');
+                    const cells = row.querySelectorAll('td');
+                    const statusCell = cells[cells.length - 2]; // Status column
+                    const actionCell = cells[cells.length - 1]; // Actions column
+                    
+                    // Only poll if the row is showing a deletion in progress (spinner in action cell)
+                    if (actionCell.querySelector('.fa-spinner')) {
+                        fetch(`/status/${encodeURIComponent(filename)}`)
+                            .then(r=>r.json())
+                            .then(data => {
+                                if(!data) return;
+                                
+                                // Update status column with message and progress
+                                let statusHtml = '';
+                                if (data.message) {
+                                    statusHtml += `<div class="small mb-1">${data.message}`;
+                                    
+                                    // Add additional deletion status info if available
+                                    if (data.deletion_status && data.deletion_status.remaining_records > 0) {
+                                        statusHtml += ` (${data.deletion_status.remaining_records} embeddings remaining)`;
+                                    }
+                                    statusHtml += '</div>';
                                 }
-                            }
-                        }).catch(()=>{});
+                                
+                                // Add progress bar if we have progress data
+                                if (typeof data.progress === 'number' && data.progress > 0) {
+                                    statusHtml += `<div class="progress progress-custom" style="height:6px;">
+                                        <div class="progress-bar bg-danger progress-animated"
+                                             role="progressbar" aria-valuemin="0" aria-valuemax="100"
+                                             aria-valuenow="${data.progress}"
+                                             style="width: ${data.progress}%"></div>
+                                    </div>`;
+                                }
+                                
+                                statusCell.innerHTML = statusHtml;
+                                
+                                // Check for deletion completion - be VERY conservative
+                                const hasCompletionMessage = data.status === 'completed' && 
+                                    (data.message||'').toLowerCase().includes('deletion complete - all embeddings cleaned up');
+                                    
+                                const hasCleanupComplete = data.deletion_status && 
+                                    data.deletion_status.cleanup_complete === true;
+                                
+                                // Debug logging
+                                console.log(`File ${filename}: status=${data.status}, message="${data.message}"`);
+                                console.log(`deletion_status:`, data.deletion_status);
+                                console.log(`hasCompletionMessage=${hasCompletionMessage}, hasCleanupComplete=${hasCleanupComplete}`);
+                                
+                                // Track completion detection timing
+                                const bothConditionsMet = hasCompletionMessage && hasCleanupComplete;
+                                const now = Date.now();
+                                
+                                if (bothConditionsMet) {
+                                    if (!completionTracker.has(filename)) {
+                                        // First time we detected completion - start the timer
+                                        completionTracker.set(filename, now);
+                                        console.log(`First completion detection for ${filename} - starting confirmation timer`);
+                                        return; // Don't remove yet, wait for confirmation
+                                    }
+                                    
+                                    // Check if enough time has passed since first detection
+                                    const firstDetection = completionTracker.get(filename);
+                                    const timeSinceFirst = now - firstDetection;
+                                    
+                                    if (timeSinceFirst >= 10000) { // Wait 10 seconds after first detection
+                                        console.log(`Removing file ${filename} from UI - completion confirmed for ${timeSinceFirst}ms`);
+                                        completionTracker.delete(filename);
+                                        row.style.transition = 'opacity 200ms ease';
+                                        row.style.opacity = '0';
+                                        setTimeout(()=> {
+                                            console.log(`Actually removing row for ${filename}`);
+                                            row.remove();
+                                        }, 220);
+                                    } else {
+                                        console.log(`Completion detected for ${filename} but waiting for confirmation (${timeSinceFirst}ms elapsed)`);
+                                    }
+                                } else {
+                                    // Conditions not met - reset tracker if it exists
+                                    if (completionTracker.has(filename)) {
+                                        console.log(`Completion conditions no longer met for ${filename} - resetting tracker`);
+                                        completionTracker.delete(filename);
+                                    }
+                                    console.log(`NOT removing ${filename} - completion conditions not met`);
+                                }
+                            }).catch(err => {
+                                console.error(`Status polling error for ${filename}:`, err);
+                            });
+                    }
                 });
             }
-            setInterval(pollUploadedDeletion, 1200);
+            setInterval(pollUploadedDeletion, 5000); // Poll every 5 seconds for deletion status
+            
+            // Poll for deletion progress of staging files
+            function pollStagingDeletion() {
+                // Find all staging files that are in deletion state (have spinner in dropdown)
+                document.querySelectorAll('.staging-status-area[data-filename]').forEach(statusArea => {
+                    if (statusArea.style.display !== 'none') {
+                        const filename = statusArea.getAttribute('data-filename');
+                        const card = statusArea.closest('.file-card');
+                        
+                        fetch(`/status/${encodeURIComponent(filename)}`)
+                            .then(r=>r.json())
+                            .then(data => {
+                                if(!data) return;
+                                
+                                // Update status area with message and progress
+                                let statusHtml = '';
+                                if (data.message) {
+                                    statusHtml += `<small class="d-block">${data.message}`;
+                                    
+                                    // Add additional deletion status info if available
+                                    if (data.deletion_status && data.deletion_status.remaining_records > 0) {
+                                        statusHtml += ` (${data.deletion_status.remaining_records} embeddings remaining)`;
+                                    }
+                                    statusHtml += '</small>';
+                                }
+                                
+                                // Add progress bar if we have progress data
+                                if (typeof data.progress === 'number' && data.progress > 0) {
+                                    statusHtml += `<div class="progress progress-custom mt-1" style="height:6px;">
+                                        <div class="progress-bar bg-danger progress-animated"
+                                             role="progressbar" aria-valuemin="0" aria-valuemax="100"
+                                             aria-valuenow="${data.progress}"
+                                             style="width: ${data.progress}%"></div>
+                                    </div>`;
+                                }
+                                
+                                statusArea.innerHTML = statusHtml;
+                                
+                                // Check for deletion completion - use same conservative approach
+                                const hasCompletionMessage = data.status === 'completed' && 
+                                    (data.message||'').toLowerCase().includes('deletion complete');
+                                    
+                                const hasCleanupComplete = data.deletion_status && 
+                                    data.deletion_status.cleanup_complete === true;
+                                
+                                // Use the same timing logic for staging files
+                                const bothConditionsMet = hasCompletionMessage && hasCleanupComplete;
+                                const now = Date.now();
+                                
+                                if (bothConditionsMet) {
+                                    const trackingKey = `staging_${filename}`;
+                                    
+                                    if (!completionTracker.has(trackingKey)) {
+                                        // First time we detected completion - start the timer
+                                        completionTracker.set(trackingKey, now);
+                                        console.log(`First completion detection for staging file ${filename} - starting confirmation timer`);
+                                        return;
+                                    }
+                                    
+                                    // Check if enough time has passed since first detection
+                                    const firstDetection = completionTracker.get(trackingKey);
+                                    const timeSinceFirst = now - firstDetection;
+                                    
+                                    if (timeSinceFirst >= 10000) { // Wait 10 seconds after first detection
+                                        console.log(`Removing staging file ${filename} from UI - completion confirmed for ${timeSinceFirst}ms`);
+                                        completionTracker.delete(trackingKey);
+                                        const cardCol = card.closest('.col-md-6');
+                                        if (cardCol) {
+                                            cardCol.style.transition = 'opacity 200ms ease';
+                                            cardCol.style.opacity = '0';
+                                            setTimeout(()=> {
+                                                cardCol.remove();
+                                            }, 220);
+                                        }
+                                    } else {
+                                        console.log(`Completion detected for staging file ${filename} but waiting for confirmation (${timeSinceFirst}ms elapsed)`);
+                                    }
+                                } else {
+                                    // Conditions not met - reset tracker if it exists
+                                    const trackingKey = `staging_${filename}`;
+                                    if (completionTracker.has(trackingKey)) {
+                                        console.log(`Completion conditions no longer met for staging file ${filename} - resetting tracker`);
+                                        completionTracker.delete(trackingKey);
+                                    }
+                                    console.log(`NOT removing staging file ${filename} - completion conditions not met`);
+                                }
+                            }).catch(err => {
+                                console.error(`Staging status polling error for ${filename}:`, err);
+                            });
+                    }
+                });
+            }
+            setInterval(pollStagingDeletion, 5000); // Poll every 5 seconds for staging deletion status
         </script>
         <script>
             // Populate edit email account modal with existing data
@@ -1234,6 +1502,153 @@
             }
 
             document.addEventListener('DOMContentLoaded', function() { applyLocalTimes(); });
+        </script>
+        
+        <script>
+            // Handle AJAX delete and process requests for both uploaded and staging files
+            document.addEventListener('DOMContentLoaded', function() {
+                // Use event delegation to handle dynamically added buttons
+                document.addEventListener('click', function(e) {
+                    if (e.target.closest('.delete-file-btn')) {
+                        const btn = e.target.closest('.delete-file-btn');
+                        const filename = btn.getAttribute('data-filename');
+                        const deleteUrl = btn.getAttribute('data-url');
+                        
+                        // Determine confirmation message based on URL
+                        const isUploaded = deleteUrl.includes('/uploaded/');
+                        const isStaging = deleteUrl.includes('/staging/');
+                        const confirmMessage = isUploaded ? 
+                            'Delete this file and remove from database?\n\nNote: Milvus will clean up embeddings asynchronously in the background.' : 
+                            'Delete this file?\n\nNote: Any embeddings will be cleaned up asynchronously by Milvus.';
+                        
+                        if (confirm(confirmMessage)) {
+                            if (isUploaded) {
+                                // Handle uploaded files table layout
+                                const row = btn.closest('tr');
+                                const cells = row.querySelectorAll('td');
+                                const statusCell = cells[cells.length - 2]; // Status column
+                                const actionCell = cells[cells.length - 1]; // Actions column
+                                
+                                // Show spinner in action cell
+                                actionCell.innerHTML = '<button type="button" class="btn btn-outline-danger btn-sm" disabled><i class="fas fa-spinner fa-spin"></i></button>';
+                                
+                                // Show simple message
+                                statusCell.innerHTML = '<div class="small text-muted">Deletion command sent - Milvus cleanup is async</div>';
+                            } else if (isStaging) {
+                                // Handle staging files card layout
+                                const card = btn.closest('.file-card');
+                                const dropdown = card.querySelector('.dropdown');
+                                const statusArea = card.querySelector('.staging-status-area');
+                                
+                                // Disable dropdown and show spinner
+                                dropdown.innerHTML = '<button class="btn btn-sm btn-outline-secondary" disabled><i class="fas fa-spinner fa-spin"></i></button>';
+                                
+                                // Show status area with simple message
+                                statusArea.style.display = 'block';
+                                statusArea.innerHTML = '<small class="d-block text-muted">Deletion command sent</small>';
+                            }
+                            
+                            // Make AJAX request
+                            fetch(deleteUrl, {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/x-www-form-urlencoded',
+                                }
+                            })
+                            .then(response => {
+                                if (response.ok) {
+                                    console.log(`Delete request submitted for ${filename}`);
+                                    // Simply remove the file from UI after successful delete request
+                                    setTimeout(() => {
+                                        if (isUploaded) {
+                                            const row = document.querySelector(`tr[data-uploaded-row="${filename}"]`);
+                                            if (row) {
+                                                row.style.transition = 'opacity 200ms ease';
+                                                row.style.opacity = '0';
+                                                setTimeout(() => row.remove(), 220);
+                                            }
+                                        } else if (isStaging) {
+                                            const card = document.querySelector(`.staging-status-area[data-filename="${filename}"]`)?.closest('.file-card');
+                                            if (card) {
+                                                const cardCol = card.closest('.col-md-6');
+                                                if (cardCol) {
+                                                    cardCol.style.transition = 'opacity 200ms ease';
+                                                    cardCol.style.opacity = '0';
+                                                    setTimeout(() => cardCol.remove(), 220);
+                                                }
+                                            }
+                                        }
+                                    }, 1000); // Brief delay so user sees the action was processed
+                                } else {
+                                    console.error(`Delete request failed for ${filename}`);
+                                    alert('Delete request failed. Please try again.');
+                                    // Reload the page to restore state
+                                    location.reload();
+                                }
+                            })
+                            .catch(error => {
+                                console.error(`Delete request error for ${filename}:`, error);
+                                alert('Delete request failed. Please try again.');
+                                // For errors, just reload to restore state
+                                location.reload();
+                            });
+                        }
+                    }
+                    
+                    // Handle process file button
+                    if (e.target.closest('.process-file-btn')) {
+                        const btn = e.target.closest('.process-file-btn');
+                        const filename = btn.getAttribute('data-filename');
+                        const processUrl = btn.getAttribute('data-url');
+                        
+                        const card = btn.closest('.file-card');
+                        const dropdown = card.querySelector('.dropdown');
+                        const statusArea = card.querySelector('.staging-status-area');
+                        
+                        // Disable dropdown and show spinner
+                        dropdown.innerHTML = '<button class="btn btn-sm btn-outline-secondary" disabled><i class="fas fa-spinner fa-spin"></i></button>';
+                        
+                        // Show status area with processing message
+                        statusArea.style.display = 'block';
+                        statusArea.innerHTML = '<small class="d-block text-muted">Starting processing...</small>';
+                        
+                        // Make AJAX request
+                        fetch(processUrl, {
+                            method: 'GET',
+                            headers: {
+                                'Accept': 'application/json',
+                            }
+                        })
+                        .then(response => {
+                            if (response.ok) {
+                                console.log(`Process request submitted for ${filename}`);
+                                // Update status to show processing is queued - polling will handle updates from here
+                                statusArea.innerHTML = '<small class="d-block text-success">File queued for processing</small>';
+                                
+                                // Add processing status indicator to the card so polling picks it up
+                                const cardTitle = card.querySelector('.card-title');
+                                if (cardTitle && !card.querySelector('.status-indicator')) {
+                                    cardTitle.innerHTML += ' <span class="status-indicator status-processing">●</span>';
+                                }
+                                
+                                // File will remain visible with status updates until processing completes
+                                // The existing refreshProcessingStatus() polling will handle status updates and removal
+                            } else {
+                                console.error(`Process request failed for ${filename}`);
+                                alert('Process request failed. Please try again.');
+                                // Reload the page to restore state
+                                location.reload();
+                            }
+                        })
+                        .catch(error => {
+                            console.error(`Process request error for ${filename}:`, error);
+                            alert('Process request failed. Please try again.');
+                            // For errors, just reload to restore state
+                            location.reload();
+                        });
+                    }
+                });
+            });
         </script>
 </body>
 </html>
