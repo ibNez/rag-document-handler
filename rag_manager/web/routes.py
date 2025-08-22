@@ -51,8 +51,26 @@ class WebRoutes:
         def index():
             """Rag Knowledgebase Management System."""
             # Get files in staging and uploaded folders
-            staging_files = self._get_directory_files(self.config.UPLOAD_FOLDER)
-            uploaded_files = self._get_directory_files(self.config.UPLOADED_FOLDER)
+            all_staging_files = self._get_directory_files(self.config.UPLOAD_FOLDER)
+            all_uploaded_files = self._get_directory_files(self.config.UPLOADED_FOLDER)
+            
+            # Filter staging files: only show files with 'pending' status or not in database
+            staging_files = []
+            for file_info in all_staging_files:
+                db_status = self._get_file_database_status(file_info['name'])
+                if db_status in [None, 'pending']:  # None means not in database yet
+                    staging_files.append(file_info)
+            
+            # Filter uploaded files: only show files with 'completed' status
+            uploaded_files = []
+            for file_info in all_uploaded_files:
+                db_status = self._get_file_database_status(file_info['name'])
+                logger.info(f"File {file_info['name']}: db_status = {db_status}")
+                if db_status == 'completed':
+                    uploaded_files.append(file_info)
+                    logger.info(f"Added {file_info['name']} to uploaded_files")
+            
+            logger.info(f"Total uploaded files found: {len(uploaded_files)} (out of {len(all_uploaded_files)} physical files)")
             
             # Get collection statistics
             collection_stats = self.rag_manager.milvus_manager.get_collection_stats()
@@ -90,7 +108,7 @@ class WebRoutes:
         
         @self.app.route('/upload', methods=['POST'])
         def upload_file():
-            """Handle file upload to staging area."""
+            """Handle file upload to staging area with duplicate detection."""
             if 'file' not in request.files:
                 flash('No file selected', 'error')
                 return redirect(url_for('index'))
@@ -105,12 +123,107 @@ class WebRoutes:
                 file_path = os.path.join(self.config.UPLOAD_FOLDER, filename)
                 
                 try:
+                    # Save file temporarily to compute hash
                     file.save(file_path)
+                    logger.info(f"File uploaded to staging: {filename}")
+                    
+                    # Compute file hash for duplicate detection
+                    file_hash = self._compute_file_hash(file_path)
+                    logger.info(f"Computed hash for {filename}: {file_hash[:16]}...")
+                    
+                    # Check for duplicates BEFORE any database operations
+                    duplicate_check = self._check_for_duplicate_file(file_hash)
+                    
+                    if duplicate_check['is_duplicate']:
+                        # Remove the uploaded file since it's a duplicate
+                        os.remove(file_path)
+                        logger.info(f"Removed duplicate file from staging: {filename}")
+                        
+                        existing = duplicate_check['existing_file']
+                        existing_title = existing.get('title', existing['document_id'])
+                        existing_status = existing.get('status', 'unknown')
+                        
+                        if existing_status == 'completed':
+                            flash(
+                                f'File "{filename}" is a duplicate of "{existing_title}" which has already been processed. '
+                                f'If you want to reprocess this file, please delete the original from Processed Documents first.',
+                                'warning'
+                            )
+                        else:
+                            flash(
+                                f'File "{filename}" is a duplicate of "{existing_title}" (status: {existing_status}). '
+                                f'Please delete the original before uploading again.',
+                                'warning'
+                            )
+                        
+                        logger.info(f"Rejected duplicate upload: {filename} (matches {existing['document_id']})")
+                        
+                        # Early return - do NOT modify database for duplicates
+                        return redirect(url_for('index'))
+                    
+                    # Not a duplicate - proceed with storing new file record
+                    try:
+                        import psycopg2
+                        
+                        conn = psycopg2.connect(
+                            host=os.getenv('POSTGRES_HOST', 'localhost'),
+                            port=os.getenv('POSTGRES_PORT', '5432'),
+                            database=os.getenv('POSTGRES_DB', 'rag_metadata'),
+                            user=os.getenv('POSTGRES_USER', 'rag_user'),
+                            password=os.getenv('POSTGRES_PASSWORD', 'rag_password')
+                        )
+                        
+                        with conn.cursor() as cursor:
+                            # Check if this document_id already exists (filename collision)
+                            cursor.execute(
+                                "SELECT processing_status FROM documents WHERE document_id = %s",
+                                (filename,)
+                            )
+                            existing_record = cursor.fetchone()
+                            
+                            if existing_record:
+                                # Filename collision with different content - this shouldn't happen
+                                # but if it does, we need to handle it
+                                logger.warning(f"Filename collision detected for {filename} - existing status: {existing_record[0]}")
+                                os.remove(file_path)
+                                flash(
+                                    f'A file named "{filename}" already exists in the system. '
+                                    f'Please rename your file or delete the existing one first.',
+                                    'error'
+                                )
+                                return redirect(url_for('index'))
+                            
+                            # Insert new document record with file hash and pending status
+                            cursor.execute("""
+                                INSERT INTO documents (document_id, title, file_path, processing_status, file_hash, created_at, updated_at)
+                                VALUES (%s, %s, %s, %s, %s, NOW(), NOW())
+                            """, (filename, self._fallback_title_from_filename(filename), file_path, 'pending', file_hash))
+                            conn.commit()
+                        
+                        conn.close()
+                        logger.info(f"Stored new file record for {filename} in database")
+                        
+                    except Exception as e:
+                        logger.error(f"Could not store file record for {filename}: {e}")
+                        # Clean up the file since we couldn't store the record
+                        os.remove(file_path)
+                        flash(f'Error storing file record: {str(e)}', 'error')
+                        return redirect(url_for('index'))
+                    
                     flash(f'File "{filename}" uploaded successfully', 'success')
-                    logger.info(f"File uploaded: {filename}")
+                    logger.info(f"File uploaded successfully: {filename}")
+                        
                 except Exception as e:
                     flash(f'Error uploading file: {str(e)}', 'error')
-                    logger.error(f"Upload error: {str(e)}")
+                    logger.error(f"Upload error for {filename}: {str(e)}")
+                    
+                    # Clean up file if it was created
+                    if os.path.exists(file_path):
+                        try:
+                            os.remove(file_path)
+                            logger.info(f"Cleaned up failed upload: {filename}")
+                        except Exception as cleanup_error:
+                            logger.warning(f"Could not clean up failed upload {filename}: {cleanup_error}")
             else:
                 flash('Invalid file type', 'error')
             
@@ -198,19 +311,122 @@ class WebRoutes:
 
         @self.app.route('/status/<filename>')
         def get_status(filename):
-            """Get processing status for a specific file."""
+            """Get status for a specific file - handles both processing and deletion."""
+            
+            # First check if there's an active deletion or processing status in memory
             if filename in self.rag_manager.processing_status:
                 status = self.rag_manager.processing_status[filename]
-                return jsonify({
+                
+                # If this is a deletion in progress, check cleanup status
+                deletion_status = None
+                deletion_keywords = ['delet', 'cleanup', 'embedd', 'archiv']
+                message_lower = (status.message or '').lower()
+                is_deletion_related = any(keyword in message_lower for keyword in deletion_keywords)
+                
+                if status.status in ['processing', 'completed'] and is_deletion_related:
+                    try:
+                        logger.info(f"Checking deletion status for {filename} (message: '{status.message}')")
+                        deletion_status = self.rag_manager.milvus_manager.check_deletion_status(filename=filename)
+                        logger.info(f"Deletion status check for {filename}: {deletion_status}")
+                        
+                        # Update status message based on cleanup progress
+                        if deletion_status.get('cleanup_complete'):
+                            status.message = 'Deletion complete - all embeddings cleaned up'
+                            status.status = 'completed'
+                            logger.info(f"Marking {filename} as deletion complete")
+                        elif deletion_status.get('remaining_records', 0) > 0:
+                            remaining = deletion_status.get('remaining_records', 0)
+                            status.message = f'Deletion in progress - {remaining} embeddings awaiting cleanup'
+                            logger.info(f"Deletion in progress for {filename}: {remaining} embeddings remaining")
+                            
+                    except Exception as e:
+                        logger.warning(f"Could not check deletion status for {filename}: {e}", exc_info=True)
+                
+                response_data = {
                     'status': status.status,
                     'progress': status.progress,
                     'message': status.message,
                     'chunks_count': status.chunks_count,
                     'error_details': status.error_details,
-                    'title': status.title
-                })
-            else:
-                return jsonify({'status': 'not_found'}), 404
+                    'title': status.title,
+                    'deletion_status': deletion_status
+                }
+                
+                return jsonify(response_data)
+            
+            # No in-memory status, check database for processing status
+            try:
+                # Use direct database connection
+                import psycopg2
+                import os
+                
+                conn = psycopg2.connect(
+                    host=os.getenv('POSTGRES_HOST', 'localhost'),
+                    port=os.getenv('POSTGRES_PORT', '5432'),
+                    database=os.getenv('POSTGRES_DB', 'rag_metadata'),
+                    user=os.getenv('POSTGRES_USER', 'rag_user'),
+                    password=os.getenv('POSTGRES_PASSWORD', 'rag_password')
+                )
+                
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "SELECT processing_status, title, word_count, metadata FROM documents WHERE document_id = %s",
+                        (filename,)
+                    )
+                    result = cursor.fetchone()
+                    
+                    if result:
+                        db_status, title, word_count, metadata = result
+                        
+                        # Get chunk count from metadata if available
+                        chunk_count = 0
+                        if metadata and isinstance(metadata, dict):
+                            chunk_count = metadata.get('chunk_count', 0)
+                        
+                        # Convert database status to response format
+                        if db_status == 'completed':
+                            response_data = {
+                                'status': 'completed',
+                                'progress': 100,
+                                'message': f'Successfully processed {chunk_count} chunks' if chunk_count > 0 else 'Processing completed',
+                                'chunks_count': chunk_count,
+                                'error_details': None,
+                                'title': title,
+                                'deletion_status': None
+                            }
+                            conn.close()
+                            return jsonify(response_data)
+                        elif db_status == 'failed':
+                            response_data = {
+                                'status': 'error',
+                                'progress': 0,
+                                'message': 'Processing failed',
+                                'chunks_count': 0,
+                                'error_details': 'Processing failed',
+                                'title': title,
+                                'deletion_status': None
+                            }
+                            conn.close()
+                            return jsonify(response_data)
+                        elif db_status == 'pending':
+                            response_data = {
+                                'status': 'pending',
+                                'progress': 0,
+                                'message': 'Waiting to be processed',
+                                'chunks_count': 0,
+                                'error_details': None,
+                                'title': title,
+                                'deletion_status': None
+                            }
+                            conn.close()
+                            return jsonify(response_data)
+                
+                conn.close()
+                        
+            except Exception as e:
+                logger.warning(f"Error checking database status for {filename}: {e}")
+            
+            return jsonify({'status': 'not_found'}), 404
 
         @self.app.route('/admin/scheduler_status')
         def scheduler_status():
@@ -242,6 +458,16 @@ class WebRoutes:
             """Process a file from staging to database."""
             if filename not in self.rag_manager.processing_status:
                 self.rag_manager.processing_status[filename] = DocumentProcessingStatus(filename=filename)
+            
+            # Update database status to 'pending' when processing starts
+            try:
+                if self.rag_manager.url_manager:
+                    self.rag_manager.url_manager.upsert_document_metadata(
+                        filename,
+                        processing_status='pending'
+                    )
+            except Exception as e:
+                logger.warning(f"Failed to set processing status to 'pending' for {filename}: {e}")
             
             # Start processing in background thread
             import threading
@@ -908,6 +1134,44 @@ class WebRoutes:
             logger.error(f"Error reading directory {directory}: {e}")
             return []
 
+    def _get_file_database_status(self, filename: str) -> str | None:
+        """Get the processing status for a file from the database."""
+        try:
+            # Use a more direct database connection approach
+            import psycopg2
+            import os
+            
+            # Get connection details from environment
+            conn = psycopg2.connect(
+                host=os.getenv('POSTGRES_HOST', 'localhost'),
+                port=os.getenv('POSTGRES_PORT', '5432'),
+                database=os.getenv('POSTGRES_DB', 'rag_metadata'),
+                user=os.getenv('POSTGRES_USER', 'rag_user'),
+                password=os.getenv('POSTGRES_PASSWORD', 'rag_password')
+            )
+            
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT processing_status FROM documents WHERE document_id = %s",
+                    (filename,)
+                )
+                result = cursor.fetchone()
+                logger.debug(f"Direct DB query for {filename}: result = {result}")
+                if result and len(result) > 0:
+                    status = result[0]
+                    logger.debug(f"Found status for {filename}: {status}")
+                    conn.close()
+                    return status
+                else:
+                    logger.debug(f"No database record found for {filename}")
+                    conn.close()
+                    return None
+                    
+        except Exception as e:
+            logger.warning(f"Error checking database status for {filename}: {e}")
+            logger.debug(f"Exception details: {type(e)} {e.args}")
+        return None
+
     def _allowed_file(self, filename: str) -> bool:
         """
         Check if file extension is allowed.
@@ -1102,3 +1366,89 @@ class WebRoutes:
             else:
                 words.append(w.capitalize())
         return ' '.join(words)
+    
+    def _compute_file_hash(self, file_path: str) -> str:
+        """
+        Compute SHA-256 hash of a file for duplicate detection.
+        
+        Args:
+            file_path: Path to the file to hash
+            
+        Returns:
+            Hexadecimal string representation of the file hash
+        """
+        hash_sha256 = hashlib.sha256()
+        try:
+            with open(file_path, 'rb') as f:
+                for chunk in iter(lambda: f.read(4096), b""):
+                    hash_sha256.update(chunk)
+            return hash_sha256.hexdigest()
+        except Exception as e:
+            logger.error(f"Error computing hash for {file_path}: {e}")
+            raise
+    
+    def _check_for_duplicate_file(self, file_hash: str) -> Dict[str, Any]:
+        """
+        Check if a file with the given hash already exists in the database.
+        
+        Args:
+            file_hash: The SHA-256 hash of the file to check
+            
+        Returns:
+            Dictionary with duplicate status information:
+            - 'is_duplicate': bool indicating if duplicate found
+            - 'existing_file': dict with file info if duplicate found
+        """
+        try:
+            # Use direct database connection to check for existing file hash
+            import psycopg2
+            
+            conn = psycopg2.connect(
+                host=os.getenv('POSTGRES_HOST', 'localhost'),
+                port=os.getenv('POSTGRES_PORT', '5432'),
+                database=os.getenv('POSTGRES_DB', 'rag_metadata'),
+                user=os.getenv('POSTGRES_USER', 'rag_user'),
+                password=os.getenv('POSTGRES_PASSWORD', 'rag_password')
+            )
+            
+            with conn.cursor() as cursor:
+                # Check if we need to add the file_hash column first
+                cursor.execute("""
+                    SELECT column_name 
+                    FROM information_schema.columns 
+                    WHERE table_name = 'documents' AND column_name = 'file_hash'
+                """)
+                
+                if not cursor.fetchone():
+                    # Add the file_hash column if it doesn't exist
+                    logger.info("Adding file_hash column to documents table")
+                    cursor.execute("ALTER TABLE documents ADD COLUMN file_hash VARCHAR(64)")
+                    conn.commit()
+                
+                # Now check for duplicates
+                cursor.execute(
+                    "SELECT document_id, title, processing_status, created_at FROM documents WHERE file_hash = %s",
+                    (file_hash,)
+                )
+                result = cursor.fetchone()
+                
+                conn.close()
+                
+                if result:
+                    document_id, title, status, created_at = result
+                    return {
+                        'is_duplicate': True,
+                        'existing_file': {
+                            'document_id': document_id,
+                            'title': title,
+                            'status': status,
+                            'created_at': created_at
+                        }
+                    }
+                else:
+                    return {'is_duplicate': False, 'existing_file': None}
+                    
+        except Exception as e:
+            logger.error(f"Error checking for duplicate file with hash {file_hash}: {e}")
+            # In case of error, allow the upload to proceed (fail-safe)
+            return {'is_duplicate': False, 'existing_file': None}

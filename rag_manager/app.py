@@ -712,7 +712,8 @@ class RAGKnowledgebaseManager:
                         avg_chunk_chars=avg_len,
                         median_chunk_chars=med_len,
                         top_keywords=json.dumps(global_keywords),
-                        processing_time_seconds=elapsed
+                        processing_time_seconds=elapsed,
+                        processing_status='completed'
                     )
                 else:
                     logger.warning("URL manager not available for document metadata storage")
@@ -725,6 +726,16 @@ class RAGKnowledgebaseManager:
             status.end_time = datetime.now()
             
         except Exception as e:
+            # Also update database status to 'failed' on error
+            try:
+                if self.url_manager:
+                    self.url_manager.upsert_document_metadata(
+                        filename,
+                        processing_status='failed'
+                    )
+            except Exception as db_error:
+                logger.warning(f"Failed to update database status to 'failed' for {filename}: {db_error}")
+                
             status.status = "error"
             status.error_details = str(e)
             status.message = f"Processing failed: {str(e)}"
@@ -757,11 +768,34 @@ class RAGKnowledgebaseManager:
                 st.message = 'Removing embeddings...'
                 st.progress = 20
                 try:
-                    self.milvus_manager.delete_document(filename=filename)
+                    logger.info(f"Starting embedding deletion for filename: {filename}")
+                    deletion_result = self.milvus_manager.delete_document(filename=filename)
+                    logger.info(f"Embedding deletion result for {filename}: {deletion_result}")
+                    
+                    if deletion_result.get('success'):
+                        deleted_count = deletion_result.get('deleted_count', 0)
+                        reported_count = deletion_result.get('reported_delete_count', 0)
+                        
+                        if deleted_count > 0:
+                            logger.info(f"Immediately deleted {deleted_count} embeddings for {filename}")
+                            st.message = f'Removed {deleted_count} embeddings'
+                            st.progress = 40
+                        elif reported_count > 0:
+                            logger.info(f"Milvus marked {reported_count} embeddings for deletion - cleanup in progress")
+                            st.message = f'Deletion initiated ({reported_count} embeddings marked for cleanup)'
+                            st.progress = 40
+                        else:
+                            logger.info(f"Deletion command successful for {filename}")
+                            st.message = 'Embedding deletion initiated'
+                            st.progress = 40
+                    else:
+                        error_msg = deletion_result.get('error', 'Unknown error')
+                        logger.error(f"Embedding deletion failed for {filename}: {error_msg}")
+                        raise Exception(f"Embedding deletion failed: {error_msg}")
+                        
                 except Exception as e:
-                    logger.warning(f"Embedding deletion failed for {filename}: {e}")
-                else:
-                    st.progress = 40
+                    logger.error(f"Embedding deletion failed for {filename}: {e}", exc_info=True)
+                    raise Exception(f"Failed to delete embeddings: {str(e)}")
                 
                 # Purge metadata row
                 try:
@@ -792,7 +826,7 @@ class RAGKnowledgebaseManager:
                 raise
             
             st.status = 'completed'
-            st.message = 'Deletion complete'
+            st.message = 'File archived - monitoring embedding cleanup'
             st.progress = 100
             st.end_time = datetime.now()
             
@@ -803,8 +837,9 @@ class RAGKnowledgebaseManager:
             st.progress = 100
             st.end_time = datetime.now()
         finally:
-            # Keep status entry so UI can observe 'Deletion complete'.
-            # A TTL cleanup will purge it later via get_status.
+            # Keep status entry for monitoring deletion cleanup progress
+            # The status endpoint will check for actual cleanup completion
+            # and update the message accordingly
             pass
 
     def run(self) -> None:

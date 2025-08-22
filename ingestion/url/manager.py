@@ -462,22 +462,24 @@ class PostgreSQLURLManager:
                     # Map SQLite fields to PostgreSQL schema
                     title = fields.get('title')
                     word_count = fields.get('word_count')
+                    processing_status = fields.get('processing_status', 'completed')  # Default to completed for upserts
                     processing_time_seconds = fields.get('processing_time_seconds')
                     
                     # Store other fields in metadata JSONB
                     for key, value in fields.items():
-                        if key not in ['title', 'word_count']:
+                        if key not in ['title', 'word_count', 'processing_status']:
                             metadata[key] = value
                     
                     cursor.execute(
-                        """INSERT INTO documents (document_id, title, word_count, metadata) 
-                           VALUES (%s, %s, %s, %s) 
+                        """INSERT INTO documents (document_id, title, word_count, processing_status, metadata) 
+                           VALUES (%s, %s, %s, %s, %s) 
                            ON CONFLICT(document_id) DO UPDATE SET 
                            title = EXCLUDED.title,
                            word_count = EXCLUDED.word_count,
+                           processing_status = EXCLUDED.processing_status,
                            metadata = EXCLUDED.metadata,
                            updated_at = NOW()""",
-                        (filename, title, word_count, json.dumps(metadata))
+                        (filename, title, word_count, processing_status, json.dumps(metadata))
                     )
                     conn.commit()
         except Exception as e:
