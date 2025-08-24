@@ -233,10 +233,20 @@ class WebRoutes:
         def download_file(filename):
             """Download a processed (uploaded) document by filename."""
             try:
-                return send_from_directory(self.config.UPLOADED_FOLDER, filename, as_attachment=True)
+                import os
+                uploaded_folder_abs = os.path.abspath(self.config.UPLOADED_FOLDER)
+                file_path = os.path.join(uploaded_folder_abs, filename)
+                logger.info(f"Download request for: {filename}")
+                logger.info(f"Looking in folder: {uploaded_folder_abs}")
+                logger.info(f"Full file path: {file_path}")
+                logger.info(f"File exists: {os.path.exists(file_path)}")
+                return send_from_directory(uploaded_folder_abs, filename, as_attachment=True)
             except FileNotFoundError:
                 logger.warning(f"Download requested for non-existent file: {filename}")
                 abort(404)
+            except Exception as e:
+                logger.error(f"Download error for {filename}: {str(e)}")
+                abort(500)
 
         @self.app.route('/search', methods=['GET', 'POST'])
         def search():
