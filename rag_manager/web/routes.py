@@ -445,7 +445,7 @@ class WebRoutes:
                 return redirect(url_for('index'))
             try:
                 if title:
-                    self.rag_manager.url_manager.upsert_document_metadata(filename, title=title)
+                    self.rag_manager.document_manager.upsert_document_metadata(filename, {'title': title}) if self.rag_manager.document_manager else None
                     flash('Document title updated', 'success')
                 else:
                     flash('No title provided', 'info')
@@ -461,10 +461,10 @@ class WebRoutes:
             
             # Update database status to 'pending' when processing starts
             try:
-                if self.rag_manager.url_manager:
-                    self.rag_manager.url_manager.upsert_document_metadata(
+                if self.rag_manager.document_manager:
+                    self.rag_manager.document_manager.upsert_document_metadata(
                         filename,
-                        processing_status='pending'
+                        {'processing_status': 'pending'}
                     )
             except Exception as e:
                 logger.warning(f"Failed to set processing status to 'pending' for {filename}: {e}")
@@ -1095,11 +1095,35 @@ class WebRoutes:
                 # Enrich uploaded files with metadata from database
                 if directory == self.config.UPLOADED_FOLDER:
                     try:
-                        meta = self.rag_manager.url_manager.get_document_metadata(filename) or {}
+                        meta = self.rag_manager.document_manager.get_document_metadata(filename) or {} if self.rag_manager.document_manager else {}
                         entry['title'] = meta.get('title') or self._fallback_title_from_filename(filename)
-                        entry['chunks_count'] = meta.get('chunk_count')
-                        entry['page_count'] = meta.get('page_count')
-                        entry['word_count'] = meta.get('word_count')
+                        
+                        # Debug logging to see what metadata we have
+                        logger.info(f"Metadata for {filename}: {meta}")
+                        
+                        # Get counts with multiple fallback keys and type coercion
+                        def _safe_int(val):
+                            if val is None:
+                                return None
+                            try:
+                                return int(float(str(val)))
+                            except (ValueError, TypeError):
+                                return None
+                        
+                        # Try multiple possible keys for each count type
+                        chunks_val = (meta.get('chunk_count') or meta.get('chunks_count') or 
+                                    meta.get('chunkCount') or meta.get('chunks'))
+                        page_val = (meta.get('page_count') or meta.get('pages') or 
+                                  meta.get('pageCount') or meta.get('page'))
+                        word_val = (meta.get('word_count') or meta.get('words') or 
+                                  meta.get('wordCount') or meta.get('word'))
+                        
+                        entry['chunks_count'] = _safe_int(chunks_val)
+                        entry['page_count'] = _safe_int(page_val)
+                        entry['word_count'] = _safe_int(word_val)
+                        
+                        # Debug what we extracted
+                        logger.info(f"Extracted counts for {filename}: chunks={entry['chunks_count']}, pages={entry['page_count']}, words={entry['word_count']}")
                         
                         # Ensure top_keywords is a list, not a string
                         top_keywords = meta.get('top_keywords')
@@ -1210,7 +1234,7 @@ class WebRoutes:
             'top_keywords': []
         }
         try:
-            kb_stats = self.rag_manager.url_manager.get_knowledgebase_metadata()
+            kb_stats = self.rag_manager.document_manager.get_knowledgebase_metadata() if self.rag_manager.document_manager else {}
             kb_meta.update(kb_stats)
         except Exception as e:
             logger.warning(f"KB meta aggregation failed: {e}")

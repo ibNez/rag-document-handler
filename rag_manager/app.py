@@ -78,6 +78,9 @@ class RAGKnowledgebaseManager:
         # Initialize PostgreSQL manager for metadata
         self._initialize_database_managers()
         
+        # Initialize document manager for metadata operations
+        self._initialize_document_manager()
+        
         # Initialize URL manager based on feature flags
         self._initialize_url_manager()
         
@@ -145,6 +148,20 @@ class RAGKnowledgebaseManager:
             logger.error(f"Failed to initialize PostgreSQL: {e}")
             self.postgres_manager = None
             self.database_manager = None
+
+    def _initialize_document_manager(self) -> None:
+        """Initialize document manager for metadata operations."""
+        try:
+            from ingestion.document.manager import DocumentManager
+            if self.postgres_manager:
+                self.document_manager = DocumentManager(self.postgres_manager)
+                logger.info("Document Manager initialized successfully")
+            else:
+                logger.error("Cannot initialize document manager: PostgreSQL manager not available")
+                self.document_manager = None
+        except ImportError as e:
+            logger.error(f"Failed to import Document Manager: {e}")
+            self.document_manager = None
 
     def _initialize_url_manager(self) -> None:
         """Initialize URL manager based on feature flags."""
@@ -228,6 +245,11 @@ class RAGKnowledgebaseManager:
                 processor=email_processor
             )
             logger.info("Email orchestrator initialized")
+            
+            # Set the email orchestrator in the scheduler manager
+            self.scheduler_manager.set_email_orchestrator(self.email_orchestrator)
+            logger.info("Email orchestrator set in scheduler manager")
+            
         except Exception as e:
             logger.error("Failed to initialize email manager: %s", e)
             self.email_account_manager = None
@@ -423,6 +445,9 @@ class RAGKnowledgebaseManager:
         # Initialize processing status
         try:
             # Get URL details for status tracking
+            if not self.url_manager:
+                logger.error("URL manager not initialized")
+                return
             url_record = self.url_manager.get_url_by_id(url_id)
             
             if not url_record:
@@ -702,23 +727,25 @@ class RAGKnowledgebaseManager:
             # Upsert document metadata row
             elapsed = (datetime.now() - status.start_time).total_seconds() if status.start_time else None
             try:
-                if self.url_manager:
-                    self.url_manager.upsert_document_metadata(
-                        filename,
-                        title=status.title,
-                        page_count=page_count,
-                        chunk_count=len(chunks),
-                        word_count=word_count,
-                        avg_chunk_chars=avg_len,
-                        median_chunk_chars=med_len,
-                        top_keywords=json.dumps(global_keywords),
-                        processing_time_seconds=elapsed,
-                        processing_status='completed'
-                    )
+                if self.document_manager:
+                    metadata_dict = {
+                        'title': status.title,
+                        'page_count': page_count,
+                        'chunk_count': len(chunks),
+                        'word_count': word_count,
+                        'avg_chunk_chars': avg_len,
+                        'median_chunk_chars': med_len,
+                        'top_keywords': global_keywords,  # Pass as list, not JSON string
+                        'processing_time_seconds': elapsed,
+                        'processing_status': 'completed'
+                    }
+                    self.document_manager.upsert_document_metadata(filename, metadata_dict)
+                    logger.info(f"Successfully updated metadata for {filename} with {len(chunks)} chunks")
                 else:
-                    logger.warning("URL manager not available for document metadata storage")
+                    logger.warning("Document manager not available for document metadata storage")
             except Exception as e:
-                logger.warning(f"Failed to upsert document metadata for {filename}: {e}")
+                logger.error(f"Failed to upsert document metadata for {filename}: {e}")
+                raise  # Don't hide the error, let it fail properly
             
             status.status = "completed"
             status.message = f"Successfully processed {len(chunks)} chunks"
@@ -728,10 +755,10 @@ class RAGKnowledgebaseManager:
         except Exception as e:
             # Also update database status to 'failed' on error
             try:
-                if self.url_manager:
-                    self.url_manager.upsert_document_metadata(
+                if self.document_manager:
+                    self.document_manager.upsert_document_metadata(
                         filename,
-                        processing_status='failed'
+                        {'processing_status': 'failed'}
                     )
             except Exception as db_error:
                 logger.warning(f"Failed to update database status to 'failed' for {filename}: {db_error}")
@@ -799,10 +826,10 @@ class RAGKnowledgebaseManager:
                 
                 # Purge metadata row
                 try:
-                    if self.url_manager:
-                        self.url_manager.delete_document_metadata(filename)
+                    if self.document_manager:
+                        self.document_manager.delete_document_metadata(filename)
                     else:
-                        logger.warning("URL manager not available for document metadata deletion")
+                        logger.warning("Document manager not available for document metadata deletion")
                 except Exception as e:
                     logger.warning(f"Metadata deletion failed for {filename}: {e}")
                 else:

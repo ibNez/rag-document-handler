@@ -71,10 +71,6 @@ def main():
         
         conn.close()
         print("🎉 Tables dropped! Restart the application to recreate with new schema.")
-        print("   New schema includes:")
-        print("   - UNIQUE constraints on content_hash fields")
-        print("   - Centralized table creation")
-        print("   - Proper indexes for performance")
         
     except psycopg2.Error as e:
         print(f"❌ PostgreSQL error: {e}")
