@@ -277,6 +277,7 @@ class DocumentProcessor:
                     'chunk_id': f"{url_id}:{content_hash}",
                     'content_hash': content_hash,
                     'content_length': len(text),
+                    'category_type': 'url',  # Set category_type for URL content
                 })
                 d.metadata = meta
                 d.page_content = text

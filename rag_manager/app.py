@@ -691,7 +691,8 @@ class RAGKnowledgebaseManager:
             # Attach keywords list to each chunk metadata (global subset for search boost)
             for c in chunks:
                 c.metadata['keywords'] = global_keywords
-            logger.debug(f"Attached keywords to {len(chunks)} chunks")
+                c.metadata['category_type'] = 'document'  # Set category_type for uploaded documents
+            logger.debug(f"Attached keywords and category_type to {len(chunks)} chunks")
             
             # Basic stats
             word_count = sum(len((c.page_content or '').split()) for c in chunks)

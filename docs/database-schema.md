@@ -5,7 +5,9 @@ This document provides comprehensive documentation of all database schemas used 
 ## Overview
 
 The system uses a dual-database architecture with refactored data access:
-- **PostgreSQL**: Relational metadata storage managed through `ingestion/core/postgres_manager.py`
+- **PostgreSQL**: Relationa| `category` | VARCHAR(65535) | Content element type from unstructured library | CompositeElement, TableChunk, etc. |
+| `category_type` | VARCHAR(65535) | Content source type classification | "document" / "url" / "email" |
+| `content_hash` | VARCHAR(65535) | Hash for deduplication | Generated based on content |metadata storage managed through `ingestion/core/postgres_manager.py`
 - **Milvus**: Vector embeddings storage accessed via `rag_manager/managers/milvus_manager.py`
 
 ## Data Access Architecture
@@ -244,6 +246,7 @@ fields = [
     FieldSchema(name="chunk_id", dtype=DataType.VARCHAR, max_length=65535),
     FieldSchema(name="topic", dtype=DataType.VARCHAR, max_length=65535),
     FieldSchema(name="category", dtype=DataType.VARCHAR, max_length=65535),
+    FieldSchema(name="category_type", dtype=DataType.VARCHAR, max_length=65535),
     FieldSchema(name="content_hash", dtype=DataType.VARCHAR, max_length=65535),
     FieldSchema(name="content_length", dtype=DataType.INT64),
     FieldSchema(name="text", dtype=DataType.VARCHAR, max_length=65535),
@@ -289,7 +292,8 @@ index_params = {
     "page": page_number,
     "chunk_id": f"{document_id}:{chunk_index}",
     "topic": filename,
-    "category": "document",
+    "category": element_type,  # From unstructured library
+    "category_type": "document",
     "content_hash": f"doc_{document_id}_{chunk_index}",
     "content_length": len(text_chunk),
     "text": text_chunk
@@ -307,7 +311,8 @@ When `urls.snapshot_enabled = true`, use the snapshot id to ensure point-in-time
     "page": chunk_index,
     "chunk_id": f"{snapshot_id}:{chunk_index}",
     "topic": page_title,
-    "category": "url",
+    "category": "NarrativeText",  # Or other element types
+    "category_type": "url",
     "content_hash": f"url_{snapshot_id}_{chunk_index}",
     "content_length": len(text_chunk),
     "text": text_chunk
@@ -320,7 +325,8 @@ When `urls.snapshot_enabled = true`, use the snapshot id to ensure point-in-time
     "page": chunk_index,
     "chunk_id": f"{url_id}:{chunk_index}",
     "topic": page_title,
-    "category": "url",
+    "category": "NarrativeText",  # Or other element types
+    "category_type": "url",
     "content_hash": f"url_{url_id}_{chunk_index}",
     "content_length": len(text_chunk),
     "text": text_chunk
@@ -335,7 +341,8 @@ When `urls.snapshot_enabled = true`, use the snapshot id to ensure point-in-time
     "page": chunk_index,
     "chunk_id": f"{message_id}:{chunk_index}",
     "topic": subject,
-    "category": "email",
+    "category": "NarrativeText",  # Or other element types
+    "category_type": "email",
     "content_hash": f"email_{message_id}_{chunk_index}",
     "content_length": len(text_chunk),
     "text": text_chunk

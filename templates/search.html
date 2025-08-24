@@ -128,7 +128,7 @@
                                 <div class="flex-grow-1 ms-3">
                                     <div class="bg-primary bg-opacity-10 p-3 rounded">
                                         {% if rag_results %}
-                                            {{ rag_results.answer }}
+                                            {{ rag_results.answer|safe }}
                                         {% else %}
                                             I encountered an error processing your question. Please try again.
                                         {% endif %}
@@ -137,6 +137,171 @@
                             </div>
                         </div>
                     </div>
+
+                    <!-- References Section -->
+                    {% if rag_results and rag_results.unique_sources %}
+                        <div class="card mb-4">
+                            <div class="card-header">
+                                <h6 class="mb-0">
+                                    <i class="fas fa-list-ol me-2"></i>References
+                                </h6>
+                            </div>
+                            <div class="card-body">
+                                {% for ref_source in rag_results.unique_sources %}
+                                    <div class="mb-2">
+                                        <strong>[{{ ref_source.ref_num }}]</strong>
+                                        {% if ref_source.category_type == 'document' %}
+                                            <a href="{{ url_for('download_file', filename=ref_source.filename) }}" 
+                                               class="text-decoration-none text-primary ms-2"
+                                               title="Download {{ ref_source.filename }}">
+                                                {{ ref_source.filename }}
+                                                <i class="fas fa-download ms-1" style="font-size: 0.8em;"></i>
+                                            </a>
+                                        {% else %}
+                                            <span class="ms-2">{{ ref_source.filename }}</span>
+                                        {% endif %}
+                                        
+                                        {% if ref_source.title and ref_source.title != ref_source.filename %}
+                                            <span class="text-muted ms-2">- {{ ref_source.title }}</span>
+                                        {% endif %}
+                                        
+                                        {% if ref_source.page and ref_source.page != 'unknown' %}
+                                            <span class="text-muted">, Page {{ ref_source.page }}</span>
+                                        {% endif %}
+                                        
+                                        {% if ref_source.keywords and ref_source.keywords|length > 0 %}
+                                            <br><span class="text-muted ms-4">Keywords: 
+                                            {% for keyword in ref_source.keywords %}
+                                                <span class="badge bg-light text-dark me-1">{{ keyword }}</span>
+                                            {% endfor %}
+                                            </span>
+                                        {% endif %}
+                                    </div>
+                                {% endfor %}
+                            </div>
+                        </div>
+                    {% endif %}
+
+                    <!-- Analysis Sections (Prompt and Results) -->
+                    {% if rag_results and rag_results.analysis_info %}
+                        <!-- Prompt -->
+                        <div class="card mb-4">
+                            <div class="card-header">
+                                <h6 class="mb-0">
+                                    <i class="fas fa-search me-2"></i>Prompt
+                                    <button class="btn btn-sm btn-outline-secondary float-end" type="button" data-bs-toggle="collapse" data-bs-target="#promptAnalysis" aria-expanded="false" aria-controls="promptAnalysis">
+                                        View Details
+                                    </button>
+                                </h6>
+                            </div>
+                            <div class="collapse" id="promptAnalysis">
+                                <div class="card-body">
+                                    <h6 class="text-primary">System Instructions:</h6>
+                                    <pre class="bg-light p-3 rounded small text-wrap" style="white-space: pre-wrap;">{{ rag_results.analysis_info.system_prompt }}</pre>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Vector Search Analysis -->
+                        <div class="card mb-4">
+                            <div class="card-header">
+                                <h6 class="mb-0">
+                                    <i class="fas fa-vector-square me-2"></i>Vector Search Analysis
+                                    <button class="btn btn-sm btn-outline-secondary float-end" type="button" data-bs-toggle="collapse" data-bs-target="#vectorAnalysis" aria-expanded="false" aria-controls="vectorAnalysis">
+                                        View Results
+                                    </button>
+                                </h6>
+                            </div>
+                            <div class="collapse" id="vectorAnalysis">
+                                <div class="card-body">
+                                    {% if rag_results.analysis_info.milvus_results %}
+                                        <p class="text-muted small">Similarity scores show relevance to your query (lower = more similar)</p>
+                                        <div class="table-responsive">
+                                            <table class="table table-sm">
+                                                <thead>
+                                                    <tr>
+                                                        <th>Rank</th>
+                                                        <th>Similarity</th>
+                                                        <th>Source</th>
+                                                        <th>Page</th>
+                                                        <th>Category</th>
+                                                        <th>Topic</th>
+                                                        <th>Content Preview</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {% for result in rag_results.analysis_info.milvus_results %}
+                                                        <tr>
+                                                            <td>{{ result.rank }}</td>
+                                                            <td>{{ "%.4f"|format(result.score) }}</td>
+                                                            <td class="small">{{ result.source }}</td>
+                                                            <td>{{ result.page }}</td>
+                                                            <td><span class="badge bg-secondary">{{ result.category_type }}</span></td>
+                                                            <td class="small">{{ result.topic }}</td>
+                                                            <td class="small" style="max-width: 300px;">{{ result.content_preview }}</td>
+                                                        </tr>
+                                                    {% endfor %}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    {% else %}
+                                        <p class="text-muted">No vector search results available</p>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Document Metadata Analysis -->
+                        <div class="card mb-4">
+                            <div class="card-header">
+                                <h6 class="mb-0">
+                                    <i class="fas fa-database me-2"></i>Document Metadata Analysis
+                                    <button class="btn btn-sm btn-outline-secondary float-end" type="button" data-bs-toggle="collapse" data-bs-target="#metadataAnalysis" aria-expanded="false" aria-controls="metadataAnalysis">
+                                        View Metadata
+                                    </button>
+                                </h6>
+                            </div>
+                            <div class="collapse" id="metadataAnalysis">
+                                <div class="card-body">
+                                    {% if rag_results.analysis_info.postgres_metadata %}
+                                        <p class="text-muted small">Document processing and storage information</p>
+                                        <div class="table-responsive">
+                                            <table class="table table-sm">
+                                                <thead>
+                                                    <tr>
+                                                        <th>Document</th>
+                                                        <th>Source URL</th>
+                                                        <th>Category</th>
+                                                        <th>Type</th>
+                                                        <th>Processed</th>
+                                                        <th>Chunks</th>
+                                                        <th>Size</th>
+                                                        <th>Status</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {% for meta in rag_results.analysis_info.postgres_metadata %}
+                                                        <tr>
+                                                            <td class="small">{{ meta.filename }}</td>
+                                                            <td class="small">{{ meta.url or 'Local File' }}</td>
+                                                            <td><span class="badge bg-info">{{ meta.category }}</span></td>
+                                                            <td><span class="badge bg-secondary">{{ meta.category_type }}</span></td>
+                                                            <td class="small">{{ meta.created_at }}</td>
+                                                            <td>{{ meta.chunk_count }}</td>
+                                                            <td>{{ meta.total_size }}</td>
+                                                            <td><span class="badge bg-success">{{ meta.processing_status }}</span></td>
+                                                        </tr>
+                                                    {% endfor %}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    {% else %}
+                                        <p class="text-muted">No metadata information available for analysis</p>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </div>
+                    {% endif %}
 
                     <!-- Sources Card -->
                     {% if rag_results and rag_results.sources %}
@@ -154,10 +319,22 @@
                                                 <div>
                                                     <h6 class="card-title mb-1">
                                                         <i class="fas fa-file-alt me-1 text-primary"></i>
-                                                        {{ source.filename }}
+                                                        {% if source.category_type == 'document' %}
+                                                            <a href="{{ url_for('download_file', filename=source.filename) }}" 
+                                                               class="text-decoration-none text-primary" 
+                                                               title="Download {{ source.filename }}">
+                                                                {{ source.filename }}
+                                                                <i class="fas fa-download ms-1" style="font-size: 0.8em;"></i>
+                                                            </a>
+                                                        {% else %}
+                                                            {{ source.filename }}
+                                                        {% endif %}
                                                     </h6>
                                                     <small class="text-muted">
                                                         Page {{ source.page }} • Chunk: {{ source.chunk_id[:16] }}...
+                                                        {% if source.category_type != 'unknown' %}
+                                                            • Type: {{ source.category_type|title }}
+                                                        {% endif %}
                                                     </small>
                                                 </div>
                                                 <span class="badge bg-info">

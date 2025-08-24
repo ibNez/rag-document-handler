@@ -122,6 +122,7 @@ class EmailProcessor:
                 "chunk_id": cid,
                 "page": idx,
                 "content_hash": chunk_hash,
+                "category_type": "email",  # Set category_type for email content
             }
             prepared.append((chunk, meta, chunk_hash))
 
