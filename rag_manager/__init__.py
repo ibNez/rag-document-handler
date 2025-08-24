@@ -1,10 +1,10 @@
 """
-RAG Document Handler Package
+RAG Knowledgebase Handler Manager Package
 
 A comprehensive knowledgebase store for storing and retrieving information for RAG implementations.
 """
 
-__version__ = "1.0.0"
-__author__ = "RAG Document Handler Team"
+__version__ = "0.1.0"
+__author__ = "Tony Philip"
 
 from .scheduler_manager import SchedulerManager

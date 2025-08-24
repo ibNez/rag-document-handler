@@ -72,12 +72,12 @@ class URLOrchestrator:
             logger.error(f"Failed to get URL count: {exc}")
             return 0
 
-    def process_url(self, url_id: int) -> Dict[str, Any]:
+    def process_url(self, url_id: str) -> Dict[str, Any]:
         """
         Process a single URL by fetching its content and updating metadata.
         
         Args:
-            url_id: The ID of the URL to process
+            url_id: The UUID of the URL to process
             
         Returns:
             Dictionary containing processing results and status

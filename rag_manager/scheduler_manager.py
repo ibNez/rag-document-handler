@@ -80,17 +80,29 @@ class SchedulerManager:
                 active_emails_total = 0
                 
                 email_orchestrator = getattr(self, 'email_orchestrator', None)
+                logger.debug(f"Email orchestrator found: {email_orchestrator is not None}")
+                
                 if email_orchestrator:
                     try:
+                        logger.debug("Getting due email accounts...")
                         due_accounts = email_orchestrator.get_due_accounts()
+                        logger.debug(f"Found {len(due_accounts)} due email accounts")
+                        for account in due_accounts:
+                            logger.debug(f"  Due account: {account.get('account_name')} (ID: {account.get('id')})")
                     except Exception as exc:
                         logger.error(f"Failed to get due email accounts: {exc}")
                         due_accounts = []
                     try:
+                        logger.debug("Getting email account count...")
                         active_emails_total = email_orchestrator.account_manager.get_account_count()
+                        logger.debug(f"Email account count: {active_emails_total}")
                     except Exception as exc:
                         logger.error(f"Failed to get email account count: {exc}")
                         active_emails_total = 0
+                else:
+                    logger.warning("Email orchestrator not available in scheduler")
+                    due_accounts = []
+                    
                 logger.info(
                     "Scheduler cycle %s heartbeat: urls_due=%s emails_due=%s active_urls_total=%s active_emails_total=%s",
                     cycle,

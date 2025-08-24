@@ -94,8 +94,14 @@ class PostgreSQLManager:
             content_type VARCHAR(100),
             file_size BIGINT,
             word_count INTEGER,
+            page_count INTEGER,
+            chunk_count INTEGER,
+            avg_chunk_chars REAL,
+            median_chunk_chars REAL,
+            top_keywords TEXT[], -- PostgreSQL array of strings
+            processing_time_seconds REAL,
             processing_status VARCHAR(50) DEFAULT 'pending',
-            metadata JSONB DEFAULT '{}',
+            file_hash VARCHAR(64),
             created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
             updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
             indexed_at TIMESTAMP WITH TIME ZONE
@@ -134,7 +140,10 @@ class PostgreSQLManager:
             snapshot_enabled BOOLEAN DEFAULT FALSE,
             snapshot_retention_days INTEGER,
             snapshot_max_snapshots INTEGER,
-            metadata JSONB DEFAULT '{}',
+            is_refreshing BOOLEAN DEFAULT FALSE,
+            last_refresh_started TIMESTAMP WITH TIME ZONE,
+            last_content_hash TEXT,
+            last_update_status VARCHAR(50),
             created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
             updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
         );
@@ -160,7 +169,7 @@ class PostgreSQLManager:
         CREATE INDEX IF NOT EXISTS idx_documents_document_id ON documents(document_id);
         CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(processing_status);
         CREATE INDEX IF NOT EXISTS idx_documents_created ON documents(created_at);
-        CREATE INDEX IF NOT EXISTS idx_documents_metadata ON documents USING GIN(metadata);
+        CREATE INDEX IF NOT EXISTS idx_documents_keywords ON documents USING GIN(top_keywords);
         
         -- Email indexes
         CREATE INDEX IF NOT EXISTS idx_emails_message_id ON emails(message_id);
@@ -171,7 +180,6 @@ class PostgreSQLManager:
         
         CREATE INDEX IF NOT EXISTS idx_urls_url ON urls(url);
         CREATE INDEX IF NOT EXISTS idx_urls_status ON urls(status);
-        CREATE INDEX IF NOT EXISTS idx_urls_metadata ON urls USING GIN(metadata);
         
         CREATE INDEX IF NOT EXISTS idx_email_accounts_email ON email_accounts(email_address);
         CREATE INDEX IF NOT EXISTS idx_email_accounts_name ON email_accounts(account_name);
@@ -198,14 +206,13 @@ class PostgreSQLManager:
     
     def store_document(self, document_id: str, title: Optional[str] = None, content_preview: Optional[str] = None,
                       file_path: Optional[str] = None, content_type: Optional[str] = None, file_size: Optional[int] = None,
-                      word_count: Optional[int] = None, metadata: Optional[Dict[str, Any]] = None) -> str:
+                      word_count: Optional[int] = None, **kwargs) -> str:
         """Store document metadata."""
-        metadata = metadata or {}
         
         query = """
             INSERT INTO documents (document_id, title, content_preview, file_path, 
-                                 content_type, file_size, word_count, metadata, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                                 content_type, file_size, word_count, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
             ON CONFLICT (document_id) 
             DO UPDATE SET 
                 title = EXCLUDED.title,
@@ -214,7 +221,6 @@ class PostgreSQLManager:
                 content_type = EXCLUDED.content_type,
                 file_size = EXCLUDED.file_size,
                 word_count = EXCLUDED.word_count,
-                metadata = documents.metadata || EXCLUDED.metadata,
                 updated_at = NOW()
             RETURNING id
         """
@@ -223,7 +229,7 @@ class PostgreSQLManager:
             with conn.cursor() as cur:
                 cur.execute(query, [
                     document_id, title, content_preview, file_path,
-                    content_type, file_size, word_count, json.dumps(metadata)
+                    content_type, file_size, word_count
                 ])
                 result = cur.fetchone()
                 conn.commit()
@@ -250,7 +256,10 @@ class PostgreSQLManager:
         """Full-text search across documents."""
         search_sql = """
             SELECT document_id, title, content_preview, content_type, 
-                   metadata, created_at, updated_at,
+                   page_count, chunk_count, word_count, 
+                   avg_chunk_chars, median_chunk_chars, top_keywords,
+                   processing_time_seconds, processing_status,
+                   created_at, updated_at,
                    ts_rank(to_tsvector('english', COALESCE(title, '') || ' ' || COALESCE(content_preview, '')), 
                           plainto_tsquery('english', %s)) as relevance
             FROM documents

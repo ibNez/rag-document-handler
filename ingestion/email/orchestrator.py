@@ -53,18 +53,29 @@ class EmailOrchestrator:
     def get_due_accounts(self) -> List[Dict[str, Any]]:
         """Return accounts that need a refresh based on their schedule."""
         if not self.account_manager:
+            logger.debug("No account manager available")
             return []
         # Refresh accounts to ensure we operate on latest configuration
+        logger.debug("Refreshing accounts before checking due status")
         self.refresh_accounts()
+        logger.debug(f"Found {len(self.accounts)} total accounts after refresh")
+        
         now = datetime.now(UTC)
         due: List[Dict[str, Any]] = []
         for account in self.accounts:
+            account_name = account.get("account_name", "Unknown")
+            logger.debug(f"Checking account: {account_name}")
+            
             interval = account.get("refresh_interval_minutes")
             if interval is None:
-                logger.warning(f"Email account {account.get('account_name')} missing refresh_interval_minutes, using 60 minutes default")
+                logger.warning(f"Email account {account_name} missing refresh_interval_minutes, using 60 minutes default")
                 interval = 60  # Default to 1 hour if missing
+            
+            logger.debug(f"  Refresh interval: {interval} minutes")
+            
             try:
                 last = account.get("last_synced")
+                logger.debug(f"  Last synced raw value: {last}")
                 if last:
                     last_dt = datetime.fromisoformat(str(last))
                     # Ensure timezone-aware datetime for comparison
@@ -73,20 +84,31 @@ class EmailOrchestrator:
                         last_dt = last_dt.replace(tzinfo=UTC)
                 else:
                     last_dt = None
-            except Exception:  # pragma: no cover - defensive
+                logger.debug(f"  Last synced datetime: {last_dt}")
+            except Exception as e:  # pragma: no cover - defensive
+                logger.debug(f"  Error parsing last_synced: {e}")
                 last_dt = None
 
             # Always sync accounts that have never been synced before
             if not last_dt:
+                logger.debug(f"  Account {account_name} has never been synced, marking as due")
                 due.append(account)
                 continue
 
             # Skip disabled accounts after initial sync
             if interval <= 0:
+                logger.debug(f"  Account {account_name} has disabled refresh interval ({interval}), skipping")
                 continue
 
-            if last_dt + timedelta(minutes=int(interval)) <= now:
+            next_sync_time = last_dt + timedelta(minutes=int(interval))
+            logger.debug(f"  Next sync time: {next_sync_time}, current time: {now}")
+            if next_sync_time <= now:
+                logger.debug(f"  Account {account_name} is due for sync")
                 due.append(account)
+            else:
+                logger.debug(f"  Account {account_name} not due yet")
+                
+        logger.debug(f"Total due accounts: {len(due)}")
         return due
 
     def sync_account(
@@ -97,6 +119,7 @@ class EmailOrchestrator:
         server_type = (account.get("server_type") or "").lower()
         batch = account.get("batch_limit")
         batch_limit = None if batch in (None, "all") else int(batch)
+        logger.info(f"Account {name}: batch={batch}, batch_limit={batch_limit}")
 
         if server_type == "imap":
             connector = IMAPConnector(
@@ -171,10 +194,14 @@ class EmailOrchestrator:
             if (processor and hasattr(processor, 'process_smart_batch') and 
                 hasattr(connector, 'fetch_smart_batch')):
                 logger.info("Using smart batch processing for account %s", name)
+                # Respect batch limit: if batch_limit is set, process only 1 batch per sync cycle
+                max_batches = 1 if batch_limit else None
+                logger.info("Processing %s batches for account %s (batch_limit=%s)", 
+                           "1" if max_batches else "unlimited", name, batch_limit)
                 stats = processor.process_smart_batch(
                     connector=connector,
                     since_date=None,  # Process all emails
-                    max_batches=None  # No limit on batches
+                    max_batches=max_batches  # Respect batch limit setting
                 )
                 logger.info(
                     "Smart batch processing complete for %s: %d emails processed, %d batches, %d errors",

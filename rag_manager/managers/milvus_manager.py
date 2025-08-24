@@ -719,35 +719,7 @@ class MilvusManager:
                 "error": str(e),
             }
 
-    def get_chunk_count_for_source(self, source: str) -> int:
-        """
-        Return number of chunks stored in Milvus for a given source/document_id.
-        Uses a direct Collection query to count matches with pagination.
-        """
-        try:
-            if not utility.has_collection(self.collection_name):
-                return 0
-            col = Collection(self.collection_name)
-            try:
-                col.load()
-            except Exception:
-                pass
-            # First try by 'source' (most consistent across schema versions)
-            expr_src = f'source == "{self._escape_literal(source)}"'
-            count = self._paginated_count(col, expr_src)
-            if count > 0:
-                return count
 
-            # Fallback: some older entries may have used hashed document_id
-            try:
-                legacy_id = hashlib.sha1(source.strip().encode('utf-8')).hexdigest()[:16]
-                expr_doc = f'document_id == "{legacy_id}"'
-                count = self._paginated_count(col, expr_doc)
-                return count
-            except Exception:
-                pass
-            return 0
-        except Exception:
             return 0
 
     def _escape_literal(self, s: str) -> str:
