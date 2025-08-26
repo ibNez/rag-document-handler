@@ -8,6 +8,7 @@ SCRIPT_VERSION="2.0"
 AUTO_YES=false
 DEV_MODE=false
 SHOW_HELP=false
+VERBOSE=false
 
 # Color codes for output
 RED='\033[0;31m'
@@ -15,6 +16,41 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
+
+# Log / directory configuration
+LOG_DIR="logs/setup"
+
+# Spinner / progress indicator
+SPINNER_PID=""
+start_spinner() {
+    local msg="$1"
+    local frames='|/-\\'
+    local i=0
+    echo -ne "${BLUE}$msg...${NC}" >&2
+    (
+        tput civis 2>/dev/null || true
+        while true; do
+            printf "\r${BLUE}%s %s${NC}" "$msg" "${frames:i++%${#frames}:1}" >&2
+            sleep 0.15
+        done
+    ) &
+    SPINNER_PID=$!
+}
+
+stop_spinner() {
+    local status=$1
+    if [ -n "$SPINNER_PID" ]; then
+        kill "$SPINNER_PID" 2>/dev/null || true
+        wait "$SPINNER_PID" 2>/dev/null || true
+        SPINNER_PID=""
+        tput cnorm 2>/dev/null || true
+    fi
+    if [ "$status" = 0 ]; then
+        echo -e "\r${GREEN}✅ $2${NC}"
+    else
+        echo -e "\r${YELLOW}⚠️  $2${NC}"
+    fi
+}
 
 # Help function
 show_help() {
@@ -39,6 +75,7 @@ show_help() {
     echo "               • Sets up all directories and configuration"
     echo ""
     echo "  --help       Show this help message and exit"
+    echo "  --verbose    Show full pip output and retain logs (pip_install_*.log)"
     echo ""
     echo "EXAMPLES:"
     echo "  ./setup.sh              # Interactive setup with prompts"
@@ -78,6 +115,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --help)
             SHOW_HELP=true
+            shift
+            ;;
+        --verbose)
+            VERBOSE=true
             shift
             ;;
         *)
@@ -166,32 +207,9 @@ fi
 echo "🔧 Activating virtual environment..."
 source .venv/bin/activate
 
-# Upgrade pip
-echo "⬆️ Upgrading pip..."
-pip install --upgrade pip >/dev/null 2>&1
-
-# Install dependencies
-echo "📚 Installing Python dependencies..."
-pip install -e . >/dev/null 2>&1
-if [ $? -eq 0 ]; then
-    echo -e "${GREEN}✅ Dependencies installed successfully${NC}"
-else
-    echo -e "${YELLOW}⚠️  Package installation had issues, trying alternative method...${NC}"
-    pip install flask pymilvus sentence-transformers werkzeug python-dotenv pypdf python-docx chardet requests beautifulsoup4 google-api-python-client google-auth psycopg2-binary >/dev/null 2>&1
-fi
-
-# Install development dependencies (optional)
-if ask_yes_no "Install development dependencies (pytest, black, flake8, mypy)?" "n"; then
-    echo "🛠️ Installing development dependencies..."
-    pip install pytest pytest-cov black flake8 mypy isort >/dev/null 2>&1
-    echo -e "${GREEN}✅ Development dependencies installed${NC}"
-fi
-
-# Create required directories
-echo ""
+# Ensure directory structure (moved earlier so logs can be captured inside logs/)
 echo "📁 Setting up directory structure..."
-directories=("staging" "uploaded" "deleted" "logs" "databases/milvus/db" "databases/milvus/conf" "databases/postgres" "containers/ollama" "logs/milvus" "logs/postgres" "logs/ollama")
-
+directories=("staging" "uploaded" "deleted" "logs" "databases/milvus/db" "databases/milvus/conf" "databases/postgres" "containers/ollama" "logs/milvus" "logs/postgres" "logs/ollama" "$LOG_DIR")
 for dir in "${directories[@]}"; do
     if [ ! -d "$dir" ]; then
         mkdir -p "$dir"
@@ -200,6 +218,87 @@ for dir in "${directories[@]}"; do
         echo "   ✅ Exists: $dir"
     fi
 done
+
+# Upgrade pip
+echo "⬆️ Upgrading pip..."
+if [ "$VERBOSE" = true ]; then
+    pip install --upgrade pip || echo -e "${YELLOW}⚠️  Pip upgrade reported warnings/errors (continuing)${NC}"
+else
+    if ! pip install --upgrade pip > "$LOG_DIR/pip_upgrade.log" 2>&1; then
+        echo -e "${YELLOW}⚠️  Pip upgrade had issues (see $LOG_DIR/pip_upgrade.log)${NC}"
+    fi
+fi
+
+# Install dependencies (with spinner in non-verbose mode)
+echo "📚 Installing Python dependencies (editable mode)..."
+PRIMARY_LOG="$LOG_DIR/pip_install_primary.log"
+FALLBACK_LOG="$LOG_DIR/pip_install_fallback.log"
+
+if [ "$VERBOSE" = true ]; then
+    echo "(verbose) pip install -e ."
+    if pip install -e . 2>&1 | tee "$PRIMARY_LOG"; then
+        echo -e "${GREEN}✅ Dependencies installed successfully${NC}"
+    else
+        echo -e "${YELLOW}⚠️  Primary installation failed. Attempting fallback explicit package set...${NC}"
+        echo "Fallback: core explicit packages" | tee "$FALLBACK_LOG"
+        if pip install flask pymilvus sentence-transformers werkzeug python-dotenv pypdf python-docx chardet requests beautifulsoup4 google-api-python-client google-auth psycopg2-binary 2>&1 | tee -a "$FALLBACK_LOG"; then
+            echo -e "${GREEN}✅ Fallback dependencies installed${NC}"
+        else
+            echo -e "${RED}❌ Fallback installation failed. Review $FALLBACK_LOG${NC}"
+            exit 1
+        fi
+    fi
+else
+    start_spinner "Resolving & installing Python packages"
+    if pip install -e . > "$PRIMARY_LOG" 2>&1; then
+        stop_spinner 0 "Dependencies installed"
+        echo -e "${BLUE}ℹ️  Install log: $PRIMARY_LOG${NC}"
+    else
+        stop_spinner 1 "Primary install failed – attempting fallback"
+        echo -e "${BLUE}🔍 Last 15 lines from primary log:${NC}"
+        tail -n 15 "$PRIMARY_LOG"
+        start_spinner "Installing fallback explicit packages"
+        if pip install flask pymilvus sentence-transformers werkzeug python-dotenv pypdf python-docx chardet requests beautifulsoup4 google-api-python-client google-auth psycopg2-binary > "$FALLBACK_LOG" 2>&1; then
+            stop_spinner 0 "Fallback dependencies installed"
+            echo -e "${BLUE}ℹ️  Logs: primary=$PRIMARY_LOG fallback=$FALLBACK_LOG${NC}"
+        else
+            stop_spinner 1 "Fallback installation failed"
+            echo -e "${BLUE}🔍 Last 25 lines from fallback log:${NC}"
+            tail -n 25 "$FALLBACK_LOG"
+            echo -e "${YELLOW}💡 Re-run ./setup.sh --verbose for full pip output${NC}"
+            exit 1
+        fi
+    fi
+fi
+
+echo -e "${GREEN}📦 Python dependency phase complete${NC}"
+
+
+# Install development dependencies (optional)
+if ask_yes_no "Install development dependencies (pytest, black, flake8, mypy)?" "n"; then
+    echo "🛠️ Installing development dependencies..."
+    DEV_LOG="$LOG_DIR/dev_deps_install.log"
+    if [ "$VERBOSE" = true ]; then
+        if pip install pytest pytest-cov black flake8 mypy isort 2>&1 | tee "$DEV_LOG"; then
+            echo -e "${GREEN}✅ Development dependencies installed${NC}"
+        else
+            echo -e "${YELLOW}⚠️  Some dev dependencies failed (see $DEV_LOG)${NC}"
+        fi
+    else
+        start_spinner "Installing dev dependencies"
+        if pip install pytest pytest-cov black flake8 mypy isort > "$DEV_LOG" 2>&1; then
+            stop_spinner 0 "Dev dependencies installed"
+            echo -e "${BLUE}ℹ️  Log: $DEV_LOG${NC}"
+        else
+            stop_spinner 1 "Some dev dependencies failed"
+            echo -e "${BLUE}🔍 Last 20 lines:${NC}"
+            tail -n 20 "$DEV_LOG"
+        fi
+    fi
+fi
+
+# (Directory setup moved earlier; block retained intentionally blank to preserve script flow)
+
 
 # Check environment file
 echo ""

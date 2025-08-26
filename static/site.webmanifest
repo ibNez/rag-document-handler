@@ -1,0 +1,63 @@
+{
+	"name": "RAG Knowledgebase Manager",
+	"short_name": "RAG Manager",
+	"description": "Privacy-first ingestion, enrichment, and validation console for building a searchable RAG knowledgebase (documents, URLs, emails).",
+	"lang": "en",
+	"dir": "ltr",
+	"id": "/",
+	"start_url": "/",
+	"scope": "/",
+	"display": "standalone",
+	"display_override": ["standalone", "minimal-ui", "browser"],
+	"orientation": "any",
+	"theme_color": "#0d6efd",
+	"background_color": "#ffffff",
+	"categories": ["productivity", "utilities", "business", "developer-tools"],
+	"icons": [
+		{ "src": "android-chrome-192x192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+		{ "src": "android-chrome-512x512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+		{ "src": "favicon-32x32.png", "sizes": "32x32", "type": "image/png" },
+		{ "src": "favicon-16x16.png", "sizes": "16x16", "type": "image/png" },
+		{ "src": "apple-touch-icon.png", "sizes": "180x180", "type": "image/png", "purpose": "any" }
+	],
+	"shortcuts": [
+		{
+			"name": "Dashboard",
+			"short_name": "Dashboard",
+			"description": "Open the ingestion & validation dashboard",
+			"url": "/",
+			"icons": [{ "src": "/android-chrome-192x192.png", "sizes": "192x192", "type": "image/png" }]
+		},
+		{
+			"name": "Ask AI",
+			"short_name": "Ask AI",
+			"description": "Jump directly to semantic search / RAG QA interface",
+			"url": "/search",
+			"icons": [{ "src": "/android-chrome-192x192.png", "sizes": "192x192", "type": "image/png" }]
+		}
+	],
+	"permissions": [],
+	"prefer_related_applications": false,
+	"iarc_rating_id": "",
+	"screenshots": [
+		{
+			"src": "/static/screenshot-dashboard.png",
+			"sizes": "1192x720",
+			"type": "image/png",
+			"form_factor": "wide",
+			"label": "Document & data source dashboard"
+		},
+		{
+			"src": "/static/screenshot-search.png",
+			"sizes": "1192x720",
+			"type": "image/png",
+			"form_factor": "wide",
+			"label": "Ask AI semantic search interface"
+		}
+	],
+	"handle_links": "preferred",
+	"launch_handler": { "client_mode": "auto" },
+	"protocol_handlers": [
+		{ "protocol": "web+ragkb", "url": "/?open=%s" }
+	]
+}

@@ -247,6 +247,19 @@ safe_remove_file "rag_document_handler.log"
 safe_remove_file "*.log"
 echo "✅ Log files removed"
 
+# Step 4b: Remove build artifacts / egg-info
+echo ""
+echo "📦 Cleaning Python build artifacts..."
+if $DRY_RUN; then
+    echo "   [DRY RUN] Would remove: rag_document_handler.egg-info/"
+    echo "   [DRY RUN] Would remove: build/ dist/ .pytest_cache/ __pycache__/"
+else
+    rm -rf rag_document_handler.egg-info build dist .pytest_cache 2>/dev/null || true
+    # Remove stray __pycache__ folders
+    find . -type d -name "__pycache__" -prune -exec rm -rf {} + 2>/dev/null || true
+    echo "   Removed Python packaging artifacts"
+fi
+
 # Step 5: Remove uploaded and staging files
 echo ""
 echo "📂 Removing uploaded and staging files..."
