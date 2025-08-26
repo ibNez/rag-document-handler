@@ -16,9 +16,9 @@ services:
       POSTGRES_DB: rag_metadata
       POSTGRES_USER: rag_user
       POSTGRES_PASSWORD: secure_password
-    depends_on:
-      - milvus
-      - postgres
+      OLLAMA_HOST: ollama
+      OLLAMA_PORT: 11434
+      OLLAMA_API_BASE: http://ollama:11434
 
   milvus:
     image: milvusdb/milvus:v2.4.13
@@ -51,3 +51,20 @@ services:
       POSTGRES_USER: rag_user
       POSTGRES_PASSWORD: secure_password
       POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=en_US.utf8"
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ./containers/ollama:/root/.ollama
+      - ./logs/ollama:/var/log/ollama
+    environment:
+      OLLAMA_HOST: 0.0.0.0
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s

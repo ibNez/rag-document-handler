@@ -28,7 +28,7 @@ show_help() {
     echo "  --all        Install everything without prompts (full automated setup)"
     echo "               • Creates virtual environment"
     echo "               • Installs all dependencies"
-    echo "               • Starts all Docker containers (webui, postgres, milvus)"
+    echo "               • Starts all Docker containers (webui, postgres, milvus, ollama)"
     echo "               • Sets up all directories and configuration"
     echo ""
     echo "  --dev        Development mode setup (containers only, no webui)"
@@ -53,6 +53,7 @@ show_help() {
     echo "  🐳 Docker containers:"
     echo "      • postgres:15      (metadata database)"
     echo "      • milvus:v2.4.13   (vector database)"
+    echo "      • ollama:latest    (local LLM server)"
     echo "      • webui            (web interface) - only with --all"
     echo ""
     echo "AFTER SETUP:"
@@ -189,7 +190,7 @@ fi
 # Create required directories
 echo ""
 echo "📁 Setting up directory structure..."
-directories=("staging" "uploaded" "deleted" "logs" "databases/milvus/db" "databases/milvus/conf" "databases/postgres" "logs/milvus" "logs/postgres")
+directories=("staging" "uploaded" "deleted" "logs" "databases/milvus/db" "databases/milvus/conf" "databases/postgres" "containers/ollama" "logs/milvus" "logs/postgres" "logs/ollama")
 
 for dir in "${directories[@]}"; do
     if [ ! -d "$dir" ]; then
@@ -267,7 +268,7 @@ if check_docker; then
     if [ "$AUTO_YES" = true ]; then
         # --all flag: Install everything
         echo -e "${BLUE}🤖 Auto-installing all containers...${NC}"
-        start_services "postgres milvus webui" "all services (PostgreSQL, Milvus, WebUI)"
+        start_services "postgres milvus ollama webui" "all services (PostgreSQL, Milvus, Ollama, WebUI)"
         
         if [ $? -eq 0 ]; then
             echo ""
@@ -275,6 +276,7 @@ if check_docker; then
             echo -e "${BLUE}🌐 RAG Knowledge Base Web interface: http://localhost:3000${NC}"
             echo -e "${BLUE}🐘 PostgreSQL: localhost:5432${NC}"
             echo -e "${BLUE}🔍 Milvus: localhost:19530${NC}"
+            echo -e "${BLUE}🤖 Ollama: localhost:11434${NC}"
         fi
         
     elif [ "$DEV_MODE" = true ]; then
@@ -291,12 +293,28 @@ if check_docker; then
             echo ""
             echo -e "${BLUE}To start local development:${NC}"
             echo "   source .venv/bin/activate"
-            echo "   python app.py"
+            echo "   ./start.sh"
         fi
         
+        echo ""
+        
+        # Ollama
+        if ask_yes_no "Install and start Ollama local LLM server?" "n"; then
+            start_services "ollama" "Ollama container"
+            if [ $? -eq 0 ]; then
+                echo -e "${BLUE}🔗 Ollama: localhost:11434${NC}"
+                echo -e "${BLUE}🤖 Local LLM server ready for model downloads${NC}"
+            fi
+        else
+            echo -e "${YELLOW}⏭️  Ollama skipped${NC}"
+        fi
+
     else
         # Interactive mode: Ask for each service
-        echo -e "${BLUE}� Interactive container setup...${NC}"
+        echo -e "${BLUE}🔧 Interactive container setup...${NC}"
+        echo "   You'll be asked about each service individually."
+        echo "   Each service is optional and independent."
+        echo ""
         
         # PostgreSQL
         if ask_yes_no "Install and start PostgreSQL metadata database?" "y"; then
@@ -323,6 +341,19 @@ if check_docker; then
         
         echo ""
         
+        # Ollama
+        if ask_yes_no "Install and start Ollama local LLM server?" "n"; then
+            start_services "ollama" "Ollama container"
+            if [ $? -eq 0 ]; then
+                echo -e "${BLUE}🔗 Ollama: localhost:11434${NC}"
+                echo -e "${BLUE}🤖 Local LLM server ready for model downloads${NC}"
+            fi
+        else
+            echo -e "${YELLOW}⏭️  Ollama skipped${NC}"
+        fi
+        
+        echo ""
+        
         # WebUI
         if ask_yes_no "Install and start RAG Knowledge Base WebUI container?" "n"; then
             start_services "webui" "RAG Knowledge Base WebUI container"
@@ -336,8 +367,10 @@ if check_docker; then
 else
     echo -e "${YELLOW}⚠️  Docker setup skipped due to issues above${NC}"
     echo -e "${BLUE}💡 You can start containers manually later with:${NC}"
-    echo "   docker compose up -d                    # All services"
-    echo "   docker compose up postgres milvus -d    # Database services only"
+    echo "   docker compose up -d                              # All services"
+    echo "   docker compose up postgres milvus -d              # Database services only"
+    echo "   docker compose up postgres milvus ollama -d       # Databases + Ollama"
+    echo "   docker compose up ollama -d                       # Ollama only"
 fi
 
 echo ""
@@ -390,18 +423,20 @@ echo -e "   ${BLUE}./setup.sh --help${NC}  # Show setup options"
 echo -e "   ${BLUE}./uninstall.sh${NC}     # Complete removal"
 echo ""
 echo "🏗️  Container Management:"
-echo -e "   ${BLUE}docker compose up -d${NC}              # Start all services"
-echo -e "   ${BLUE}docker compose up postgres milvus -d${NC} # Database services only"
-echo -e "   ${BLUE}docker compose down${NC}                # Stop all services"
-echo -e "   ${BLUE}docker compose logs -f webui${NC}       # View webui logs"
+echo -e "   ${BLUE}docker compose up -d${NC}                        # Start all services"
+echo -e "   ${BLUE}docker compose up postgres milvus -d${NC}        # Database services only"
+echo -e "   ${BLUE}docker compose up postgres milvus ollama -d${NC} # Databases + Ollama"
+echo -e "   ${BLUE}docker compose down${NC}                         # Stop all services"
+echo -e "   ${BLUE}docker compose logs -f webui${NC}                # View webui logs"
 
 echo ""
 echo "📚 Key Components:"
 echo "   🐘 PostgreSQL (metadata): localhost:5432"
 echo "   🔍 Milvus (vectors): localhost:19530"
+echo "   🤖 Ollama (local LLM): localhost:11434"
 echo "   🌐 Web Interface: localhost:3000"
 echo "   📁 Document uploads: ./uploaded/"
-echo "   � Processing staging: ./staging/"
+echo "   📁 Processing staging: ./staging/"
 echo "   📊 Logs: ./logs/"
 
 echo ""
