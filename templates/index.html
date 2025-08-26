@@ -124,7 +124,6 @@
                                     <div class="metric-tile"><div class="metric-label">Due Now</div><div class="metric-value">{{ email_meta.due_now or 0 }}</div></div>
                                     <div class="metric-tile"><div class="metric-label">Never Synced</div><div class="metric-value">{{ email_meta.never_synced or 0 }}</div></div>
                                     <div class="metric-tile"><div class="metric-label">Total Emails</div><div class="metric-value">{{ email_meta.total_emails or 0 }}</div></div>
-                                    <div class="metric-tile"><div class="metric-label">Unique Senders</div><div class="metric-value">{{ email_meta.unique_senders or 0 }}</div></div>
                                     <div class="metric-tile"><div class="metric-label">With Attachments</div><div class="metric-value">{{ email_meta.emails_with_attachments or 0 }}</div></div>
                                     <div class="metric-tile"><div class="metric-label">Embedding Dim</div><div class="metric-value">{{ email_collection_stats.dim if email_collection_stats else '' }}</div></div>
                                     <div class="metric-tile"><div class="metric-label">Index</div><div class="metric-value">{{ 'Yes' if email_collection_stats and email_collection_stats.indexed else 'No' }}</div><div class="metric-sub">Metric {{ email_collection_stats.metric_type if email_collection_stats and email_collection_stats.metric_type else 'cosine' }}</div></div>

@@ -16,6 +16,7 @@ from werkzeug.utils import secure_filename
 
 from ..core.config import Config
 from ..core.models import DocumentProcessingStatus, URLProcessingStatus, EmailProcessingStatus
+from .stats import StatsProvider
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -41,8 +42,12 @@ class WebRoutes:
         self.app = app
         self.config = config
         self.rag_manager = rag_manager
+        
+        # Initialize centralized stats provider
+        self.stats_provider = StatsProvider(rag_manager)
+        
         self._register_routes()
-        logger.info("Web routes initialized")
+        logger.info("Web routes initialized with centralized stats provider")
     
     def _register_routes(self) -> None:
         """Register Flask routes for the web interface."""
@@ -135,10 +140,13 @@ class WebRoutes:
             sql_status = self._get_database_status()
             milvus_status = self.rag_manager.milvus_manager.check_connection()
 
-            # Aggregate knowledgebase metadata
-            kb_meta = self._get_knowledgebase_metadata()
-            url_meta = self._get_url_metadata()
-            email_meta = self._get_email_metadata()
+            # Get all stats from centralized provider
+            all_stats = self.stats_provider.get_all_stats()
+            
+            # Extract specific stats for template compatibility
+            kb_meta = all_stats['knowledgebase']
+            url_meta = all_stats['url']
+            email_meta = all_stats['email']
 
             # Get URLs and email accounts for display
             urls = self._get_enriched_urls()
@@ -1482,66 +1490,6 @@ class WebRoutes:
                 return status
         except Exception as e:
             return {"connected": False, "error": f"PostgreSQL: {str(e)}"}
-
-    def _get_knowledgebase_metadata(self) -> Dict[str, Any]:
-        """Get knowledgebase metadata statistics."""
-        kb_meta = {
-            'documents_total': 0,
-            'avg_words_per_doc': 0,
-            'avg_chunks_per_doc': 0,
-            'median_chunk_chars': 0,
-            'top_keywords': []
-        }
-        try:
-            kb_stats = self.rag_manager.document_manager.get_knowledgebase_metadata() if self.rag_manager.document_manager else {}
-            kb_meta.update(kb_stats)
-        except Exception as e:
-            logger.warning(f"KB meta aggregation failed: {e}")
-        return kb_meta
-
-    def _get_url_metadata(self) -> Dict[str, Any]:
-        """Get URL management statistics."""
-        url_meta = {
-            'total': 0,
-            'active': 0,
-            'crawl_on': 0,
-            'robots_ignored': 0,
-            'scraped': 0,
-            'never_scraped': 0,
-            'due_now': 0,
-        }
-        try:
-            url_stats = self.rag_manager.url_manager.get_url_metadata_stats()
-            url_meta.update(url_stats)
-        except Exception as e:
-            logger.warning(f"URL meta aggregation failed: {e}")
-        return url_meta
-
-    def _get_email_metadata(self) -> Dict[str, Any]:
-        """Get email processing statistics."""
-        email_meta = {
-            'total_accounts': 0,
-            'active_accounts': 0,
-            'total_emails': 0,
-            'processed_emails': 0,
-            'unprocessed_emails': 0,
-            'emails_with_attachments': 0,
-            'never_synced': 0,
-            'due_now': 0,
-            'avg_emails_per_account': 0,
-            'latest_email_date': None,
-            'most_active_account': None
-        }
-        try:
-            if (hasattr(self.rag_manager, 'email_account_manager') and 
-                self.rag_manager.email_account_manager and
-                hasattr(self.rag_manager.email_account_manager, 'get_account_stats')):
-                email_stats = self.rag_manager.email_account_manager.get_account_stats()
-                email_meta.update(email_stats)
-                logger.debug("Email meta aggregation completed using PostgreSQL")
-        except Exception as e:
-            logger.warning(f"Email meta aggregation failed: {e}")
-        return email_meta
 
     def _get_enriched_urls(self) -> list:
         """Get URLs enriched with robots.txt information."""

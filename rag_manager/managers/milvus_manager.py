@@ -1117,7 +1117,6 @@ Now, answer ONLY the following user question with proper citations and download 
                 # Keep individual chunk info for detailed view
                 sources.append({
                     "filename": source_name,
-                    "chunk_id": doc.metadata.get("chunk_id", "unknown"),
                     "page": doc.metadata.get("page", "unknown"),
                     "category": doc.metadata.get("category", "unknown"),
                     "category_type": doc.metadata.get("category_type", "unknown"),
