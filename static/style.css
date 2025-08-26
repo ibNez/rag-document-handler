@@ -1,48 +1,74 @@
-/* RAG Knowledgebase Manager - Simplified Styles */
+/* ============================================================================
+ RAG Knowledgebase Manager - Consolidated Styles
+============================================================================ */
 
-.navbar-brand {
-    font-weight: 600;
-}
+/*
+Overview:
+ This single stylesheet consolidates all layout/visual styles for the
+ dashboard (templates/index.html) and the search interface (templates/search.html).
 
+Template Cross‑Reference (where these classes appear):
+ - templates/index.html
+         .file-card, .dropdown-menu (staging area + processed docs)
+         .status-indicator + state modifiers (processing lifecycle)
+         .progress-custom, .progress-bar, .progress-animated (all progress bars)
+         .action-btn (icon buttons in tables/cards)
+         .dt-local, .schedule-times (localized timestamp columns)
+         .kb-section-title, .metric-grid, .metric-tile*, .metric-label, .metric-value,
+             .metric-sub, .status-dot, .keywords-wrap, .keyword-pill (knowledgebase stats panel)
+ - templates/search.html
+         .search-card (query + result container hover effect)
+         .result-text (AI / retrieval answer highlight box)
+         .score-badge (similarity score chip)
+
+Section Markers below use the pattern:
+ ===== [Page | Shared]: Section Name =====
+ to make future navigation & maintenance easier.
+
+Merge Notes (from prior index.css + style.css unification):
+ - status-indicator size unified at 12px (visibility improvement)
+ - pulse animation duration standardized to 1.25s
+ - file-card encapsulates positioning + z-index for dropdown overflow
+ - progress-custom standardized at 4px height
+ - hover elevation unified (-2px translateY) across cards
+*/
+
+/* ===== Shared: Navbar ===== */
+.navbar-brand { font-weight: 600; }
+
+/* ===== Index: Staging & Processed File Cards ===== */
 .file-card {
     border: 1px solid #dee2e6;
     border-radius: 0.5rem;
     transition: all 0.3s ease;
+    position: relative; /* allow dropdown to escape */
+    overflow: visible;
+    z-index: 1;
 }
-
 .file-card:hover {
     transform: translateY(-2px);
     box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    z-index: 2500;
 }
+.file-card .dropdown-menu { z-index: 2000; }
+.file-card:hover .dropdown-menu, .file-card.show .dropdown-menu { z-index: 3000; }
 
-.status-indicator {
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
-    display: inline-block;
-    margin-right: 8px;
-}
+/* ===== Shared: Processing Status Indicators ===== */
+.status-indicator { width:12px; height:12px; border-radius:50%; display:inline-block; margin-right:8px; }
+.status-pending { background-color:#ffc107; }
+.status-processing { background-color:#007bff; animation:pulse 1.25s infinite; }
+.status-chunking { background-color:#17a2b8; animation:pulse 1.25s infinite; }
+.status-embedding { background-color:#6f42c1; animation:pulse 1.25s infinite; }
+.status-storing { background-color:#fd7e14; animation:pulse 1.25s infinite; }
+.status-completed { background-color:#28a745; }
+.status-error { background-color:#dc3545; }
 
-.status-pending { background-color: #ffc107; }
-.status-processing { background-color: #007bff; animation: pulse 1.5s infinite; }
-.status-chunking { background-color: #17a2b8; animation: pulse 1.5s infinite; }
-.status-embedding { background-color: #6f42c1; animation: pulse 1.5s infinite; }
-.status-storing { background-color: #fd7e14; animation: pulse 1.5s infinite; }
-.status-completed { background-color: #28a745; }
-.status-error { background-color: #dc3545; }
+@keyframes pulse { 0%{opacity:1;} 50%{opacity:.5;} 100%{opacity:1;} }
 
-@keyframes pulse {
-    0% { opacity: 1; }
-    50% { opacity: 0.5; }
-    100% { opacity: 1; }
-}
+/* ===== Shared: Slim Progress Bars ===== */
+.progress-custom { height:4px; border-radius:2px; }
 
-.progress-custom {
-    height: 4px;
-    border-radius: 2px;
-}
-
-/* Animated progress bar */
+/* Animated stripe overlay when actively progressing */
 .progress-bar {
     transition: width 0.4s ease;
 }
@@ -67,14 +93,10 @@
     to { background-position: 0 0; }
 }
 
-.search-card {
-    transition: all 0.3s ease;
-}
+/* ===== Search: Results & Cards ===== */
+.search-card { transition: all 0.3s ease; }
 
-.search-card:hover {
-    transform: translateY(-1px);
-    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-}
+.search-card:hover { transform: translateY(-2px); box-shadow:0 4px 8px rgba(0,0,0,0.1); }
 
 .result-text {
     background-color: #f8f9fa;
@@ -88,12 +110,24 @@
     font-size: 0.75rem;
 }
 
-/* Consistent sizing for action buttons */
-.action-btn {
-    width: 2rem;
-    height: 2rem;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 0;
-}
+/* ===== Shared: Action Buttons ===== */
+.action-btn { width:2rem; height:2rem; display:inline-flex; align-items:center; justify-content:center; padding:0; }
+
+/* ===== Shared: Date/Time Utilities ===== */
+.dt-local { white-space: nowrap; }
+.schedule-times { white-space: nowrap; }
+.table th.schedule-times, .table td.schedule-times { width:1%; }
+
+/* ===== Index: Knowledgebase Metrics Panel ===== */
+.kb-section-title { font-size:.85rem; text-transform:uppercase; letter-spacing:.05em; opacity:.85; margin-bottom:.25rem; }
+.metric-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(140px,1fr)); gap:.75rem; }
+.metric-tile { background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.12); border-radius:.5rem; padding:.6rem .65rem; backdrop-filter:blur(2px); position:relative; }
+.metric-tile:hover { background:rgba(255,255,255,0.14); }
+.metric-label { font-size:.65rem; text-transform:uppercase; letter-spacing:.06em; opacity:.75; margin:0 0 .15rem 0; }
+.metric-value { font-weight:600; font-size:1.05rem; line-height:1.1; }
+.metric-sub { font-size:.55rem; opacity:.6; margin-top:.15rem; }
+.status-dot { width:8px; height:8px; border-radius:50%; display:inline-block; margin-right:4px; }
+.dot-ok { background:#4ade80; box-shadow:0 0 0 4px rgba(74,222,128,0.15); }
+.dot-bad { background:#f87171; box-shadow:0 0 0 4px rgba(248,113,113,0.15); }
+.keywords-wrap { display:flex; flex-wrap:wrap; gap:.35rem; margin-top:.35rem; }
+.keyword-pill { background:rgba(255,255,255,0.10); border:1px solid rgba(255,255,255,0.18); border-radius:2rem; padding:.2rem .6rem; font-size:.6rem; }

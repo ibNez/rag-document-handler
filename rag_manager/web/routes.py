@@ -74,6 +74,62 @@ class WebRoutes:
             
             # Get collection statistics
             collection_stats = self.rag_manager.milvus_manager.get_collection_stats()
+            # Get email collection stats (if available)
+            try:
+                email_collection_stats = None
+                if hasattr(self.rag_manager.milvus_manager, 'email_collection_name'):
+                    # Use Milvus client utility directly if method similar to get_collection_stats not provided
+                    # Reuse logic from get_collection_stats for primary collection when possible
+                    from pymilvus import utility, Collection  # type: ignore
+                    email_collection_name = self.rag_manager.milvus_manager.email_collection_name
+                    if utility.has_collection(email_collection_name):
+                        try:
+                            col = Collection(email_collection_name)
+                            try:
+                                col.load()
+                            except Exception:
+                                pass
+                            # Attempt to infer dim & index info
+                            dim = None
+                            metric_type = None
+                            indexed = False
+                            try:
+                                schema = getattr(col, 'schema', None)
+                                if schema and hasattr(schema, 'fields'):
+                                    for f in schema.fields:
+                                        params = getattr(f, 'params', {}) or {}
+                                        if 'dim' in params:
+                                            dim_val = params.get('dim')
+                                            if dim_val is not None:
+                                                dim = int(dim_val)
+                                                break
+                            except Exception:
+                                pass
+                            try:
+                                idxs = getattr(col, 'indexes', []) or []
+                                indexed = len(idxs) > 0
+                                if indexed:
+                                    first = idxs[0]
+                                    p = getattr(first, 'params', {}) or {}
+                                    metric_type = p.get('metric_type') or p.get('METRIC_TYPE')
+                            except Exception:
+                                pass
+                            email_collection_stats = {
+                                'name': email_collection_name,
+                                'exists': True,
+                                'num_entities': getattr(col, 'num_entities', 0),
+                                'indexed': indexed,
+                                'metric_type': metric_type,
+                                'dim': dim,
+                            }
+                        except Exception:
+                            email_collection_stats = {'name': email_collection_name, 'exists': True, 'num_entities': 0, 'indexed': False, 'metric_type': None, 'dim': None, 'error': 'failed_to_load'}
+                    else:
+                        email_collection_stats = {'name': email_collection_name, 'exists': False, 'num_entities': 0, 'indexed': False, 'metric_type': None, 'dim': None}
+                else:
+                    email_collection_stats = None
+            except Exception:
+                email_collection_stats = None
 
             # Connection health statuses
             sql_status = self._get_database_status()
@@ -93,6 +149,7 @@ class WebRoutes:
                 staging_files=staging_files,
                 uploaded_files=uploaded_files,
                 collection_stats=collection_stats,
+                email_collection_stats=email_collection_stats,
                 sql_status=sql_status,
                 milvus_status=milvus_status,
                 kb_meta=kb_meta,
