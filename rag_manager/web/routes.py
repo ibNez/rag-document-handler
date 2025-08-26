@@ -320,24 +320,98 @@ class WebRoutes:
                 if query:
                     try:
                         if search_type == 'rag':
-                            # RAG search with answer generation
-                            logger.debug("Initiating RAG search with answer generation")
-                            results = self.rag_manager.milvus_manager.rag_search_and_answer(query, top_k)
+                            # RAG search with answer generation - first classify the query
+                            logger.debug("Initiating RAG search with query classification")
+                            
+                            # Get classification first
+                            classification = self.rag_manager.milvus_manager.classify_query_intent(query)
+                            logger.info(f"Query classified as: {classification}")
+                            
+                            # Create classification object for template
+                            classification_obj = {
+                                'type': classification,
+                                'confidence': '95%',  # LLM classification is considered high confidence
+                                'reason': f'Query was classified as {classification} content by AI classifier'
+                            }
+                            
+                            # Route based on classification
+                            if classification == 'email' and hasattr(self.rag_manager, 'email_account_manager') and self.rag_manager.email_account_manager:
+                                # Email-specific search using hybrid retrieval
+                                logger.debug("Routing to email hybrid search")
+                                try:
+                                    email_results = self.rag_manager.email_account_manager.search_emails_hybrid(query, top_k)
+                                    context_text, email_sources = self.rag_manager.email_account_manager.format_email_context(email_results)
+                                    
+                                    # Generate answer using email context
+                                    from langchain_ollama import ChatOllama
+                                    from langchain.schema import SystemMessage, HumanMessage
+                                    
+                                    llm = ChatOllama(
+                                        model=self.config.CHAT_MODEL,
+                                        base_url=self.config.CHAT_BASE_URL,
+                                        temperature=self.config.CHAT_TEMPERATURE
+                                    )
+                                    
+                                    email_system_prompt = """You are an assistant that answers questions using email content and communication data.
+
+                                        Instructions:
+                                        1. Use the provided email context to answer the user's question.
+                                        2. Focus on email-specific information: senders, recipients, subjects, dates, and content.
+                                        3. Provide a structured answer in Markdown with **headings** and **clear paragraphs**.
+                                        4. Support statements with inline citations using [1], [2], [3], etc.
+                                        5. Include relevant email metadata (sender, date, subject) when citing emails.
+                                        6. If information is incomplete, state this explicitly.
+
+                                        Now, answer the following email-related question using the email context provided:"""
+                                    
+                                    system_message = SystemMessage(content=f"{email_system_prompt}\n\nEmail Context:\n{context_text}\n\n")
+                                    human_message = HumanMessage(content=query)
+                                    
+                                    response = llm.invoke([system_message, human_message])
+                                    
+                                    results = {
+                                        'answer': str(response.content),
+                                        'sources': email_sources,
+                                        'unique_sources': email_sources,
+                                        'conversation_classification': classification,
+                                        'analysis_info': {
+                                            'system_instructions': email_system_prompt,
+                                            'search_type': 'email',
+                                            'conversation_classification': classification,
+                                            'email_results_count': len(email_results)
+                                        }
+                                    }
+                                    logger.info(f"Email search successful - Found {len(email_sources)} email sources")
+                                    
+                                except Exception as email_error:
+                                    logger.error(f"Email search failed: {email_error}")
+                                    # Return error response instead of falling back
+                                    results = {
+                                        'error': f"Email search failed: {str(email_error)}",
+                                        'context': '',
+                                        'sources': [],
+                                        'answer': 'Email search is currently unavailable. Please try again later.'
+                                    }
+                            else:
+                                # Standard document/web search
+                                logger.debug("Routing to document RAG search")
+                                results = self.rag_manager.milvus_manager.rag_search_and_answer(query, top_k)
                             
                             # Log results for debugging
                             if results.get('error'):
                                 error_message = results.get('error')
-                                if 'No documents found in vector database' in error_message:
+                                if error_message and 'No documents found in vector database' in str(error_message):
                                     logger.warning(f"RAG search returned warning: {error_message}")
                                 else:
                                     logger.error(f"RAG search returned error: {error_message}")
                                 logger.debug(f"Debug info: {results.get('debug_info', {})}")
                             else:
-                                logger.info(f"RAG search successful - Found {results.get('num_sources', 0)} sources")
+                                logger.info(f"RAG search successful - Found {len(results.get('sources', []))} sources")
                             
                             return render_template('search.html', 
                                                  query=query, 
                                                  rag_results=results, 
+                                                 conversation_classification=classification_obj,
                                                  search_type=search_type)
                         else:
                             # Similarity search only
@@ -367,6 +441,7 @@ class WebRoutes:
                         return render_template('search.html', 
                                              query=query, 
                                              rag_results=error_result if search_type == 'rag' else None,
+                                             conversation_classification=error_result.get('conversation_classification'),
                                              results=[] if search_type != 'rag' else None,
                                              search_type=search_type)
                 else:

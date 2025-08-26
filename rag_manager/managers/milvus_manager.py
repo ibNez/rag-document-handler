@@ -808,6 +808,62 @@ class MilvusManager:
             except Exception as e2:
                 return {"connected": False, "error": str(e2)}
 
+    def classify_query_intent(self, query: str) -> str:
+        """
+        Classify user query as 'email' or 'general' using dedicated classification LLM.
+        
+        Args:
+            query: User's search query
+            
+        Returns:
+            'email' if query is about email content, 'general' otherwise
+        """
+        try:
+            from langchain_ollama import OllamaLLM
+            
+            # Use dedicated classification model
+            classifier = OllamaLLM(
+                model=self.config.CLASSIFICATION_MODEL,
+                base_url=self.config.CLASSIFICATION_BASE_URL,
+                temperature=0.0  # Deterministic classification
+            )
+            
+            classification_prompt = """You are a query intent classifier. Analyze the user's query and classify it as either 'email' or 'general'.
+
+Classification Rules:
+- Return 'email' if the query is about:
+  * Email content, messages, or communication
+  * Email senders, recipients, or email addresses  
+  * Email subjects, dates, or email-specific metadata
+  * Email folders, attachments, or email management
+  * Any question that would be better answered by searching through emails
+
+- Return 'general' if the query is about:
+  * Documents, PDFs, or uploaded files
+  * URLs, web content, or general knowledge
+  * Any topic not specifically about email content
+
+Important: Respond with ONLY the single word 'email' or 'general' - no explanation or additional text.
+
+User Query: {query}
+
+Classification:"""
+
+            response = classifier.invoke(classification_prompt.format(query=query))
+            result = str(response).strip().lower()
+            
+            # Validate response and default to 'general' if unclear
+            if result in ['email', 'general']:
+                logger.info(f"Query classified as '{result}': {query[:50]}...")
+                return result
+            else:
+                logger.warning(f"Classification LLM returned invalid result '{result}', defaulting to 'general'")
+                return 'general'
+                
+        except Exception as e:
+            logger.error(f"Query classification failed: {e}, defaulting to 'general'")
+            return 'general'
+
     def _get_standard_system_prompt(self) -> str:
         """Get standard system prompt for document/web content queries."""
         return """You are an assistant that answers questions using only retrieved documents, URLs, and web sources.
@@ -839,9 +895,12 @@ Now, answer ONLY the following user question with proper citations and download 
             top_k: Number of documents to retrieve
             
         Returns:
-            Dict containing answer, sources, and metadata
+            Dict containing answer, sources, metadata, and query classification
         """
         logger.info(f"Starting document RAG search for query: '{query}' with top_k={top_k}")
+        
+        # Classify the query intent
+        classification = self.classify_query_intent(query)
         
         try:
             # Standard document/web search pipeline
@@ -858,9 +917,11 @@ Now, answer ONLY the following user question with proper citations and download 
                     'answer': "I couldn't find any relevant information to answer your question.",
                     'sources': [],
                     'unique_sources': [],
+                    'conversation_classification': classification,
                     'analysis_info': {
                         'system_instructions': self._get_standard_system_prompt(),
                         'search_type': 'general',
+                        'conversation_classification': classification,
                         'milvus_results': []
                     }
                 }
@@ -924,9 +985,11 @@ Now, answer ONLY the following user question with proper citations and download 
                 'answer': answer_text,
                 'sources': sources,
                 'unique_sources': unique_sources_list,
+                'conversation_classification': classification,
                 'analysis_info': {
                     'system_instructions': system_prompt,
                     'search_type': 'general',
+                    'conversation_classification': classification,
                     'milvus_results': [
                         {
                             'rank': idx + 1,
@@ -944,13 +1007,17 @@ Now, answer ONLY the following user question with proper citations and download 
             
         except Exception as e:
             logger.error(f"Document RAG search failed: {e}", exc_info=True)
+            # Get classification even for errors
+            classification = self.classify_query_intent(query) if 'classification' not in locals() else classification
             return {
                 'answer': f"I encountered an error while processing your question: {str(e)}",
                 'sources': [],
                 'unique_sources': [],
+                'conversation_classification': classification,
                 'analysis_info': {
                     'system_instructions': '',
                     'search_type': 'error',
+                    'conversation_classification': classification,
                     'milvus_results': []
                 }
             }

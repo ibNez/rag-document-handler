@@ -359,6 +359,7 @@ class PostgreSQLEmailManager:
             metadata = result['metadata']
             chunk_text = result['chunk_text']
             email_id = metadata.get('message_id', metadata.get('source', 'unknown'))
+            chunk_id = metadata.get('chunk_id')  # Get the real chunk_id from metadata
             
             if email_id not in unique_emails:
                 unique_emails[email_id] = {
@@ -367,10 +368,13 @@ class PostgreSQLEmailManager:
                     'sender': metadata.get('from_addr', metadata.get('source', '')),
                     'recipient': metadata.get('to_addrs', ''),
                     'date': metadata.get('date_utc', metadata.get('date', '')),
-                    'chunks': []
+                    'chunks': [],
+                    'chunk_ids': []  # Track chunk_ids for each email
                 }
             
             unique_emails[email_id]['chunks'].append(chunk_text)
+            if chunk_id:
+                unique_emails[email_id]['chunk_ids'].append(chunk_id)
         
         # Build context for LLM
         context_parts = []
@@ -404,6 +408,7 @@ Email ID: {email_id}"""
                 'email_id': email_id,
                 'ref_num': ref_num,
                 'page': 'N/A',
+                'chunk_id': ','.join(email_data.get('chunk_ids', [])) or f"email_{ref_num}",  # Use real chunk_ids or fallback
                 'similarity_score': 1.0  # Default score for emails
             })
         
