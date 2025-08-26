@@ -220,7 +220,8 @@ class PostgreSQLEmailManager:
                         SELECT 
                             COUNT(*) as total_accounts,
                             COUNT(*) FILTER (WHERE last_synced IS NOT NULL) as synced_accounts,
-                            COUNT(*) FILTER (WHERE refresh_interval_minutes > 0) as active_accounts
+                            COUNT(*) FILTER (WHERE refresh_interval_minutes > 0) as active_accounts,
+                            SUM(COALESCE(total_emails_in_mailbox, 0)) as total_emails_in_all_mailboxes
                         FROM email_accounts
                     """)
                     account_stats = cur.fetchone()
@@ -228,8 +229,7 @@ class PostgreSQLEmailManager:
                     # Email stats from emails table
                     cur.execute("""
                         SELECT 
-                            COUNT(*) as total_messages,
-                            COUNT(DISTINCT from_addr) as unique_senders
+                            COUNT(DISTINCT message_id) as processed_messages
                         FROM emails
                     """)
                     email_stats = cur.fetchone()
@@ -238,9 +238,8 @@ class PostgreSQLEmailManager:
                         'total_accounts': account_stats['total_accounts'] if account_stats else 0,
                         'synced_accounts': account_stats['synced_accounts'] if account_stats else 0,
                         'active_accounts': account_stats['active_accounts'] if account_stats else 0,
-                        'total_messages': email_stats['total_messages'] if email_stats else 0,
-                        'processed_messages': email_stats['total_messages'] if email_stats else 0,  # All stored = processed
-                        'unique_senders': email_stats['unique_senders'] if email_stats else 0
+                        'total_messages': account_stats['total_emails_in_all_mailboxes'] if account_stats else 0,
+                        'processed_messages': email_stats['processed_messages'] if email_stats else 0,
                     }
         except Exception as e:
             logger.error(f"Failed to get email account stats: {e}")
@@ -250,7 +249,6 @@ class PostgreSQLEmailManager:
                 'active_accounts': 0,
                 'total_messages': 0,
                 'processed_messages': 0,
-                'unique_senders': 0
             }
 
     def get_email_statistics_for_account(self, email_address: str) -> Dict[str, int]:
@@ -359,7 +357,6 @@ class PostgreSQLEmailManager:
             metadata = result['metadata']
             chunk_text = result['chunk_text']
             email_id = metadata.get('message_id', metadata.get('source', 'unknown'))
-            chunk_id = metadata.get('chunk_id')  # Get the real chunk_id from metadata
             
             if email_id not in unique_emails:
                 unique_emails[email_id] = {
@@ -368,13 +365,10 @@ class PostgreSQLEmailManager:
                     'sender': metadata.get('from_addr', metadata.get('source', '')),
                     'recipient': metadata.get('to_addrs', ''),
                     'date': metadata.get('date_utc', metadata.get('date', '')),
-                    'chunks': [],
-                    'chunk_ids': []  # Track chunk_ids for each email
+                    'chunks': []
                 }
             
             unique_emails[email_id]['chunks'].append(chunk_text)
-            if chunk_id:
-                unique_emails[email_id]['chunk_ids'].append(chunk_id)
         
         # Build context for LLM
         context_parts = []
@@ -385,15 +379,15 @@ class PostgreSQLEmailManager:
             full_content = '\n'.join(email_data['chunks'])
             
             context_part = f"""Email [{ref_num}]:
-Subject: {email_data['subject']}
-From: {email_data['sender']}
-To: {email_data['recipient']}
-Date: {email_data['date']}
+                                Subject: {email_data['subject']}
+                                From: {email_data['sender']}
+                                To: {email_data['recipient']}
+                                Date: {email_data['date']}
 
-Content:
-{full_content}
+                                Content:
+                                {full_content}
 
-Email ID: {email_id}"""
+                                Email ID: {email_id}"""
             
             context_parts.append(context_part)
             
@@ -408,7 +402,6 @@ Email ID: {email_id}"""
                 'email_id': email_id,
                 'ref_num': ref_num,
                 'page': 'N/A',
-                'chunk_id': ','.join(email_data.get('chunk_ids', [])) or f"email_{ref_num}",  # Use real chunk_ids or fallback
                 'similarity_score': 1.0  # Default score for emails
             })
         
