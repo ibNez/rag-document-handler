@@ -116,10 +116,14 @@ class EmailOrchestrator:
     ) -> None:
         """Fetch and process emails for a single account and update its last_synced timestamp."""
         name = account.get("account_name") or account.get("email_address")
+        acct_id = account.get("id")
         server_type = (account.get("server_type") or "").lower()
         batch = account.get("batch_limit")
         batch_limit = None if batch in (None, "all") else int(batch)
-        logger.info(f"Account {name}: batch={batch}, batch_limit={batch_limit}")
+        
+        # Get current offset for this account (where to start processing)
+        current_offset = account.get("last_synced_offset", 0)
+        logger.info(f"Account {name}: batch={batch}, batch_limit={batch_limit}, starting_offset={current_offset}")
 
         if server_type == "imap":
             connector = IMAPConnector(
@@ -170,69 +174,69 @@ class EmailOrchestrator:
 
         logger.info("Syncing account %s using %s", name, server_type)
 
+        # Get the current offset for this account
+        current_offset = account.get("last_synced_offset", 0)
+        logger.info("Starting sync for %s at offset %d", name, current_offset)
+
         processor = processor or self.processor
         if processor is None:
-            class _NoopMilvus:
-                def add_embeddings(self, embeddings, ids, metadatas):
-                    pass
-
+            # A processor is required for email sync - fail if we can't create one
+            logger.error("No EmailProcessor available for account %s", name)
+            if not self.account_manager:
+                raise RuntimeError(f"Cannot sync account {name}: no account manager available")
+            
+            # Try to create processor using account manager's database pool
+            if not hasattr(self.account_manager, 'pool'):
+                raise RuntimeError(f"Cannot sync account {name}: account manager has no database pool")
+                
             try:
-                # Use the existing PostgreSQL connection from the account manager
-                conn = getattr(self.account_manager, 'conn', None) if hasattr(self, 'account_manager') else None
-                if conn is not None:
-                    processor = EmailProcessor(_NoopMilvus(), conn)
-                else:
-                    # Fallback - this should not happen in normal operation
-                    logger.warning("No PostgreSQL connection available, EmailProcessor cannot be initialized")
-                    processor = None
-            except Exception as exc:  # pragma: no cover - defensive
-                logger.error("Failed to initialize EmailProcessor: %s", exc)
-                processor = None
+                class _NoopMilvus:
+                    def add_embeddings(self, embeddings, ids, metadatas):
+                        pass
+                
+                processor = EmailProcessor(_NoopMilvus(), self.account_manager.pool)
+                logger.info("Created EmailProcessor for account %s", name)
+            except Exception as exc:
+                logger.error("Failed to create EmailProcessor for account %s: %s", name, exc)
+                raise RuntimeError(f"Cannot sync account {name}: failed to create EmailProcessor - {exc}")
+            
+        if processor is None:
+            raise RuntimeError(f"Cannot sync account {name}: EmailProcessor is required but not available")
 
         try:
-            # Use smart batch processing for complete mailbox coverage
-            if (processor and hasattr(processor, 'process_smart_batch') and 
-                hasattr(connector, 'fetch_smart_batch')):
-                logger.info("Using smart batch processing for account %s", name)
-                # Respect batch limit: if batch_limit is set, process only 1 batch per sync cycle
-                max_batches = 1 if batch_limit else None
-                logger.info("Processing %s batches for account %s (batch_limit=%s)", 
-                           "1" if max_batches else "unlimited", name, batch_limit)
-                stats = processor.process_smart_batch(
-                    connector=connector,
-                    since_date=None,  # Process all emails
-                    max_batches=max_batches  # Respect batch limit setting
-                )
-                logger.info(
-                    "Smart batch processing complete for %s: %d emails processed, %d batches, %d errors",
-                    name, stats.get('total_emails_processed', 0), 
-                    stats.get('total_batches', 0), stats.get('errors', 0)
-                )
-            else:
-                # Fallback to traditional processing (legacy mode)
-                logger.warning("Smart batch processing not available, using legacy mode for %s", name)
-                records = connector.fetch_emails()
-                logger.info("Fetched %d emails for account %s", len(records), name)
-                if processor:
-                    for rec in records:
-                        try:
-                            norm = _normalize(rec)
-                            hh = norm.get("header_hash")
-                            if hh and processor.manager.get_email_by_header_hash(hh):
-                                continue
-                            ch = norm.get("content_hash")
-                            if ch and processor.manager.get_email_by_hash(ch):
-                                continue
-                            processor.process(norm)
-                        except Exception as exc:  # pragma: no cover - defensive
-                            mid = rec.get("message_id")
-                            logger.error(
-                                "Failed to process email %s for %s: %s", mid, name, exc
-                            )
+            # Smart batch processing is the only supported method
+            logger.info("Using smart batch processing for account %s", name)
+            # Respect batch limit: if batch_limit is set, process only 1 batch per sync cycle
+            max_batches = 1 if batch_limit else None
+            logger.info("Processing %s batches for account %s (batch_limit=%s)", 
+                       "1" if max_batches else "unlimited", name, batch_limit)
+            stats = processor.process_smart_batch(
+                connector=connector,
+                since_date=None,  # Process all emails
+                max_batches=max_batches,  # Respect batch limit setting
+                start_offset=current_offset  # Start from stored offset
+            )
+            logger.info(
+                "Smart batch processing complete for %s: %d emails processed, %d batches, %d errors",
+                name, stats.get('total_emails_processed', 0), 
+                stats.get('total_batches', 0), stats.get('errors', 0)
+            )
+            
+            # Update the account's offset for next batch cycle
+            final_offset = stats.get('final_offset', current_offset)
+            if acct_id and self.account_manager and hasattr(self.account_manager, "update_account"):
+                try:
+                    self.account_manager.update_account(
+                        acct_id,
+                        {"last_synced_offset": final_offset}
+                    )
+                    logger.info("Updated account %s offset to %d", name, final_offset)
+                except Exception as exc:
+                    logger.error("Failed to update offset for account %s: %s", name, exc)
         except Exception as exc:  # pragma: no cover - defensive
             logger.error("Email sync error for %s: %s", name, exc)
+            raise  # Re-raise the exception so it fails properly
 
-        acct_id = account.get("id")
         if acct_id and self.account_manager and hasattr(
             self.account_manager, "update_account"
         ):

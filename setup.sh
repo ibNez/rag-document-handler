@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# RAG Document Handler - Setup Script
+# RAG Knowledge Base Manager - Setup Script
 # This script sets up the development environment and installs dependencies
 
 # Script configuration
@@ -18,7 +18,7 @@ NC='\033[0m' # No Color
 
 # Help function
 show_help() {
-    echo "🚀 RAG Document Handler - Setup Script v${SCRIPT_VERSION}"
+    echo "🚀 RAG Knowledge Base Manager - Setup Script v${SCRIPT_VERSION}"
     echo "============================================="
     echo ""
     echo "USAGE:"
@@ -120,7 +120,7 @@ ask_yes_no() {
 }
 
 # Print setup mode
-echo "🚀 RAG Document Handler - Setup Script v${SCRIPT_VERSION}"
+echo "🚀 RAG Knowledge Base Manager - Setup Script v${SCRIPT_VERSION}"
 echo "======================================================="
 
 if [ "$AUTO_YES" = true ]; then
@@ -272,7 +272,7 @@ if check_docker; then
         if [ $? -eq 0 ]; then
             echo ""
             echo -e "${GREEN}🎉 All services are running!${NC}"
-            echo -e "${BLUE}🌐 Web interface: http://localhost:3000${NC}"
+            echo -e "${BLUE}🌐 RAG Knowledge Base Web interface: http://localhost:3000${NC}"
             echo -e "${BLUE}🐘 PostgreSQL: localhost:5432${NC}"
             echo -e "${BLUE}🔍 Milvus: localhost:19530${NC}"
         fi
@@ -324,10 +324,10 @@ if check_docker; then
         echo ""
         
         # WebUI
-        if ask_yes_no "Install and start WebUI container?" "n"; then
-            start_services "webui" "WebUI container"
+        if ask_yes_no "Install and start RAG Knowledge Base WebUI container?" "n"; then
+            start_services "webui" "RAG Knowledge Base WebUI container"
             if [ $? -eq 0 ]; then
-                echo -e "${BLUE}🌐 Web interface: http://localhost:3000${NC}"
+                echo -e "${BLUE}🌐 RAG Knowledge Base Web interface: http://localhost:3000${NC}"
             fi
         else
             echo -e "${YELLOW}⏭️  WebUI skipped (good for local development)${NC}"
@@ -370,11 +370,11 @@ echo "🚀 Next Steps:"
 if [ "$DEV_MODE" = true ]; then
     echo -e "${YELLOW}Development Mode - Local Execution:${NC}"
     echo -e "   1. Activate environment: ${BLUE}source .venv/bin/activate${NC}"
-    echo -e "   2. Start application: ${BLUE}python app.py${NC}"
+    echo -e "   2. Start RAG Knowledge Base application: ${BLUE}./start.sh${NC}"
     echo -e "   3. Open browser: ${BLUE}http://localhost:3000${NC}"
 elif [ "$AUTO_YES" = true ]; then
     echo -e "${GREEN}Production Mode - All containers running:${NC}"
-    echo "   🌐 Web interface: ${BLUE}http://localhost:3000${NC}"
+    echo "   🌐 RAG Knowledge Base Web interface: ${BLUE}http://localhost:3000${NC}"
     echo "   📊 Application ready to use immediately!"
 else
     echo -e "${BLUE}Manual Options:${NC}"
@@ -385,6 +385,7 @@ fi
 echo ""
 echo "🔧 Useful Commands:"
 echo -e "   ${BLUE}./status.sh${NC}        # Check project status"
+echo -e "   ${BLUE}./start.sh${NC}        # Start application"
 echo -e "   ${BLUE}./setup.sh --help${NC}  # Show setup options"
 echo -e "   ${BLUE}./uninstall.sh${NC}     # Complete removal"
 echo ""
@@ -404,7 +405,7 @@ echo "   � Processing staging: ./staging/"
 echo "   📊 Logs: ./logs/"
 
 echo ""
-echo -e "${GREEN}🎯 RAG Document Handler is ready!${NC}"
+echo -e "${GREEN}🎯 RAG Knowledgebase Manager is ready!${NC}"
 
 # Test connection if containers are running
 if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then

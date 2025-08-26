@@ -1,9 +1,9 @@
 #!/bin/bash
 
-# RAG Document Handler - Start Script
+# RAG Knowledge Base Manager - Start Script
 # This script starts the application with proper environment setup
 
-echo "🚀 Starting RAG Document Handler..."
+echo "🚀 Starting RAG Knowledge Base Manager..."
 
 # Check if virtual environment exists
 if [ ! -d ".venv" ]; then

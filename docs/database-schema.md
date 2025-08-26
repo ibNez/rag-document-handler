@@ -1,6 +1,6 @@
 # Database Schema Documentation
 
-This document provides comprehensive documentation of all database schemas used in the RAG Document Handler system.
+This document provides comprehensive documentation of all database schemas used in the RAG Knowledgebase Manager system.
 
 ## Overview
 
@@ -161,6 +161,7 @@ CREATE TABLE email_accounts (
     batch_limit INTEGER DEFAULT 50,
     use_ssl BOOLEAN DEFAULT TRUE,
     refresh_interval_minutes INTEGER DEFAULT 60,
+    offset_position INTEGER DEFAULT 0,
     last_synced TIMESTAMP,
     last_update_status VARCHAR,
     next_run TIMESTAMP,
@@ -184,6 +185,7 @@ CREATE TABLE email_accounts (
 | `batch_limit` | INTEGER | Maximum emails per batch | DEFAULT 50 |
 | `use_ssl` | BOOLEAN | Enable SSL/TLS connection | DEFAULT TRUE |
 | `refresh_interval_minutes` | INTEGER | Sync frequency in minutes | DEFAULT 60 |
+| `offset_position` | INTEGER | **NEW**: Current processing offset position for resuming interrupted operations | DEFAULT 0 |
 | `last_synced` | TIMESTAMP | Last successful sync time | Optional |
 | `last_update_status` | VARCHAR | Status of last sync attempt | Optional |
 | `next_run` | TIMESTAMP | Scheduled next sync time | Optional |
@@ -206,6 +208,8 @@ CREATE TABLE email_messages (
     body_html TEXT,
     attachments_info JSONB,
     server_type VARCHAR,
+    content_hash VARCHAR,
+    validation_status VARCHAR DEFAULT 'valid',
     processed_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -216,7 +220,7 @@ CREATE TABLE email_messages (
 
 | Field | Type | Description | Constraints |
 |-------|------|-------------|-------------|
-| `message_id` | VARCHAR | Unique email message identifier | PRIMARY KEY |
+| `message_id` | VARCHAR | **REQUIRED**: Unique email message identifier (no fallback generation) | PRIMARY KEY |
 | `account_id` | INTEGER | References email_accounts.id | NOT NULL, FOREIGN KEY |
 | `subject` | VARCHAR | Email subject line | Optional |
 | `from_addr` | VARCHAR | Sender email address | Optional |
@@ -226,6 +230,8 @@ CREATE TABLE email_messages (
 | `body_html` | TEXT | HTML body content | Optional |
 | `attachments_info` | JSONB | Attachment metadata and info | Optional |
 | `server_type` | VARCHAR | Source server type | Optional |
+| `content_hash` | VARCHAR | **NEW**: Hash for deduplication across accounts | Optional |
+| `validation_status` | VARCHAR | **NEW**: Corruption detection results ('valid', 'corrupted', 'missing_headers') | DEFAULT 'valid' |
 | `processed_timestamp` | TIMESTAMP | When email was processed | DEFAULT CURRENT_TIMESTAMP |
 | `created_at` | TIMESTAMP | Record creation time | DEFAULT CURRENT_TIMESTAMP |
 | `updated_at` | TIMESTAMP | Last record update | DEFAULT CURRENT_TIMESTAMP |

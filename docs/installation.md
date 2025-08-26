@@ -1,6 +1,6 @@
 # Installation
 
-This guide covers setting up the RAG Document Handler with the refactored architecture.
+This guide covers setting up the RAG Knowledgebase Manager with the refactored architecture.
 
 ## Prerequisites
 
@@ -103,7 +103,7 @@ This starts the infrastructure containers (PostgreSQL + Milvus) and exposes:
 ```
 
 The uninstall script safely removes only project-specific resources:
-- RAG Document Handler containers and volumes
+- RAG Knowledgebase Manager containers and volumes
 - Project virtual environment (.venv)
 - Database files and logs
 - Uploaded/staging files

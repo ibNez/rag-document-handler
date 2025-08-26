@@ -1,6 +1,6 @@
 # Database Management Tools
 
-This directory contains utility tools for managing the RAG Document Handler database schema and collections.
+This directory contains utility tools for managing the RAG Knowledgebase Manager database schema and collections.
 
 ## Tools Overview
 

@@ -1,40 +1,31 @@
-# RAG Document Handler
+# RAG Knowledge Base Manager
 
 A comprehensive document management system with refactored modular architecture for storing and retrieving document embeddings in a Milvus vector database and metadata in PostgreSQL for use with RAG (Retrieval-Augmented Generation) applications.
 
 For extended guides and architecture notes, see the [documentation directory](docs/README.md).
 
-## 🏗️ Refactored Architecture
+## 🏗️ Architecture
 
-The application has been restructured into clean, modular components:
+The RAG Knowledge Base Manager uses a modular, dual-database architecture with enhanced email processing, real-time dashboard capabilities, and comprehensive auto-refresh functionality.
 
-```
-ingestion/              # Modular data ingestion
-├── core/              # Database abstractions
-├── email/             # Email processing pipeline
-├── url/               # URL crawling and management  
-├── document/          # Document extraction
-└── utils/             # Shared utilities
-
-rag_manager/           # RAG functionality
-├── managers/          # Vector operations
-└── web/              # Web interface
-```
+For detailed architectural information, system design, component interactions, and enhanced features, see the [Architecture Documentation](docs/architecture.md).
 
 ## 🚀 Features
 
 - **Modular Architecture**: Clean separation of concerns with dedicated modules for email, URL, and document processing
+- **Enhanced Email Processing**: Robust IMAP connector with corrupted email detection, offset-based error logging, and proper validation
 - **Document Upload & Management**: Enhanced document processing with improved chunking and metadata extraction
 - **Smart URL Management**: Refactored URL orchestrator with PostgreSQL-based scheduling and content processing
 - **Vector Embeddings**: Automatic text extraction and embedding generation using Ollama embeddings
 - **Dual Database Architecture**: 
   - **Milvus**: Vector embeddings and similarity search with comprehensive logging
   - **PostgreSQL**: Document metadata, analytics managed through dedicated managers
-- **Email Integration**: Modular email system supporting IMAP, Gmail API, and Exchange with encrypted credential storage
+- **Advanced Email Integration**: IMAP, Gmail API, and Exchange support with encrypted credential storage
+- **Real-Time Dashboard**: Comprehensive auto-refresh for all panels (10-second intervals)
 - **Conversational AI**: Enhanced RAG-powered chat interface with improved error handling and debugging
 - **Semantic Search**: Find relevant documents using natural language queries with detailed logging
-- **Web Interface**: Clean, responsive Flask web application with Bootstrap UI and proper error handling
-- **Background Processing**: Coordinated processing through orchestrator classes
+- **Web Interface**: Clean, responsive Flask web application with Bootstrap UI and comprehensive auto-refresh
+- **Background Processing**: Coordinated processing through orchestrator classes with fail-fast error handling
 
 ## 📋 How It Works
 
@@ -47,16 +38,27 @@ rag_manager/           # RAG functionality
 
 ## 🛠️ Technology Stack
 
-- **Backend**: Python 3.8+ with Flask web framework
+- **Backend**: Python 3.8+ with Flask web framework and Werkzeug
 - **Vector Database**: Milvus for efficient vector storage and retrieval
 - **Metadata Database**: PostgreSQL with JSONB for flexible document metadata
+- **Web Framework**: Flask with Jinja2 templating and session management
+- **Email Processing**: 
+  - IMAP with email-validator for robust email handling
+  - Encrypted credential storage with Fernet encryption
+  - Offset-based processing with corruption detection
 - **Web Scraping**: BeautifulSoup4 and Requests for automatic URL title extraction
 - **AI Integration**: Ollama for embeddings and conversational RAG functionality
 - **ML Framework**: Ollama embeddings (mxbai-embed-large)
-- **Frontend**: Bootstrap 5 with responsive design
+- **Frontend**: 
+  - Bootstrap 5 with responsive design
+  - JavaScript with auto-refresh functionality
+  - Real-time progress tracking and status updates
+  - Local timezone formatting
 - **File Processing**: pypdf, python-docx for document parsing
-- **Background Processing**: Threading for UI responsiveness
+- **Background Processing**: Threading for UI responsiveness with coordinated orchestrators
+- **Database Connectivity**: psycopg2 for PostgreSQL, pymilvus for vector operations
 - **Containerization**: Docker Compose for easy deployment
+- **Development**: Following strict development rules with fail-fast error handling
 
 ## 📦 Installation & Management
 
@@ -114,7 +116,7 @@ Visit: http://localhost:3000
 ```
 
 The uninstall script will:
-- Stop and remove RAG Document Handler containers and volumes
+- Stop and remove RAG Knowledgebase Manager containers and volumes
 - Remove Python virtual environment (.venv)
 - Clean up all database files and logs
 - Remove uploaded/staging files
@@ -178,22 +180,13 @@ docker compose logs       # View container logs
 
 ### 🗃️ Database Architecture
 
-```
-┌─────────────────┬─────────────────┐
-│   PostgreSQL    │     Milvus      │
-│   (Metadata)    │   (Vectors)     │
-├─────────────────┼─────────────────┤
-│ • Documents     │ • Embeddings    │
-│ • URLs          │ • Similarity    │ 
-│ • Emails        │   Search        │
-│ • Accounts      │ • Collections   │
-│ • Analytics     │                 │
-└─────────────────┴─────────────────┘
-```
+The system uses a dual-database architecture with PostgreSQL for metadata and Milvus for vector embeddings. For detailed schema information, table structures, and field descriptions, see the [Database Schema Documentation](docs/database-schema.md).
 
-### 🌐 Default Endpoints
+For architectural details and system design, see the [Architecture Documentation](docs/architecture.md).
 
-- **Web Application**: http://localhost:3000
+### 🌐 Default Development Endpoints
+
+- **RAG Knowledge Base Web Application**: http://localhost:3000
 - **PostgreSQL**: localhost:5432
 - **Milvus**: localhost:19530
 
@@ -217,25 +210,20 @@ rag-document-handler/
 
 ## 🔧 Configuration
 
-The application uses environment variables for configuration. Copy the `.env` file and modify as needed:
+The application uses environment variables for configuration. For comprehensive configuration details, variable descriptions, and deployment options, see the [Configuration Documentation](docs/configuration.md).
 
+**Quick Start Configuration:**
 ```bash
-# Milvus connection settings
+# Core settings (copy to .env file)
+FLASK_PORT=3000
+EMAIL_ENCRYPTION_KEY=your_generated_fernet_key  # Required for email processing
 MILVUS_HOST=localhost
-MILVUS_PORT=19530
+POSTGRES_HOST=localhost
+```
 
-# Flask settings
-FLASK_HOST=0.0.0.0
-FLASK_PORT=5000
-FLASK_DEBUG=True
-
-# File upload settings
-MAX_CONTENT_LENGTH=16777216  # 16MB
-UPLOAD_FOLDER=staging
-
-# Vector database settings
-COLLECTION_NAME=documents
-VECTOR_DIM=384
+**Generate Encryption Key:**
+```bash
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 ```
 
 ## 🚀 Usage
@@ -294,30 +282,18 @@ VECTOR_DIM=384
 
 ## 💾 Data Stores
 
-The application automatically creates and manages the following data stores:
+The application uses a dual-database architecture for optimal performance and scalability:
 
-- **`knowledgebase.db`**: SQLite database storing URL metadata and, in the future, email content
-- **Milvus Collections**: Vector embeddings stored in Milvus database
-- **Staging/Uploaded Folders**: Document file organization
+- **PostgreSQL Database**: Stores all metadata including documents, URLs, email accounts, and email messages with JSONB support for flexible attributes
+- **Milvus Vector Database**: Stores high-dimensional vector embeddings for semantic search and retrieval
+- **File System Storage**: 
+  - `staging/` - Temporary storage for uploaded files awaiting processing
+  - `uploaded/` - Processed documents and URL snapshots
+  - `logs/` - Application and service logs
 
-### URL Database Schema
+For detailed database schemas, table structures, field descriptions, and relationships, see the [Database Schema Documentation](docs/database-schema.md).
 
-```sql
-CREATE TABLE urls (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    url TEXT UNIQUE NOT NULL,
-    title TEXT,                          -- Automatically extracted from web page
-    description TEXT,
-    added_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    last_checked TIMESTAMP,
-    status TEXT DEFAULT 'active'
-);
-```
-
-## 🐳 Docker Deployment
-
-
-## 🛡️ Development Standards
+## ️ Development Standards
 
 This project follows strict development standards as outlined in `DEVELOPMENT_RULES.md`:
 
@@ -329,16 +305,53 @@ This project follows strict development standards as outlined in `DEVELOPMENT_RU
 
 ## 🐳 Docker Deployment
 
-For production deployment, ensure Milvus is properly configured:
+The application uses Docker Compose for container orchestration. For production deployment, ensure all services are properly configured:
 
+### Development Deployment
 ```bash
-# Production Milvus setup
+# Use the provided Docker Compose setup
+docker compose up -d
+```
+
+### Production Deployment
+
+**PostgreSQL Database:**
+```bash
 docker run -d \
-  --name milvus \
+  --name rag-postgres \
+  -p 5432:5432 \
+  -e POSTGRES_DB=rag_metadata \
+  -e POSTGRES_USER=rag_user \
+  -e POSTGRES_PASSWORD=secure_production_password \
+  -v postgres_data:/var/lib/postgresql/data \
+  postgres:15
+```
+
+**Milvus Vector Database:**
+```bash
+docker run -d \
+  --name rag-milvus \
   -p 19530:19530 \
   -v milvus_data:/var/lib/milvus \
   milvusdb/milvus:latest
 ```
+
+**RAG Application:**
+```bash
+docker run -d \
+  --name rag-app \
+  -p 3000:3000 \
+  --link rag-postgres:postgres \
+  --link rag-milvus:milvus \
+  -e POSTGRES_HOST=postgres \
+  -e MILVUS_HOST=milvus \
+  -e EMAIL_ENCRYPTION_KEY=your_production_key \
+  -v uploaded_data:/app/uploaded \
+  -v staging_data:/app/staging \
+  your-registry/rag-document-handler:latest
+```
+
+For detailed deployment configurations and environment variables, see the [Configuration Documentation](docs/configuration.md).
 
 ## 🤝 Contributing
 
@@ -353,10 +366,26 @@ MIT License - see LICENSE file for details
 
 ## 🔗 References
 
-- [LangChain Milvus Integration](https://python.langchain.com/docs/integrations/vectorstores/milvus/)
-- [Milvus Documentation](https://milvus.io/docs)
-- [Flask Documentation](https://flask.palletsprojects.com/)
+### Core Technologies
+- [PostgreSQL Documentation](https://www.postgresql.org/docs/) - Metadata database system
+- [Milvus Documentation](https://milvus.io/docs) - Vector database and similarity search
+- [Flask Documentation](https://flask.palletsprojects.com/) - Web framework
+- [Docker Documentation](https://docs.docker.com/) - Containerization platform
+
+### AI/ML Frameworks
+- [Ollama Documentation](https://ollama.com/docs) - Local LLM and embeddings service
+- [LangChain Milvus Integration](https://python.langchain.com/docs/integrations/vectorstores/milvus/) - Vector store integration
+
+### Python Libraries
+- [psycopg2 Documentation](https://www.psycopg.org/docs/) - PostgreSQL adapter for Python
+- [pymilvus Documentation](https://milvus.io/docs/install_pymilvus.md) - Python SDK for Milvus
+- [BeautifulSoup4 Documentation](https://www.crummy.com/software/BeautifulSoup/bs4/doc/) - Web scraping library
+- [Bootstrap 5 Documentation](https://getbootstrap.com/docs/5.0/) - Frontend framework
+
+### Email Processing
+- [IMAP Protocol RFC](https://tools.ietf.org/html/rfc3501) - Internet Message Access Protocol
+- [Cryptography Documentation](https://cryptography.io/) - Password encryption library
 
 ---
 
-**RAG Document Handler** - Efficient document management with vector search capabilities
+**RAG Knowledge Base Manager** - Efficient document management with vector search capabilities

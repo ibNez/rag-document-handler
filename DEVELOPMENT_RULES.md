@@ -7,6 +7,8 @@ This document contains the development standards, patterns, and requirements for
 SOURCE THE ENVIRONMENT! 
 source .venv/bin/activate
 
+We do not use placeholder, stubbed in data, or any other type of fake code.  We don't mask our failures with fallbacks we log them and fail out so we can identify and fix the issue.
+
 ## 🐍 Python Development Best Practices (MANDATORY)
 
 ### 1. Code Quality Standards

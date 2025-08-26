@@ -1,6 +1,6 @@
-# RAG Document Handler Documentation
+# RAG Knowledgebase Manager Documentation
 
-Welcome to the documentation hub for the **RAG Document Handler** project. This directory contains comprehensive guides that expand on the root `README.md`.
+Welcome to the documentation hub for the **RAG Knowledgebase Manager** project. This directory contains comprehensive guides that expand on the root `README.md`.
 
 The application provides a complete RAG solution using a dual database architecture with refactored ingestion modules:
 - **PostgreSQL**: Document metadata, URLs, emails, and analytics with JSONB flexibility

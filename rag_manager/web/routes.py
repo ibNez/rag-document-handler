@@ -993,6 +993,7 @@ class WebRoutes:
             mailbox = request.form.get('mailbox', '').strip() or None
             batch_limit_str = request.form.get('batch_limit', '').strip()
             refresh_raw = request.form.get('refresh_interval_minutes', '').strip()
+            last_synced_offset_str = request.form.get('last_synced_offset', '').strip()
             use_ssl = request.form.get('use_ssl') in ('1', 'on')
             server_type = request.form.get('server_type', '').strip()
 
@@ -1026,6 +1027,12 @@ class WebRoutes:
                     updates['refresh_interval_minutes'] = int(refresh_raw)
                 except ValueError:
                     flash('Refresh interval must be a number', 'error')
+                    return redirect(url_for('index'))
+            if last_synced_offset_str:
+                try:
+                    updates['last_synced_offset'] = int(last_synced_offset_str)
+                except ValueError:
+                    flash('Last synced offset must be a number', 'error')
                     return redirect(url_for('index'))
             updates['use_ssl'] = 1 if use_ssl else 0
 
@@ -1071,6 +1078,116 @@ class WebRoutes:
             th.start()
             flash('Email refresh started in background', 'info')
             return redirect(url_for('index'))
+
+        @self.app.route('/email/<email_id>')
+        def display_email(email_id: str):
+            """Display email content in a popup modal."""
+            try:
+                logger.debug(f"Displaying email with ID: {email_id}")
+                
+                # Get email content from PostgreSQL
+                if not (hasattr(self.rag_manager, 'email_account_manager') and 
+                       self.rag_manager.email_account_manager):
+                    logger.error("Email account manager not available")
+                    return jsonify({"error": "Email system not available"}), 500
+                
+                # Get database connection
+                import psycopg2
+                conn = psycopg2.connect(
+                    host=os.getenv('POSTGRES_HOST', 'localhost'),
+                    port=os.getenv('POSTGRES_PORT', '5432'),
+                    database=os.getenv('POSTGRES_DB', 'rag_metadata'),
+                    user=os.getenv('POSTGRES_USER', 'rag_user'),
+                    password=os.getenv('POSTGRES_PASSWORD', 'rag_password')
+                )
+                
+                with conn.cursor() as cursor:
+                    # Query email by email_id
+                    cursor.execute("""
+                        SELECT email_id, account_id, subject, sender, recipients, 
+                               email_date, content, content_type, message_id, 
+                               has_attachments, thread_id, in_reply_to, folder
+                        FROM emails 
+                        WHERE email_id = %s
+                        LIMIT 1
+                    """, (email_id,))
+                    
+                    email_row = cursor.fetchone()
+                    
+                    if not email_row:
+                        logger.warning(f"Email not found: {email_id}")
+                        return jsonify({"error": "Email not found"}), 404
+                    
+                    # Extract email data
+                    email_data = {
+                        'email_id': email_row[0],
+                        'account_id': email_row[1], 
+                        'subject': email_row[2] or "No Subject",
+                        'sender': email_row[3] or "Unknown Sender",
+                        'recipients': email_row[4] or "",
+                        'email_date': str(email_row[5]) if email_row[5] else "Unknown Date",
+                        'content': email_row[6] or "",
+                        'content_type': email_row[7] or "text/plain",
+                        'message_id': email_row[8] or "",
+                        'has_attachments': bool(email_row[9]),
+                        'thread_id': email_row[10] or "",
+                        'in_reply_to': email_row[11] or "",
+                        'folder': email_row[12] or "inbox"
+                    }
+                    
+                    # Get account info for context
+                    cursor.execute("""
+                        SELECT account_name, email_address 
+                        FROM email_accounts 
+                        WHERE account_id = %s
+                    """, (email_data['account_id'],))
+                    
+                    account_row = cursor.fetchone()
+                    if account_row:
+                        email_data['account_name'] = account_row[0]
+                        email_data['account_email'] = account_row[1]
+                    
+                    # Get attachments if any
+                    if email_data['has_attachments']:
+                        cursor.execute("""
+                            SELECT attachment_id, filename, content_type, size
+                            FROM email_attachments 
+                            WHERE email_id = %s
+                        """, (email_id,))
+                        
+                        attachments = []
+                        for att_row in cursor.fetchall():
+                            attachments.append({
+                                'attachment_id': att_row[0],
+                                'filename': att_row[1],
+                                'content_type': att_row[2],
+                                'size': att_row[3]
+                            })
+                        email_data['attachments'] = attachments
+                    else:
+                        email_data['attachments'] = []
+                
+                conn.close()
+                
+                # Format content for display
+                if email_data['content_type'] == 'text/html':
+                    # For HTML emails, sanitize but preserve formatting
+                    import html
+                    email_data['content_display'] = email_data['content']
+                    email_data['is_html'] = True
+                else:
+                    # For plain text, escape HTML and preserve line breaks
+                    import html
+                    escaped_content = html.escape(email_data['content'])
+                    email_data['content_display'] = escaped_content.replace('\n', '<br>')
+                    email_data['is_html'] = False
+                
+                logger.info(f"Successfully retrieved email: {email_id}")
+                return jsonify(email_data)
+                
+            except Exception as e:
+                logger.error(f"Failed to display email {email_id}: {e}", exc_info=True)
+                return jsonify({"error": f"Failed to load email: {str(e)}"}), 500
 
     def _get_directory_files(self, directory: str) -> list:
         """
