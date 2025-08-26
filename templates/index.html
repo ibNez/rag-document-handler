@@ -569,9 +569,9 @@
                                     <thead class="table-light">
                                         <tr>
                                             <th>Display Name</th>
-                                            <th>Server Type</th>
-                                            <th>Server</th>
                                             <th>Email Address</th>
+                                            <th>Total/Synced</th>
+                                            <th>Chunks</th>
                                             <th class="schedule-times">Schedule / Time</th>
                                             <th>Status</th>
                                             <th class="text-end">Actions</th>
@@ -581,9 +581,19 @@
                                     {% for acct in email_accounts %}
                                         <tr>
                                             <td>{{ acct.account_name }}</td>
-                                            <td>{{ {'imap': 'IMAP', 'gmail': 'Gmail', 'exchange': 'Exchange'}.get(acct.server_type, acct.server_type) }}</td>
-                                            <td>{{ acct.server }}:{{ acct.port }}</td>
                                             <td>{{ acct.email_address }}</td>
+                                            <td>
+                                                <div class="text-nowrap">
+                                                    <strong>{{ acct.total_emails or 0 }}</strong> / {{ acct.synced_emails or 0 }}
+                                                </div>
+                                                <div class="text-muted small">emails</div>
+                                            </td>
+                                            <td>
+                                                <div class="text-nowrap">
+                                                    <strong>{{ acct.total_chunks or 0 }}</strong>
+                                                </div>
+                                                <div class="text-muted small">chunks</div>
+                                            </td>
                                             <td class="small schedule-times">
                                                 <div>Every {{ acct.refresh_interval_minutes or config.EMAIL_DEFAULT_REFRESH_MINUTES }} min</div>
                                                 <div class="text-muted">Last: <span class="dt-local" data-utc="{{ acct.last_synced or '' }}">{{ acct.last_synced or '—' }}</span></div>
@@ -604,9 +614,11 @@
                                                     </div>
                                                 {% elif acct.last_update_status %}
                                                     {% set status_text = acct.last_update_status %}
-                                                    <span class="badge {% if status_text.startswith('error') %}bg-light text-dark{% else %}bg-success{% endif %}">{{ status_text }}</span>
+                                                    <span class="status-indicator status-{{ 'completed' if status_text == 'ready' else ('error' if 'error' in status_text.lower() else 'pending') }}"></span>
+                                                    <span class="badge {% if 'error' in status_text.lower() %}bg-danger{% elif status_text == 'ready' %}bg-success{% else %}bg-warning{% endif %}">{{ status_text }}</span>
                                                 {% else %}
-                                                    <span class="text-muted small">—</span>
+                                                    <span class="status-indicator status-pending"></span>
+                                                    <span class="badge bg-secondary">pending</span>
                                                 {% endif %}
                                             </td>
                                             <td class="text-end">
@@ -624,6 +636,7 @@
                                                             data-interval="{{ acct.refresh_interval_minutes or '' }}"
                                                             data-ssl="{{ '1' if acct.use_ssl else '0' }}"
                                                             data-type="{{ acct.server_type }}"
+                                                            data-offset="{{ acct.last_synced_offset or '0' }}"
                                                             title="Edit">
                                                         <i class="fas fa-pen"></i>
                                                     </button>
@@ -779,6 +792,12 @@
                                     <label class="form-label">Refresh interval (minutes)</label>
                                     <input type="number" class="form-control" name="refresh_interval_minutes" id="editRefreshInterval" required>
                                 </div>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Current Offset Position</label>
+                                <input type="number" class="form-control" name="last_synced_offset" id="editLastSyncedOffset" 
+                                       title="Email offset position - set to 0 to rescan from beginning">
+                                <div class="form-text">Email offset position. Set to 0 to rescan from the beginning (idempotent due to duplicate detection).</div>
                             </div>
                             <div class="mb-3 form-check form-switch">
                                 <input class="form-check-input" type="checkbox" name="use_ssl" id="editUseSSL" value="1">
@@ -1440,6 +1459,185 @@
                 });
             }
             setInterval(pollStagingDeletion, 5000); // Poll every 5 seconds for staging deletion status
+            
+            // EMAIL ACCOUNTS AUTO-REFRESH FUNCTION
+            console.log('Setting up email accounts auto-refresh...');
+            
+            function refreshEmailAccounts() {
+                console.log('Refreshing email accounts section...');
+                fetch(window.location.href)
+                    .then(response => response.text())
+                    .then(html => {
+                        const parser = new DOMParser();
+                        const doc = parser.parseFromString(html, 'text/html');
+                        const newEmailSection = doc.querySelector('#email-accounts');
+                        const currentEmailSection = document.querySelector('#email-accounts');
+                        
+                        if (newEmailSection && currentEmailSection) {
+                            currentEmailSection.innerHTML = newEmailSection.innerHTML;
+                            console.log('Email accounts refreshed successfully');
+                            
+                            // Re-apply local time formatting to new timestamps
+                            applyLocalTimes(currentEmailSection);
+                            
+                            // Re-attach event listeners after refresh
+                            attachEmailAccountListeners();
+                        } else {
+                            console.log('ERROR: Could not find email accounts section for refresh');
+                        }
+                    })
+                    .catch(error => console.error('Email accounts refresh error:', error));
+            }
+            
+            // Function to attach email account event listeners
+            function attachEmailAccountListeners() {
+                // Populate edit email account modal with existing data
+                document.querySelectorAll('.edit-account-btn').forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        // Fetch fresh data via AJAX to avoid stale offset values
+                        fetch('/email_accounts')
+                            .then(response => response.json())
+                            .then(accounts => {
+                                const accountId = btn.dataset.id;
+                                const account = accounts.find(acc => acc.id == accountId);
+                                
+                                if (account) {
+                                    const form = document.getElementById('editEmailAccountForm');
+                                    form.action = btn.dataset.action;
+                                    document.getElementById('editAccountId').value = account.id || '';
+                                    document.getElementById('editAccountName').value = account.account_name || '';
+                                    document.getElementById('editServer').value = account.server || '';
+                                    document.getElementById('editEmailAddress').value = account.email_address || '';
+                                    document.getElementById('editPassword').value = '';
+                                    document.getElementById('editPort').value = account.port || '';
+                                    document.getElementById('editMailbox').value = account.mailbox || '';
+                                    document.getElementById('editBatchLimit').value = account.batch_limit || '';
+                                    document.getElementById('editRefreshInterval').value = account.refresh_interval_minutes || '';
+                                    document.getElementById('editUseSSL').checked = account.use_ssl;
+                                    document.getElementById('editServerType').value = account.server_type || 'imap';
+                                    document.getElementById('editLastSyncedOffset').value = account.last_synced_offset || '0';
+                                } else {
+                                    // Fallback to dataset values
+                                    populateEditFormFromDataset(btn);
+                                }
+                            })
+                            .catch(error => {
+                                console.error('Error fetching fresh email account data:', error);
+                                populateEditFormFromDataset(btn);
+                            });
+                    });
+                });
+                
+                // Populate delete confirmation modal
+                document.querySelectorAll('.delete-account-btn').forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        const form = document.getElementById('deleteEmailAccountForm');
+                        form.action = btn.dataset.action;
+                        document.getElementById('deleteAccountName').textContent = btn.dataset.name || '';
+                    });
+                });
+            }
+            
+            // Helper function to populate edit form from dataset
+            function populateEditFormFromDataset(btn) {
+                const form = document.getElementById('editEmailAccountForm');
+                form.action = btn.dataset.action;
+                document.getElementById('editAccountId').value = btn.dataset.id || '';
+                document.getElementById('editAccountName').value = btn.dataset.name || '';
+                document.getElementById('editServer').value = btn.dataset.server || '';
+                document.getElementById('editEmailAddress').value = btn.dataset.email || '';
+                document.getElementById('editPassword').value = '';
+                document.getElementById('editPort').value = btn.dataset.port || '';
+                document.getElementById('editMailbox').value = btn.dataset.mailbox || '';
+                document.getElementById('editBatchLimit').value = btn.dataset.batch || '';
+                document.getElementById('editRefreshInterval').value = btn.dataset.interval || '';
+                document.getElementById('editUseSSL').checked = ['1','true','on'].includes(btn.dataset.ssl);
+                document.getElementById('editServerType').value = btn.dataset.type || 'imap';
+                document.getElementById('editLastSyncedOffset').value = btn.dataset.offset || '0';
+            }
+            
+            // Initialize email account listeners on page load
+            document.addEventListener('DOMContentLoaded', function() {
+                attachEmailAccountListeners();
+            });
+            
+            setInterval(refreshEmailAccounts, 10000); // Refresh every 10 seconds
+            console.log('Email accounts auto-refresh initialized');
+            
+            // ADD AUTO-REFRESH FOR ALL OTHER PANELS
+            function refreshKnowledgebaseStats() {
+                console.log('Refreshing knowledgebase statistics...');
+                fetch(window.location.href)
+                    .then(response => response.text())
+                    .then(html => {
+                        const parser = new DOMParser();
+                        const doc = parser.parseFromString(html, 'text/html');
+                        const newStatsSection = doc.querySelector('#knowledgebase-stats');
+                        const currentStatsSection = document.querySelector('#knowledgebase-stats');
+                        
+                        if (newStatsSection && currentStatsSection) {
+                            currentStatsSection.innerHTML = newStatsSection.innerHTML;
+                            console.log('Knowledgebase statistics refreshed successfully');
+                            applyLocalTimes(currentStatsSection);
+                        }
+                    })
+                    .catch(error => console.error('Stats refresh error:', error));
+            }
+            
+            function refreshStagingArea() {
+                console.log('Refreshing staging area...');
+                fetch(window.location.href)
+                    .then(response => response.text())
+                    .then(html => {
+                        const parser = new DOMParser();
+                        const doc = parser.parseFromString(html, 'text/html');
+                        const newStagingSection = doc.querySelector('#staging-area');
+                        const currentStagingSection = document.querySelector('#staging-area');
+                        
+                        if (newStagingSection && currentStagingSection) {
+                            currentStagingSection.innerHTML = newStagingSection.innerHTML;
+                            console.log('Staging area refreshed successfully');
+                            applyLocalTimes(currentStagingSection);
+                        }
+                    })
+                    .catch(error => console.error('Staging refresh error:', error));
+            }
+            
+            function refreshUrlManagement() {
+                console.log('Refreshing URL management...');
+                fetch(window.location.href)
+                    .then(response => response.text())
+                    .then(html => {
+                        const parser = new DOMParser();
+                        const doc = parser.parseFromString(html, 'text/html');
+                        const newUrlSection = doc.querySelector('#url-management');
+                        const currentUrlSection = document.querySelector('#url-management');
+                        
+                        if (newUrlSection && currentUrlSection) {
+                            // Preserve form input if user is typing
+                            const addUrlForm = currentUrlSection.querySelector('input[name="url"]');
+                            const addUrlValue = addUrlForm ? addUrlForm.value : '';
+                            
+                            currentUrlSection.innerHTML = newUrlSection.innerHTML;
+                            
+                            // Restore form value
+                            if (addUrlValue) {
+                                const newAddUrlForm = currentUrlSection.querySelector('input[name="url"]');
+                                if (newAddUrlForm) newAddUrlForm.value = addUrlValue;
+                            }
+                            
+                            console.log('URL management refreshed successfully');
+                            applyLocalTimes(currentUrlSection);
+                        }
+                    })
+                    .catch(error => console.error('URL refresh error:', error));
+            }
+            
+            // Set up all panel refreshes
+            setInterval(refreshKnowledgebaseStats, 10000);
+            setInterval(refreshStagingArea, 10000);
+            setInterval(refreshUrlManagement, 10000);
+            console.log('All dashboard panels auto-refresh initialized');
         </script>
         <script>
             // Populate edit email account modal with existing data
@@ -1458,6 +1656,7 @@
                     document.getElementById('editRefreshInterval').value = btn.dataset.interval || '';
                     document.getElementById('editUseSSL').checked = ['1','true','on'].includes(btn.dataset.ssl);
                     document.getElementById('editServerType').value = btn.dataset.type || 'imap';
+                    document.getElementById('editLastSyncedOffset').value = btn.dataset.offset || '0';
                 });
             });
             // Populate delete confirmation modal

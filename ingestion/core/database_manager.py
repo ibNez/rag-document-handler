@@ -1,5 +1,5 @@
 """
-Database Integration Layer for RAG Document Handler
+Database Integration Layer for RAG Knowledgebase Manager
 Coordinates between PostgreSQL (metadata) and Milvus (vectors).
 """
 

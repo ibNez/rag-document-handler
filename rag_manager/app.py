@@ -75,6 +75,11 @@ class RAGKnowledgebaseManager:
         self.document_processor = DocumentProcessor(self.config)
         self.milvus_manager = MilvusManager(self.config)
         
+        # Initialize Milvus collections during application startup
+        logger.info("Initializing Milvus collections during application startup...")
+        self.milvus_manager.initialize_collections_for_startup()
+        logger.info("Milvus collections initialized successfully")
+        
         # Initialize PostgreSQL manager for metadata
         self._initialize_database_managers()
         
@@ -140,6 +145,35 @@ class RAGKnowledgebaseManager:
             self.postgres_manager = PostgreSQLManager(postgres_config)
             self.database_manager = RAGDatabaseManager(postgres_config)
             logger.info("PostgreSQL integration initialized successfully")
+            
+            # Initialize hybrid retrieval system for email search
+            # 
+            # WHAT THIS DOES:
+            # This initializes our advanced email search system that combines two retrieval methods:
+            # 1. Vector Similarity Search (Milvus) - finds emails with similar semantic meaning
+            # 2. Full-Text Search (PostgreSQL FTS) - finds emails with exact keyword matches
+            # 
+            # WHY WE NEED BOTH:
+            # - Vector search is great for: "find emails about project updates" (semantic understanding)
+            # - FTS search is great for: "find emails from john@company.com" (exact matches)
+            # - Hybrid combines both using Reciprocal Rank Fusion (RRF) for better results
+            #
+            # COMPONENTS INITIALIZED:
+            # - PostgresFTSRetriever: Searches email_chunks table using PostgreSQL's ts_query/ts_rank
+            # - HybridRetriever: Combines vector + FTS results using RRF algorithm
+            # - Integrated into EmailManager for clean email-specific architecture
+            #
+            # DEPENDENCIES:
+            # - Requires PostgreSQL pool for FTS operations
+            # - Requires email_chunks table with GIN indexes for fast text search
+            # - Requires emails collection in Milvus for vector similarity search
+            #
+            # FAILURE HANDLING:
+            # - If initialization fails, email search falls back to vector-only mode
+            # - Error is logged but doesn't crash the application startup
+            # NOTE: Hybrid retrieval is now initialized in _initialize_email_manager() 
+            # to ensure proper initialization order
+            
         except ImportError as e:
             logger.error(f"Failed to import PostgreSQL managers: {e}")
             self.postgres_manager = None
@@ -214,17 +248,17 @@ class RAGKnowledgebaseManager:
                 self.email_orchestrator = None
                 return
             
-            # Initialize PostgreSQL email account manager
+            # Initialize PostgreSQL email account manager (stats from PostgreSQL, not Milvus)
             from ingestion.email.manager import PostgreSQLEmailManager
             self.email_account_manager = PostgreSQLEmailManager(self.postgres_manager)
-            logger.info("PostgreSQL email account manager initialized")
+            logger.info("PostgreSQL email account manager initialized with PostgreSQL-based statistics")
             
             # Ensure email vector store is ready (separate from document vector store)
             email_vector_store = self.milvus_manager.get_email_vector_store()
             logger.info("Email vector store validated for email embeddings")
             
             # Create PostgreSQL-based email message manager
-            from ingestion.email.email_manager_postgresql import PostgreSQLEmailManager as EmailMessageManager
+            from ingestion.email.manager import PostgreSQLEmailManager as EmailMessageManager
             email_message_manager = EmailMessageManager(self.postgres_manager)
             logger.info("PostgreSQL email message manager initialized")
             
@@ -247,8 +281,18 @@ class RAGKnowledgebaseManager:
             logger.info("Email orchestrator initialized")
             
             # Set the email orchestrator in the scheduler manager
-            self.scheduler_manager.set_email_orchestrator(self.email_orchestrator)
+            if hasattr(self, 'scheduler_manager') and self.scheduler_manager:
+                self.scheduler_manager.set_email_orchestrator(self.email_orchestrator)
             logger.info("Email orchestrator set in scheduler manager")
+            
+            # Initialize hybrid email retrieval system (clean architecture)
+            try:
+                email_vector_store = self.milvus_manager.get_email_vector_store()
+                self.email_account_manager.initialize_hybrid_retrieval(email_vector_store)
+                logger.info("Hybrid email retrieval system initialized successfully in EmailManager")
+            except Exception as e:
+                logger.error(f"Failed to initialize hybrid retrieval in EmailManager: {e}")
+                logger.warning("Email search will fall back to vector-only mode")
             
         except Exception as e:
             logger.error("Failed to initialize email manager: %s", e)
@@ -877,7 +921,7 @@ class RAGKnowledgebaseManager:
         This method starts the web server and scheduler, making the application 
         available for processing requests and background tasks.
         """
-        logger.info(f"Starting RAG Document Handler on {self.config.FLASK_HOST}:{self.config.FLASK_PORT}")
+        logger.info(f"Starting RAG Knowledgebase Manager on {self.config.FLASK_HOST}:{self.config.FLASK_PORT}")
         
         # Start the background scheduler for URL and email processing
         logger.info("Starting background scheduler for URL and email processing")

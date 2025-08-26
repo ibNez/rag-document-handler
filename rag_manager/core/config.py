@@ -48,20 +48,20 @@ class Config:
 
     # Ollama Configuration
     OLLAMA_EMBEDDING_HOST: str = os.getenv("OLLAMA_EMBEDDING_HOST", "localhost")
-    OLLAMA_EMBEDDING_PORT: int = int(os.getenv("OLLAMA_EMBEDDING_PORT", "11434"))
     OLLAMA_CLASSIFICATION_HOST: str = os.getenv("OLLAMA_CLASSIFICATION_HOST", "localhost")
-    CLASSIFICATION_BASE_URL: str = os.getenv(
-        'CHAT_CLASSIFICATIONBASE_URL', 
-        f"http://{os.getenv('OLLAMA_CLASSIFICATION_HOST','localhost')}:{os.getenv('OLLAMA_PORT','11434')}"
-    )
     OLLAMA_CHAT_HOST: str = os.getenv("OLLAMA_CHAT_HOST", "localhost")
     OLLAMA_PORT: int = int(os.getenv("OLLAMA_PORT", "11434"))
-
+    OLLAMA_EMBEDDING_PORT: int = int(os.getenv("OLLAMA_EMBEDDING_PORT", "11434"))
+    
     # Chat Model Configuration
     CHAT_MODEL: str = os.getenv('CHAT_MODEL', 'mistral:latest')
     CHAT_BASE_URL: str = os.getenv(
         'CHAT_BASE_URL', 
         f"http://{os.getenv('OLLAMA_CHAT_HOST','localhost')}:{os.getenv('OLLAMA_PORT','11434')}"
+    )
+    CLASSIFICATION_BASE_URL: str = os.getenv(
+        'CLASSIFICATION_BASE_URL', 
+        f"http://{os.getenv('OLLAMA_CLASSIFICATION_HOST','localhost')}:{os.getenv('OLLAMA_PORT','11434')}"
     )
     CHAT_TEMPERATURE: float = float(os.getenv('CHAT_TEMPERATURE', '0.1'))
     

@@ -29,6 +29,33 @@ The refactored application uses:
 - **Email Integration** – Support for IMAP, Gmail API, and Exchange with encrypted storage
 - **Semantic Search** – Query stored content via vector search with improved accuracy
 - **RAG Chat** – Ask questions and receive answers synthesized from relevant documents
+- **Email Classification** – Automatic detection and specialized handling of email-related queries
+
+## Enhanced Query Processing
+
+The system now features intelligent query classification that automatically determines whether your questions are about emails or general documents:
+
+### Email Queries
+Questions about emails are automatically detected and processed through a specialized email search pipeline:
+- "What emails did John send about the project?"
+- "Show me emails from last week about budget discussions"
+- "Find emails with attachments about the quarterly report"
+
+Email results include clickable email IDs that open detailed email viewers with:
+- **Full email content** with HTML rendering support
+- **Sender and recipient information**
+- **Attachment details** with file sizes and types
+- **Thread and reply context**
+- **Technical metadata** (Message ID, headers, etc.)
+
+### General Document Queries
+Standard questions about documents and URLs use the existing RAG pipeline:
+- "What is the main methodology described in the research papers?"
+- "Explain the key findings from the uploaded documents"
+- "What tools are mentioned in the documentation?"
+
+### Automatic Classification
+The system uses a dedicated LLM model to analyze query intent and route to the appropriate search system. No manual selection required - just ask natural language questions and the system handles the rest.
 
 ## Managing Email Accounts
 
@@ -74,7 +101,5 @@ fetched.
 
 ## TODOs
 
-- [ ] Command-line interface for batch operations.
-- [ ] Email ingestion from configured accounts with metadata stored in `knowledgebase.db` and embeddings persisted in Milvus.
 - [ ] Image ingestion using TensorFlow object classification with embeddings stored in Milvus.
 - [ ] Export search results to external formats.

@@ -1,8 +1,91 @@
 # System Architecture
 
-The RAG Document Handler uses a dual database architecture with Flask web application, PostgreSQL for metadata, and Milvus for vector embeddings. The codebase has been refactored to follow Python development best practices with proper module organization and separation of concerns.
+The RAG Knowledgebase Manager uses a dual database architecture with Flask web application, PostgreSQL for metadata, and Milvus for vector embeddings. The codebase has been refactored to follow Python development best practices with proper module organization and separation of concerns.
 
-## Refactored Code Structure
+## Enhanced RAG Pipeline with Email Classification
+
+The system now features an advanced query classification pipeline that automatically determines whether user queries are about emails or general documents/URLs, enabling specialized handling for different content types.
+
+### Query Classification Flow
+
+1. **Query Analysis**: Each user query is first analyzed by a dedicated classification LLM
+2. **Intent Detection**: The system classifies queries as either:
+   - `email`: Questions about email content, senders, recipients, or email-specific metadata
+   - `general`: Questions about documents, URLs, or general knowledge base content
+3. **Specialized Search**: Based on classification, queries are routed to appropriate search pipelines:
+   - Email queries → Email-specific vector search and formatting
+   - General queries → Standard document/URL vector search
+4. **Contextual Response**: Results are formatted with appropriate context and system prompts
+
+### Email Classification Configuration
+
+New environment variables support the classification system:
+
+- `CLASSIFICATION_MODEL`: LLM model used for query intent classification (e.g., "llama3.2:3b")
+- `OLLAMA_CLASSIFICATION_HOST`: Host for the classification Ollama service
+- `OLLAMA_PORT`: Port for Ollama services
+
+## Enhanced Email Processing Pipeline
+
+The email processing system has been significantly enhanced with robust error handling, corruption detection, and real-time monitoring capabilities.
+
+### Enhanced Architecture Components
+
+#### Corruption Detection & Validation
+- **Message-ID Validation**: All emails must have valid Message-ID headers (no fallback generation)
+- **Header Validation**: Validates required headers (From, Date) before processing
+- **Offset-Aware Logging**: Reports exact positions where corrupted emails are found
+- **Fail-Fast Approach**: Stops processing corrupted emails without hidden fallbacks
+
+#### Enhanced Error Handling
+```python
+def _parse_email_with_offset(self, msg_data, offset):
+    """Enhanced email parsing with corruption detection and offset logging."""
+    try:
+        email_msg = email.message_from_bytes(msg_data)
+        
+        # Validate Message-ID (required, no fallback generation)
+        message_id = email_msg.get('Message-ID')
+        if not message_id:
+            logger.error(f"Email at offset {offset} missing required Message-ID header")
+            return None
+            
+        return email_msg
+        
+    except Exception as e:
+        logger.error(f"Failed to parse email at offset {offset}: {str(e)}")
+        return None
+```
+
+#### Real-Time Dashboard Monitoring
+- **Auto-Refresh System**: All dashboard panels refresh every 10 seconds
+- **Fresh Data API**: Edit modals fetch current database values via AJAX
+- **Live Statistics**: Email counts and processing status updated in real-time
+- **Error Visibility**: Processing errors immediately visible in dashboard
+- **Offset Management**: Manual offset reset capability through web interface
+
+### Enhanced UI Architecture
+
+#### JavaScript Auto-Refresh System
+```javascript
+function initializeAutoRefresh() {
+    // Auto-refresh all dashboard panels every 10 seconds
+    setInterval(() => {
+        refreshEmailAccounts();
+        refreshURLMonitoring();
+        refreshDocuments();
+        refreshRAGQueries();
+    }, 10000);
+}
+```
+
+#### AJAX Fresh Data Fetching
+- **Fresh Email Account Data**: Edit modals fetch current values from `/email_accounts` API
+- **Event Listener Management**: Proper reattachment after DOM updates
+- **Error Handling**: Graceful fallback when AJAX requests fail
+- **Real-Time Updates**: Immediate reflection of database changes in UI
+
+## Code Structure
 
 The application has been reorganized into logical modules following Python best practices:
 
@@ -20,6 +103,16 @@ rag_manager/
 └── web/
     ├── __init__.py
     └── routes.py                  # Flask routes and web handlers
+
+retrieval/
+├── __init__.py                    # Retrieval system initialization
+├── email/
+│   ├── __init__.py
+│   ├── hybrid_retriever.py        # Email hybrid search with RRF fusion
+│   └── postgres_fts_retriever.py  # PostgreSQL full-text search for emails
+└── document/
+    ├── __init__.py
+    └── (future document retrieval components)
 
 ingestion/
 ├── __init__.py                    # Ingestion package initialization
@@ -71,6 +164,8 @@ ingestion/
 | `rag_manager/app.py` | Main application orchestrator class |
 | `rag_manager/managers/milvus_manager.py` | Vector database operations and RAG search functionality |
 | `rag_manager/web/routes.py` | Web interface and route handlers |
+| `retrieval/email/hybrid_retriever.py` | Email hybrid search combining vector + PostgreSQL FTS with RRF fusion |
+| `retrieval/email/postgres_fts_retriever.py` | PostgreSQL full-text search optimized for email content |
 | `ingestion/core/` | Core database abstraction and PostgreSQL management |
 | `ingestion/email/` | Email account management, processing, and connectors |
 | `ingestion/url/` | URL crawling, scheduling, and content processing |
@@ -117,12 +212,13 @@ ingestion/
 - **batch_limit** (INTEGER): Maximum emails per batch
 - **use_ssl** (BOOLEAN): Enable SSL/TLS connection
 - **refresh_interval_minutes** (INTEGER): Sync frequency
+- **offset_position** (INTEGER): **NEW**: Current processing offset position for resuming operations
 - **last_synced** (TIMESTAMP): Last successful sync time
 - **last_update_status** (VARCHAR): Status of last sync attempt
 - **next_run** (TIMESTAMP): Scheduled next sync time
 
 #### Email Messages Table
-- **message_id** (VARCHAR, PRIMARY KEY): Unique email message identifier
+- **message_id** (VARCHAR, PRIMARY KEY): **REQUIRED**: Unique email message identifier (no fallback generation)
 - **account_id** (INTEGER, FOREIGN KEY): References email_accounts.id
 - **subject** (VARCHAR): Email subject line
 - **from_addr** (VARCHAR): Sender email address
@@ -132,6 +228,8 @@ ingestion/
 - **body_html** (TEXT): HTML body content
 - **attachments_info** (JSONB): Attachment metadata
 - **server_type** (VARCHAR): Source server type
+- **content_hash** (VARCHAR): **NEW**: Hash for deduplication across accounts
+- **validation_status** (VARCHAR): **NEW**: Corruption detection results ('valid', 'corrupted', 'missing_headers')
 - **processed_timestamp** (TIMESTAMP): When email was processed
 
 ### Milvus (Vector Storage)
@@ -178,6 +276,170 @@ The Milvus collection uses a unified schema for all content types (documents, UR
    - **PostgreSQL**: Email metadata via email_manager_postgresql.py
    - **Milvus**: Text embeddings through dedicated email vector store
 6. **Orchestrated Sync**: EmailOrchestrator manages periodic synchronization
+
+### Hybrid Retrieval System
+
+The system implements a sophisticated search engine that finds the most relevant email content by combining two different search approaches and intelligently merging their results.
+
+#### What Does It Actually Do?
+
+**The Problem**: When you search for emails, you want to find content that matches both:
+1. **Exact keywords** you're looking for (like "budget meeting" or "project deadline")
+2. **Conceptual meaning** even if different words are used (like finding "financial planning" when you search for "budget")
+
+**The Solution**: Two specialized search engines working together:
+
+#### 1. PostgreSQL Full-Text Search (PostgresFTSRetriever)
+**What it does**: Finds emails containing your exact keywords and related word forms
+**How it works**:
+- Searches through all email text stored in PostgreSQL database
+- Uses PostgreSQL's built-in text search with stemming (finds "running" when you search "run")
+- Ranks results by how well they match your keywords using `ts_rank` scoring
+- Fast because it uses pre-built GIN indexes on the text
+
+**Example**: If you search "quarterly report", it finds emails containing:
+- "quarterly report" (exact match)
+- "quarterly reports" (plural form) 
+- "quarter report" (stemmed form)
+- Ranks emails with multiple keyword matches higher
+
+#### 2. Vector Similarity Search (via Milvus)
+**What it does**: Finds emails that are conceptually similar to your search, even with different words
+**How it works**:
+- Email content is converted to mathematical vectors (embeddings) that capture meaning
+- Your search query is also converted to a vector
+- Finds emails whose vectors are "close" to your query vector in mathematical space
+- Good at finding synonyms, related concepts, and contextual matches
+
+**Example**: If you search "budget planning", it finds emails about:
+- "financial forecasting" 
+- "cost analysis"
+- "expense management"
+- "resource allocation"
+(Even though none contain the exact words "budget planning")
+
+#### 3. Hybrid Fusion (HybridRetriever)
+**What it does**: Combines both search methods to get the best results
+**How it works using Reciprocal Rank Fusion (RRF)**:
+
+```
+Step 1: Run both searches in parallel
+- PostgreSQL FTS finds keyword matches
+- Vector search finds conceptual matches
+
+Step 2: Rank each result list
+- PostgreSQL results: #1, #2, #3... (by keyword relevance)
+- Vector results: #1, #2, #3... (by conceptual similarity)
+
+Step 3: Apply RRF scoring formula
+For each document: RRF_score = 1 / (rank + 60)
+- Document ranked #1 gets score: 1/61 = 0.016
+- Document ranked #2 gets score: 1/62 = 0.016
+- If same document appears in both lists, scores are added
+
+Step 4: Re-rank by combined scores
+Documents that appear in both searches get highest scores
+```
+
+**Real Example**:
+Search: "project timeline delay"
+
+PostgreSQL FTS finds:
+1. Email: "Project timeline needs adjustment" (score: 0.016)
+2. Email: "Timeline delay notification" (score: 0.016) 
+3. Email: "Project schedule update" (score: 0.015)
+
+Vector Search finds:
+1. Email: "Schedule postponement discussion" (score: 0.016)
+2. Email: "Timeline delay notification" (score: 0.016)  
+3. Email: "Deadline extension request" (score: 0.015)
+
+Final Hybrid Results:
+1. "Timeline delay notification" (combined score: 0.032) ← Found by both!
+2. "Project timeline needs adjustment" (score: 0.016)
+3. "Schedule postponement discussion" (score: 0.016)
+4. "Project schedule update" (score: 0.015)
+
+#### Component Details
+
+**retrieval/email/postgres_fts_retriever.py**
+- **Purpose**: Keyword-based email search using PostgreSQL's text search engine
+- **Input**: Search query string (e.g., "budget meeting tomorrow")
+- **Process**: 
+  - Converts query to `plainto_tsquery` for PostgreSQL
+  - Searches `email_chunks` table using `@@` text search operator
+  - Ranks by `ts_rank` relevance scoring
+- **Output**: LangChain `Document` objects with email content and metadata
+- **Strengths**: Fast exact keyword matching, handles stemming and stop words
+- **Use Case**: When you know specific words/phrases that should be in the email
+
+**retrieval/email/hybrid_retriever.py**
+- **Purpose**: Combines keyword and semantic search for comprehensive results
+- **Input**: Search query + number of results needed
+- **Process**:
+  - Calls PostgreSQL FTS retriever for keyword matches
+  - Calls Milvus vector retriever for semantic matches  
+  - Applies RRF formula to merge and re-rank results
+  - Handles deduplication when same email found by both methods
+- **Output**: Unified ranked list of most relevant emails
+- **Strengths**: Gets both exact matches AND related concepts
+- **Use Case**: Most email searches where you want comprehensive, intelligent results
+
+**Integration in Email Manager**
+```python
+# How it's used in ingestion/email/manager.py
+def search_emails_hybrid(self, query: str, top_k: int = 5):
+    # This method uses the hybrid retriever to search emails
+    return self.hybrid_retriever.search(query, k=top_k)
+```
+
+**Advanced Implementation Archive**
+- **Location**: `backup/unused_retrievers/processors_advanced_implementation/`
+- **Why Archived**: Had more features but wasn't compatible with LangChain
+- **Features**: Custom result classes, more sophisticated query preprocessing
+- **Decision**: Kept simpler version that works with existing RAG pipeline
+
+#### How Email Search Actually Works (Step-by-Step)
+
+1. **User Searches**: Types query like "budget meeting next week" in the web interface
+
+2. **Email Manager Receives Query**: `ingestion/email/manager.py` calls `search_emails_hybrid()`
+
+3. **Hybrid Retriever Executes Two Searches in Parallel**:
+   - **PostgreSQL FTS**: Looks for emails containing "budget", "meeting", "next", "week"
+   - **Vector Search**: Finds emails conceptually similar (financial planning, scheduled meetings, etc.)
+
+4. **Both Return Ranked Lists**:
+   - FTS: 10 emails ranked by keyword match strength
+   - Vector: 10 emails ranked by semantic similarity
+
+5. **RRF Fusion Combines Results**:
+   - Calculates combined score for each email
+   - Emails found by both methods get highest scores
+   - Creates final unified ranking
+
+6. **Results Returned to Web Interface**: Top 5-10 most relevant emails with content and metadata
+
+7. **RAG Context Assembly**: Selected email content provides context for LLM to generate intelligent responses
+
+#### Why This Approach Works Better
+
+**Traditional Keyword Search Problems**:
+- Miss relevant emails that use different terminology
+- Can't understand context or relationships between concepts
+- Often return too many irrelevant results with common keywords
+
+**Vector Search Problems**:
+- Sometimes miss obvious exact keyword matches
+- Can be "too smart" and return conceptually related but not directly relevant content
+- Harder to debug why certain results were chosen
+
+**Hybrid Solution Benefits**:
+- **Precision**: Gets exact keyword matches when they exist
+- **Recall**: Finds related content even with different wording  
+- **Relevance**: Documents found by both methods are usually most relevant
+- **Fallback**: If one method fails, the other still works
+- **Explainable**: Can see why each result was chosen (keywords vs. concepts)
 
 ### Search and Retrieval Flow
 1. **Query Processing**: User search queries processed through web interface

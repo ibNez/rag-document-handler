@@ -1,5 +1,5 @@
 """
-PostgreSQL Database Manager for RAG Document Handler
+PostgreSQL Database Manager for RAG Knowledgebase Manager
 Handles metadata storage and complex queries for document management.
 """
 
@@ -112,6 +112,7 @@ class PostgreSQLManager:
             id SERIAL PRIMARY KEY,
             message_id TEXT UNIQUE NOT NULL,
             from_addr TEXT,
+            to_addrs JSONB,
             subject TEXT,
             date_utc TIMESTAMP,
             header_hash TEXT UNIQUE NOT NULL,
@@ -121,6 +122,20 @@ class PostgreSQLManager:
             headers JSONB,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        
+                
+        -- Email chunks table for hybrid retrieval
+        CREATE TABLE IF NOT EXISTS email_chunks (
+            chunk_id VARCHAR(255) PRIMARY KEY,
+            email_id TEXT NOT NULL,
+            chunk_text TEXT NOT NULL,
+            chunk_index INTEGER NOT NULL,
+            token_count INTEGER,
+            chunk_hash VARCHAR(64),
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            CONSTRAINT fk_email_chunks_email FOREIGN KEY (email_id) REFERENCES emails(message_id) ON DELETE CASCADE,
+            CONSTRAINT uk_email_chunks_position UNIQUE(email_id, chunk_index)
         );
         
                 -- URLs table (migrated from SQLite)
@@ -162,8 +177,13 @@ class PostgreSQLManager:
             use_ssl INTEGER,
             refresh_interval_minutes INTEGER,
             last_synced TIMESTAMP,
-            last_update_status TEXT
+            last_update_status TEXT,
+            last_synced_offset INTEGER DEFAULT 0,
+            total_emails_in_mailbox INTEGER DEFAULT 0
         );
+        
+        -- Add total_emails_in_mailbox column if it doesn't exist (migration)
+        ALTER TABLE email_accounts ADD COLUMN IF NOT EXISTS total_emails_in_mailbox INTEGER DEFAULT 0;
         
         -- Create indexes for performance
         CREATE INDEX IF NOT EXISTS idx_documents_document_id ON documents(document_id);
@@ -178,6 +198,14 @@ class PostgreSQLManager:
         CREATE INDEX IF NOT EXISTS idx_emails_date_utc ON emails(date_utc);
         CREATE INDEX IF NOT EXISTS idx_emails_content_hash ON emails(content_hash);
         
+        -- Email chunks indexes
+        CREATE INDEX IF NOT EXISTS idx_email_chunks_email_id ON email_chunks(email_id);
+        CREATE INDEX IF NOT EXISTS idx_email_chunks_hash ON email_chunks(chunk_hash);
+        CREATE INDEX IF NOT EXISTS idx_email_chunks_position ON email_chunks(email_id, chunk_index);
+        
+        -- Email accounts indexes
+        CREATE INDEX IF NOT EXISTS idx_email_accounts_offset ON email_accounts(last_synced_offset);
+        
         CREATE INDEX IF NOT EXISTS idx_urls_url ON urls(url);
         CREATE INDEX IF NOT EXISTS idx_urls_status ON urls(status);
         
@@ -191,6 +219,10 @@ class PostgreSQLManager:
         -- Email FTS index
         CREATE INDEX IF NOT EXISTS idx_emails_fts ON emails 
         USING GIN(to_tsvector('english', COALESCE(subject, '') || ' ' || COALESCE(content, '')));
+        
+        -- Email chunks FTS index
+        CREATE INDEX IF NOT EXISTS idx_email_chunks_fts ON email_chunks 
+        USING GIN(to_tsvector('english', chunk_text));
         """
         
         with self.get_connection() as conn:

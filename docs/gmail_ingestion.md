@@ -1,6 +1,6 @@
 # Gmail Email Ingestion
 
-This guide covers how to ingest emails from Gmail into RAG Document Handler.
+This guide covers how to ingest emails from Gmail into RAG Knowledgebase Manager.
 
 ## Prerequisites
 
@@ -15,7 +15,7 @@ This guide covers how to ingest emails from Gmail into RAG Document Handler.
    - The process produces a `token.json` file containing the access and refresh tokens. Store this file somewhere the application can read (e.g. `~/.config/gmail/token.json`).
 4. **Required scopes**
    - The connector only needs read access: `https://www.googleapis.com/auth/gmail.readonly`.
-5. **Configure RAG Document Handler**
+5. **Configure RAG Knowledgebase Manager**
    - Set `EMAIL_ENABLED=true` in your environment to activate email ingestion.
    - Configure `EMAIL_SYNC_INTERVAL_SECONDS` to control how often accounts are synchronized (default `300`).
    - Add a Gmail account to the `email_accounts` table (via UI or SQL) with the following fields:

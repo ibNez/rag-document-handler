@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Ask AI - RAG Document Handler</title>
+    <title>Ask AI - RAG Knowledgebase Manager</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <style>
@@ -32,7 +32,7 @@
     <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
         <div class="container">
             <a class="navbar-brand" href="{{ url_for('index') }}">
-                <i class="fas fa-database me-2"></i>RAG Document Handler
+                <i class="fas fa-database me-2"></i>RAG Knowledgebase Manager
             </a>
             <div class="navbar-nav ms-auto">
                 <a class="nav-link" href="{{ url_for('index') }}">
@@ -233,10 +233,10 @@
                                                     {% for result in rag_results.analysis_info.milvus_results %}
                                                         <tr>
                                                             <td>{{ result.rank }}</td>
-                                                            <td>{{ "%.4f"|format(result.score) }}</td>
+                                                            <td>{{ "%.4f"|format(result.similarity_score) }}</td>
                                                             <td class="small">{{ result.source }}</td>
                                                             <td>{{ result.page }}</td>
-                                                            <td><span class="badge bg-secondary">{{ result.category_type }}</span></td>
+                                                            <td><span class="badge bg-secondary">{{ result.category_type if result.category_type else result.category }}</span></td>
                                                             <td class="small">{{ result.topic }}</td>
                                                             <td class="small" style="max-width: 300px;">{{ result.content_preview }}</td>
                                                         </tr>
@@ -338,7 +338,7 @@
                                                     </small>
                                                 </div>
                                                 <span class="badge bg-info">
-                                                    {{ "%.3f"|format(source.score) }}
+                                                    {{ "%.3f"|format(source.similarity_score) }}
                                                 </span>
                                             </div>
                                             <div class="mt-2">
@@ -411,6 +411,228 @@
         {% endif %}
     </div>
 
+    <!-- Email Display Modal -->
+    <div class="modal fade" id="emailModal" tabindex="-1" aria-labelledby="emailModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-lg modal-dialog-scrollable">
+            <div class="modal-content">
+                <div class="modal-header bg-primary text-white">
+                    <h5 class="modal-title" id="emailModalLabel">
+                        <i class="fas fa-envelope me-2"></i>Email Details
+                    </h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div id="emailContent">
+                        <div class="text-center">
+                            <div class="spinner-border text-primary" role="status">
+                                <span class="visually-hidden">Loading...</span>
+                            </div>
+                            <p class="mt-2">Loading email...</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
+                        <i class="fas fa-times me-1"></i>Close
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    
+    <script>
+        // Email display functionality
+        function displayEmail(emailId) {
+            console.log('Displaying email:', emailId);
+            
+            // Reset modal content
+            document.getElementById('emailContent').innerHTML = `
+                <div class="text-center">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                    <p class="mt-2">Loading email...</p>
+                </div>
+            `;
+            
+            // Show modal
+            const emailModal = new bootstrap.Modal(document.getElementById('emailModal'));
+            emailModal.show();
+            
+            // Fetch email data
+            fetch(`/email/${emailId}`)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                    }
+                    return response.json();
+                })
+                .then(emailData => {
+                    console.log('Email data received:', emailData);
+                    displayEmailContent(emailData);
+                })
+                .catch(error => {
+                    console.error('Error fetching email:', error);
+                    document.getElementById('emailContent').innerHTML = `
+                        <div class="alert alert-danger">
+                            <i class="fas fa-exclamation-triangle me-2"></i>
+                            Failed to load email: ${error.message}
+                        </div>
+                    `;
+                });
+        }
+        
+        function displayEmailContent(emailData) {
+            const formatDate = (dateStr) => {
+                if (!dateStr || dateStr === 'Unknown Date') return 'Unknown Date';
+                try {
+                    return new Date(dateStr).toLocaleString();
+                } catch (e) {
+                    return dateStr;
+                }
+            };
+            
+            const formatSize = (bytes) => {
+                if (!bytes) return 'Unknown';
+                const units = ['B', 'KB', 'MB', 'GB'];
+                let size = bytes;
+                let unitIndex = 0;
+                while (size >= 1024 && unitIndex < units.length - 1) {
+                    size /= 1024;
+                    unitIndex++;
+                }
+                return `${size.toFixed(1)} ${units[unitIndex]}`;
+            };
+            
+            let attachmentsHtml = '';
+            if (emailData.attachments && emailData.attachments.length > 0) {
+                attachmentsHtml = `
+                    <div class="mt-3">
+                        <h6><i class="fas fa-paperclip me-2"></i>Attachments (${emailData.attachments.length})</h6>
+                        <div class="list-group">
+                            ${emailData.attachments.map(att => `
+                                <div class="list-group-item d-flex justify-content-between align-items-center">
+                                    <div>
+                                        <i class="fas fa-file me-2"></i>
+                                        <strong>${att.filename}</strong>
+                                        <small class="text-muted d-block">${att.content_type}</small>
+                                    </div>
+                                    <span class="badge bg-secondary">${formatSize(att.size)}</span>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                `;
+            }
+            
+            const html = `
+                <div class="email-details">
+                    <!-- Email Header -->
+                    <div class="card border-0 bg-light mb-3">
+                        <div class="card-body">
+                            <div class="row g-3">
+                                <div class="col-12">
+                                    <h5 class="mb-1">${emailData.subject}</h5>
+                                    <small class="text-muted">Email ID: ${emailData.email_id}</small>
+                                </div>
+                                <div class="col-md-6">
+                                    <strong>From:</strong><br>
+                                    <span class="text-muted">${emailData.sender}</span>
+                                </div>
+                                <div class="col-md-6">
+                                    <strong>Date:</strong><br>
+                                    <span class="text-muted">${formatDate(emailData.email_date)}</span>
+                                </div>
+                                <div class="col-md-6">
+                                    <strong>To:</strong><br>
+                                    <span class="text-muted">${emailData.recipients || 'Not specified'}</span>
+                                </div>
+                                <div class="col-md-6">
+                                    <strong>Account:</strong><br>
+                                    <span class="text-muted">${emailData.account_name || 'Unknown'} (${emailData.account_email || 'Unknown'})</span>
+                                </div>
+                                ${emailData.folder ? `
+                                <div class="col-md-6">
+                                    <strong>Folder:</strong><br>
+                                    <span class="text-muted">${emailData.folder}</span>
+                                </div>
+                                ` : ''}
+                                ${emailData.thread_id ? `
+                                <div class="col-md-6">
+                                    <strong>Thread:</strong><br>
+                                    <span class="text-muted">${emailData.thread_id}</span>
+                                </div>
+                                ` : ''}
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Email Content -->
+                    <div class="card">
+                        <div class="card-header">
+                            <h6 class="mb-0">
+                                <i class="fas fa-file-text me-2"></i>Content
+                                <span class="badge bg-info ms-2">${emailData.content_type}</span>
+                            </h6>
+                        </div>
+                        <div class="card-body">
+                            <div class="email-content" style="max-height: 400px; overflow-y: auto; border: 1px solid #dee2e6; padding: 15px; border-radius: 5px; background-color: #f8f9fa;">
+                                ${emailData.content_display || 'No content available'}
+                            </div>
+                        </div>
+                    </div>
+                    
+                    ${attachmentsHtml}
+                    
+                    <!-- Technical Details -->
+                    <div class="mt-3">
+                        <div class="accordion" id="technicalDetails">
+                            <div class="accordion-item">
+                                <h2 class="accordion-header" id="headingTechnical">
+                                    <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" 
+                                            data-bs-target="#collapseTechnical" aria-expanded="false" 
+                                            aria-controls="collapseTechnical">
+                                        <i class="fas fa-cog me-2"></i>Technical Details
+                                    </button>
+                                </h2>
+                                <div id="collapseTechnical" class="accordion-collapse collapse" 
+                                     aria-labelledby="headingTechnical" data-bs-parent="#technicalDetails">
+                                    <div class="accordion-body">
+                                        <div class="row g-2">
+                                            <div class="col-md-6">
+                                                <strong>Message ID:</strong><br>
+                                                <small class="text-muted font-monospace">${emailData.message_id || 'Not available'}</small>
+                                            </div>
+                                            <div class="col-md-6">
+                                                <strong>In Reply To:</strong><br>
+                                                <small class="text-muted font-monospace">${emailData.in_reply_to || 'Not a reply'}</small>
+                                            </div>
+                                            <div class="col-md-6">
+                                                <strong>Has Attachments:</strong><br>
+                                                <span class="badge ${emailData.has_attachments ? 'bg-success' : 'bg-secondary'}">
+                                                    ${emailData.has_attachments ? 'Yes' : 'No'}
+                                                </span>
+                                            </div>
+                                            <div class="col-md-6">
+                                                <strong>Account ID:</strong><br>
+                                                <span class="text-muted">${emailData.account_id}</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            document.getElementById('emailContent').innerHTML = html;
+        }
+        
+        // Make displayEmail function globally available
+        window.displayEmail = displayEmail;
+    </script>
 </body>
 </html>

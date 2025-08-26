@@ -1,11 +1,11 @@
 #!/bin/bash
 
-# RAG Document Handler - Uninstall Script
+# RAG Knowledge Base Manager - Uninstall Script
 # This script completely removes the installation and cleans up all resources
 
 # Show help
 show_help() {
-    echo "🗑️  RAG Document Handler - Uninstall Script"
+    echo "🗑️  RAG Knowledge Base Manager - Uninstall Script"
     echo "============================================="
     echo ""
     echo "Usage: $0 [OPTIONS]"
@@ -48,11 +48,11 @@ case "$1" in
         ;;
 esac
 
-echo "🗑️  RAG Document Handler - Uninstall Script"
+echo "🗑️  RAG Knowledge Base Manager - Uninstall Script"
 echo "============================================="
 echo ""
 echo "⚠️  WARNING: This will remove:"
-echo "   - RAG Document Handler Docker containers and volumes"
+echo "   - RAG Knowledge Base Manager Docker containers and volumes"
 echo "   - Project virtual environment (.venv)"
 echo "   - Project database files and logs"
 echo "   - Uploaded documents and staging files"

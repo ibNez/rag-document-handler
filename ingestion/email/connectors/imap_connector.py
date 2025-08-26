@@ -18,6 +18,7 @@ from email.header import decode_header, make_header
 from email.message import Message
 from email.utils import getaddresses, parsedate_to_datetime
 import base64
+import hashlib
 import imaplib
 import logging
 import quopri
@@ -117,52 +118,78 @@ class IMAPConnector(EmailConnector):
                 if status != "OK" or not msg_data or not msg_data[0]:
                     continue
                 try:
-                    msg = message_from_bytes(msg_data[0][1])
-                    rec = self._parse_email(msg)
-                    rec["server_type"] = "imap"
-                    results.append(rec)
+                    msg_data_content = msg_data[0][1]
+                    if isinstance(msg_data_content, bytes):
+                        msg = message_from_bytes(msg_data_content)
+                        rec = self._parse_email(msg)
+                        rec["server_type"] = "imap"
+                        results.append(rec)
+                    else:
+                        logger.warning("Invalid message data type for email %s", eid)
                 except Exception as exc:  # pragma: no cover - defensive
                     decoded_eid = eid.decode() if isinstance(eid, bytes) else str(eid)
-                    logger.warning(
-                        "Failed to parse message %s: %s", decoded_eid, exc
-                    )
-                    results.append(
-                        {
-                            "message_id": None,
-                            "thread_id": None,
-                            "subject": None,
-                            "from_addr": None,
-                            "to_addrs": [],
-                            "cc_addrs": [],
-                            "date_utc": None,
-                            "received_utc": None,
-                            "in_reply_to": None,
-                            "references_ids": [],
-                            "is_reply": 0,
-                            "is_forward": 0,
-                            "raw_size_bytes": None,
-                            "body_text": None,
-                            "body_html": None,
-                            "language": None,
-                            "has_attachments": 0,
-                            "attachment_manifest": [],
-                            "ingested_at": None,
-                            "updated_at": None,
-                            "content_hash": None,
-                            "summary": None,
-                            "keywords": None,
-                            "auto_topic": None,
-                            "manual_topic": None,
-                            "topic_confidence": None,
-                            "topic_version": None,
-                            "error_state": f"parse_error: {exc.__class__.__name__}",
-                            "direction": None,
-                            "participants": [],
-                            "participants_hash": None,
-                            "to_primary": None,
-                            "server_type": "imap",
-                        }
-                    )
+                    
+                    # Enhanced logging to understand what's failing
+                    logger.error("=" * 60)
+                    logger.error("IMAP EMAIL PARSING FAILURE - Email ID: %s", decoded_eid)
+                    logger.error("Exception Type: %s", type(exc).__name__)
+                    logger.error("Exception Message: %s", str(exc))
+                    
+                    # Log raw message data for debugging
+                    try:
+                        raw_data = msg_data[0][1] if msg_data and msg_data[0] else None
+                        if raw_data:
+                            if isinstance(raw_data, bytes):
+                                logger.error("Raw message size: %d bytes", len(raw_data))
+                                # Log first 500 characters to see structure
+                                preview = raw_data[:500].decode('utf-8', errors='replace')
+                                logger.error("Raw message preview (first 500 chars):\n%s", preview)
+                                
+                                # Try to identify specific headers that might be problematic
+                                try:
+                                    msg = message_from_bytes(raw_data)
+                                    logger.error("Successfully parsed email object - issue is in _parse_email method")
+                                    logger.error("Message headers:")
+                                    for header_name in ['Message-ID', 'From', 'To', 'Subject', 'Date', 'Content-Type']:
+                                        header_value = msg.get(header_name)
+                                        logger.error("  %s: %r", header_name, header_value)
+                                        
+                                    # Try to parse each field individually to isolate the issue
+                                    try:
+                                        subject = self._decode_header_value(msg.get("Subject"))
+                                        logger.error("Subject parsing: SUCCESS - %r", subject)
+                                    except Exception as subj_exc:
+                                        logger.error("Subject parsing: FAILED - %s", subj_exc)
+                                        
+                                    try:
+                                        message_id = (msg.get("Message-ID") or "").strip() or None
+                                        logger.error("Message-ID parsing: SUCCESS - %r", message_id)
+                                    except Exception as mid_exc:
+                                        logger.error("Message-ID parsing: FAILED - %s", mid_exc)
+                                        
+                                    try:
+                                        date_raw = msg.get("Date")
+                                        if date_raw:
+                                            dt = parsedate_to_datetime(date_raw)
+                                            logger.error("Date parsing: SUCCESS - %r -> %r", date_raw, dt)
+                                        else:
+                                            logger.error("Date parsing: No date header found")
+                                    except Exception as date_exc:
+                                        logger.error("Date parsing: FAILED - %s", date_exc)
+                                        
+                                except Exception as parse_exc:
+                                    logger.error("Failed to parse raw email with message_from_bytes: %s", parse_exc)
+                            else:
+                                logger.error("Raw message data is not bytes: %r", type(raw_data))
+                        else:
+                            logger.error("No raw message data available")
+                    except Exception as log_exc:
+                        logger.error("Failed to log debug info: %s", log_exc)
+                    
+                    logger.error("=" * 60)
+                    
+                    # Skip malformed emails for now but with better visibility
+                    continue
 
             logger.info(
                 "Retrieved %d emails from IMAP server %s for %s",
@@ -198,8 +225,24 @@ class IMAPConnector(EmailConnector):
 
     # ------------------------------------------------------------------
     def _parse_email(self, msg: Message) -> Dict[str, Any]:
+        """Parse email without offset information (for backward compatibility)."""
+        return self._parse_email_with_offset(msg, None)
+    
+    def _parse_email_with_offset(self, msg: Message, offset: Optional[int] = None) -> Dict[str, Any]:
+        """Parse email with optional offset information for better error logging."""
         subject = self._decode_header_value(msg.get("Subject")) or None
         message_id = (msg.get("Message-ID") or "").strip() or None
+        
+        # Skip emails without Message-ID - these are corrupted/malformed
+        if not message_id:
+            if offset is not None:
+                logger.warning("Email missing required Message-ID header at offset %d: subject=%r, from=%r, date=%r", 
+                             offset, subject, msg.get('From'), msg.get('Date'))
+            else:
+                logger.warning("Email missing required Message-ID header: subject=%r, from=%r, date=%r", 
+                             subject, msg.get('From'), msg.get('Date'))
+            raise ValueError("Email missing required Message-ID header")
+        
         in_reply_to = (msg.get("In-Reply-To") or "").strip() or None
         references_raw = msg.get("References") or ""
         references_ids = [r.strip("<> ") for r in references_raw.split() if "@" in r] if references_raw else []
@@ -349,8 +392,9 @@ class IMAPConnector(EmailConnector):
         self,
         email_manager,
         since_date: Optional[datetime] = None,
-        start_offset: int = 0
-    ) -> tuple[List[Dict[str, Any]], bool]:
+        start_offset: int = 0,
+        fetch_size: Optional[int] = None
+    ) -> tuple[List[Dict[str, Any]], bool, int]:
         """Fetch emails with intelligent duplicate detection and replacement.
         
         Implements the exact workflow specified:
@@ -360,9 +404,10 @@ class IMAPConnector(EmailConnector):
         4. Fetch additional emails equal to duplicates skipped to maintain batch size
         5. Repeat until batch size reached or end of mailbox
         
-        Returns a tuple of (emails, has_more) where:
+        Returns a tuple of (emails, has_more, total_emails) where:
         - emails: List of unique email records not already in database
         - has_more: Boolean indicating if more emails are available
+        - total_emails: Total number of emails in the mailbox
         
         Parameters
         ----------
@@ -405,14 +450,14 @@ class IMAPConnector(EmailConnector):
                 logger.warning(
                     "IMAP login failed for %s: status=%s", self.email_address, status
                 )
-                return [], False
+                return [], False, 0
 
             status, _ = conn.select(self.mailbox)
             if status != "OK":
                 logger.warning(
                     "IMAP select failed for mailbox %s: status=%s", self.mailbox, status
                 )
-                return [], False
+                return [], False, 0
 
             # Search for emails
             criteria: List[str] = []
@@ -422,11 +467,11 @@ class IMAPConnector(EmailConnector):
             status, messages = conn.search(None, search_query)
             if status != "OK":
                 logger.warning("IMAP search failed: status=%s", status)
-                return [], False
+                return [], False, 0
                 
             email_ids = messages[0].split()
             total_emails = len(email_ids)
-            target_batch_size = self.batch_limit or 50
+            target_batch_size = fetch_size or self.batch_limit or 50
             
             logger.info(
                 "Found %d total emails, target batch size: %d, start offset: %d",
@@ -438,7 +483,7 @@ class IMAPConnector(EmailConnector):
             # Check if we've reached the end
             if start_offset >= total_emails:
                 logger.info("Reached end of mailbox at offset %d", start_offset)
-                return [], False
+                return [], False, total_emails
             
             unique_emails: List[Dict[str, Any]] = []
             # In-memory dedupe within this batch to avoid read-before-write.
@@ -467,7 +512,10 @@ class IMAPConnector(EmailConnector):
                 batch_unique_count = 0
                 batch_duplicate_count = 0
                 
-                for eid in batch_ids:
+                for i, eid in enumerate(batch_ids):
+                    # Calculate the actual offset position for this email
+                    email_offset = current_offset + i
+                    
                     status, msg_data = conn.fetch(eid, "(RFC822)")
                     if status != "OK" or not msg_data or not msg_data[0]:
                         continue
@@ -476,7 +524,7 @@ class IMAPConnector(EmailConnector):
                         msg_data_content = msg_data[0][1]
                         if isinstance(msg_data_content, bytes):
                             msg = message_from_bytes(msg_data_content)
-                            rec = self._parse_email(msg)
+                            rec = self._parse_email_with_offset(msg, email_offset)
                             rec["server_type"] = "imap"
                             
                             # Generate header hash for duplicate detection
@@ -493,11 +541,11 @@ class IMAPConnector(EmailConnector):
                                 batch_duplicate_count += 1
                                 logger.debug("Skipped duplicate in batch %s", rec.get("message_id", "unknown"))
                         else:
-                            logger.warning("Invalid message data type for email %s", eid)
+                            logger.warning("Invalid message data type for email %s at offset %d", eid, email_offset)
                             
                     except Exception as exc:
                         decoded_eid = eid.decode() if isinstance(eid, bytes) else str(eid)
-                        logger.warning("Failed to parse message %s: %s", decoded_eid, exc)
+                        logger.warning("Failed to parse email %s at offset %d in smart batch: %s", decoded_eid, email_offset, exc)
                 
                 # Move offset forward by the number of emails we processed
                 current_offset = end_offset
@@ -526,6 +574,16 @@ class IMAPConnector(EmailConnector):
             # Determine if there are more emails available
             has_more = current_offset < total_emails
             
+            # CRITICAL: Validate emails list before returning to processor
+            logger.info("CONNECTOR VALIDATION: About to return %d emails", len(unique_emails))
+            for i, email in enumerate(unique_emails):
+                if email is None:
+                    logger.error("CRITICAL: Found None email in connector results at index %d!", i)
+                elif not isinstance(email, dict):
+                    logger.error("CRITICAL: Found non-dict in connector results at index %d: %r", i, type(email))
+                elif email.get("message_id") is None:
+                    logger.error("CRITICAL: Found email with None message_id in connector results at index %d", i)
+            
             logger.info(
                 "Smart batch complete: %d unique emails collected, processed up to offset %d/%d, has_more: %s",
                 len(unique_emails),
@@ -534,7 +592,7 @@ class IMAPConnector(EmailConnector):
                 has_more
             )
             
-            return unique_emails, has_more
+            return unique_emails, has_more, total_emails
             
         finally:
             try:

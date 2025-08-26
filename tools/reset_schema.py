@@ -145,7 +145,7 @@ def main():
         postgres_only = False
         milvus_only = False
     
-    print("🔄 RAG Document Handler - Schema Reset Tool")
+    print("🔄 RAG Knowledgebase Manager - Schema Reset Tool")
     print("=" * 50)
     
     success = True
@@ -168,7 +168,7 @@ def main():
         print("🎉 SCHEMA RESET COMPLETED SUCCESSFULLY!")
         print("")
         print("Next steps:")
-        print("1. Restart the RAG Document Handler application")
+        print("1. Restart the RAG Knowledgebase Manager application")
         print("2. Tables and collections will be recreated with:")
         print("   - UNIQUE constraints on content_hash")
         print("   - Proper deduplication logic")

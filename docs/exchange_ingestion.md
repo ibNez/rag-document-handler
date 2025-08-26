@@ -1,13 +1,13 @@
 # Exchange Email Ingestion
 
-This guide covers how to ingest emails from an Exchange server into RAG Document Handler.
+This guide covers how to ingest emails from an Exchange server into RAG Knowledgebase Manager.
 
 ## Prerequisites
 
 1. **Exchange credentials**
    - Obtain the server URL, email address, and password for the Exchange account.
    - The connector uses the [exchangelib](https://github.com/ecederstrand/exchangelib) library and connects via Exchange Web Services (EWS).
-2. **Configure RAG Document Handler**
+2. **Configure RAG Knowledgebase Manager**
    - Set `EMAIL_ENABLED=true` in your environment to activate email ingestion.
    - Configure `EMAIL_SYNC_INTERVAL_SECONDS` to control how often accounts are synchronized (default `300`).
    - Add an Exchange account to the `email_accounts` table (via UI or SQL) with the following fields:

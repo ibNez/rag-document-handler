@@ -2,7 +2,7 @@
 
 ## Overview
 
-The RAG Document Handler now uses PostgreSQL for metadata storage and Milvus for vector embeddings, providing a robust and scalable database architecture.
+The RAG Knowledgebase Manager now uses PostgreSQL for metadata storage and Milvus for vector embeddings, providing a robust and scalable database architecture.
 
 ## Architecture
 

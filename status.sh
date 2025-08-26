@@ -1,15 +1,15 @@
 #!/bin/bash
 
-# RAG Document Handler - Status Check Script
+# RAG Knowledgebase Manager - Status Check Script
 # Shows the current state of the project installation
 
-echo "📊 RAG Document Handler - Project Status"
+echo "📊 RAG Knowledgebase Manager - Project Status"
 echo "========================================"
 echo ""
 
 # Check if we're in the right directory
 if [ ! -f "main.py" ]; then
-    echo "❌ Not in the RAG Document Handler directory"
+    echo "❌ Not in the RAG Knowledgebase Manager directory"
     echo "   Run this script from the project root"
     exit 1
 fi

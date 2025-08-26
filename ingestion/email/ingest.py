@@ -13,7 +13,7 @@ from bs4 import BeautifulSoup
 from .connectors import EmailConnector, IMAPConnector
 from .utils import compute_header_hash
 from .processor import EmailProcessor
-from ingestion.email.email_manager_postgresql import PostgreSQLEmailManager
+from .manager import PostgreSQLEmailManager
 
 CONTENT_HASH_RECIPE_VERSION = 1
 

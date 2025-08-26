@@ -1,51 +1,55 @@
 # Email Processing Documentation
 
-This document describes the refactored email ingestion pipeline, modular architecture, and troubleshooting procedures.
+This document describes the enhanced email ingestion pipeline with robust error handling, corruption detection, and real-time monitoring capabilities.
 
 ## Overview
 
-The email processing system has been refactored into a modular architecture supporting IMAP, POP3, Gmail API, and Exchange protocols with encrypted credential storage, smart batch processing, and automatic scheduling.
+The email processing system features a modular architecture supporting IMAP, POP3, Gmail API, and Exchange protocols with encrypted credential storage, smart batch processing, automatic scheduling, and comprehensive error detection for corrupted emails.
 
-## Refactored Architecture Components
+## Enhanced Architecture Components
 
 ```
 ingestion/email/
 ├── manager.py                     # PostgreSQL-based account management
 ├── email_manager_postgresql.py    # Email message storage and retrieval
 ├── processor.py                   # Email content processing and embedding
-├── orchestrator.py                # Email processing coordination
+├── orchestrator.py                # Email processing coordination with offset tracking
 └── connectors/
-    ├── imap_connector.py          # IMAP protocol handler
+    ├── imap_connector.py          # Enhanced IMAP with corruption detection
     ├── gmail_connector.py         # Gmail API integration
     └── exchange_connector.py      # Exchange server integration
 ```
 
 ### Component Responsibilities
 
-| Component | Purpose |
-|-----------|---------|
-| `manager.py` | Account credentials and configuration management |
-| `email_manager_postgresql.py` | Email message metadata storage |
-| `processor.py` | Content extraction, chunking, and embedding |
-| `orchestrator.py` | Coordinates processing pipeline |
-| `connectors/` | Protocol-specific email retrieval implementations |
+| Component | Purpose | Key Enhancements |
+|-----------|---------|------------------|
+| `manager.py` | Account credentials and configuration management | Fresh data fetching for UI |
+| `email_manager_postgresql.py` | Email message metadata storage | Accurate statistics with DISTINCT counts |
+| `processor.py` | Content extraction, chunking, and embedding | Enhanced validation and error handling |
+| `orchestrator.py` | Coordinates processing pipeline | Offset-aware batch processing |
+| `connectors/` | Protocol-specific email retrieval implementations | Corrupted email detection and validation |
 
-## Processing Pipeline
+## Enhanced Processing Pipeline
 
 ### 1. Account Configuration (manager.py)
 - **Storage**: Email accounts stored in `email_accounts` table via PostgreSQL manager
 - **Encryption**: Passwords encrypted using `ingestion/utils/crypto.py` utilities
 - **Validation**: Connection tested through appropriate connector before saving
 - **Scheduling**: Automatic sync intervals managed by orchestrator
+- **Real-time Updates**: Fresh data fetching for edit operations via `/email_accounts` API endpoint
 
-### 2. Email Fetching (connectors/)
+### 2. Enhanced Email Fetching (connectors/)
 - **Protocol Support**: IMAP, POP3, Gmail API, Exchange with modular connector architecture
+- **Corruption Detection**: Validates Message-ID headers and email structure
+- **Offset-Aware Error Logging**: Reports exact positions where corruption occurs
 - **Batch Processing**: Smart batching implemented in processor.py to avoid duplicates
 - **Offset Management**: Tracks processed emails to resume from last position
-- **Error Handling**: Connector-specific retry logic with exponential backoff
+- **Error Handling**: Fail-fast approach with detailed logging (no hidden fallbacks)
 
-### 3. Content Processing (processor.py)
+### 3. Enhanced Content Processing (processor.py)
 - **Text Extraction**: Plain text extracted from email body with proper encoding handling
+- **Validation**: Message-ID required for all emails (no fallback generation)
 - **Chunking**: Text split using DocumentProcessor for optimal embedding
 - **Deduplication**: Content hashes prevent duplicate processing across accounts
 - **Metadata Preservation**: Subject, sender, recipients, dates maintained in PostgreSQL
@@ -54,6 +58,86 @@ ingestion/email/
 - **PostgreSQL**: Email metadata stored via `email_manager_postgresql.py`
 - **Milvus**: Text embeddings stored with mapped schema fields
 - **Consistency**: Both operations wrapped in error handling for data integrity
+- **Corruption Detection**: Validates Message-ID headers before storage
+- **Offset Tracking**: Maintains processing position for resuming interrupted operations
+
+## Enhanced Database Schema
+
+### Email Accounts Table
+```sql
+email_accounts:
+  id (PRIMARY KEY)
+  email_address (UNIQUE)
+  password (ENCRYPTED)
+  imap_server
+  imap_port
+  smtp_server
+  smtp_port
+  protocol
+  username
+  sync_interval
+  last_sync
+  enabled
+  offset_position (NEW - tracks processing position for resuming)
+```
+
+### Enhanced Email Messages Storage
+```sql
+emails:
+  id (PRIMARY KEY)
+  message_id (UNIQUE, REQUIRED)  # No fallback generation
+  subject
+  sender
+  recipients
+  timestamp
+  email_account_id (FOREIGN KEY)
+  processed
+  created_at
+  content_hash (for deduplication)
+  validation_status (NEW - corruption detection results)
+```
+
+## Enhanced Error Handling & Monitoring
+
+### Corrupted Email Detection
+The system now includes robust validation for corrupted emails with offset-aware logging:
+
+```python
+def _parse_email_with_offset(self, msg_data, offset):
+    """Enhanced email parsing with corruption detection and offset logging."""
+    try:
+        email_msg = email.message_from_bytes(msg_data)
+        
+        # Validate Message-ID (required, no fallback generation)
+        message_id = email_msg.get('Message-ID')
+        if not message_id:
+            logger.error(f"Email at offset {offset} missing required Message-ID header")
+            return None
+            
+        # Validate basic email structure
+        if not email_msg.get('From') or not email_msg.get('Date'):
+            logger.error(f"Email at offset {offset} missing required headers")
+            return None
+            
+        return email_msg
+        
+    except Exception as e:
+        logger.error(f"Failed to parse email at offset {offset}: {str(e)}")
+        return None
+```
+
+### Enhanced Error Logging Features
+- **Offset Position Tracking**: Exact location of corrupted emails reported in logs
+- **Detailed Validation**: Message-ID and header validation with specific error codes
+- **Fail-Fast Approach**: No hidden fallbacks that mask underlying corruption issues
+- **Comprehensive Monitoring**: Real-time error tracking with detailed context
+
+### Real-Time Dashboard Monitoring
+- **Auto-Refresh System**: All dashboard panels refresh every 10 seconds automatically
+- **Fresh Data API**: Edit modals fetch current database values via AJAX endpoints
+- **Live Statistics**: Email counts and processing status updated in real-time
+- **Error Visibility**: Processing errors immediately visible in dashboard interface
+- **Offset Management**: Manual offset reset capability through edit interface
 
 ## Schema Mapping
 
