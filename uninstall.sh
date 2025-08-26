@@ -51,11 +51,18 @@ esac
 echo "🗑️  RAG Knowledge Base Manager - Uninstall Script"
 echo "============================================="
 echo ""
-echo "⚠️  WARNING: This will remove:"
-echo "   - RAG Knowledge Base Manager Docker containers and volumes"
+echo "⚠️  WARNING: This will process:"
+echo "   - Each Docker container individually (you'll be asked about each one)"
+echo "   - Each Docker volume individually (you'll be asked about each one)"
 echo "   - Project virtual environment (.venv)"
 echo "   - Project database files and logs"
 echo "   - Uploaded documents and staging files"
+echo ""
+echo "💡 For each container, you'll be asked:"
+echo "   1. Remove container? (Default: Yes)"
+echo "   2. Remove volume? (Default: No - preserves data)"
+echo ""
+echo "🔄 Keeping volumes allows you to reinstall and retain your data."
 echo ""
 
 # Confirmation prompt
@@ -102,48 +109,88 @@ safe_remove_file() {
 
 # Step 1: Stop and remove Docker containers
 echo ""
-echo "🐳 Stopping and removing Docker containers..."
+echo "🐳 Managing Docker containers and volumes..."
 if command -v docker >/dev/null 2>&1; then
     if docker info >/dev/null 2>&1; then
-        # Stop project containers specifically
-        echo "   Stopping project containers..."
-        if $DRY_RUN; then
-            echo "   [DRY RUN] Would stop: rag-document-handler containers"
+        # Get list of project containers
+        containers=$(docker ps -a --filter "name=rag-document-handler" --format "{{.Names}}" 2>/dev/null || true)
+        
+        if [ -z "$containers" ]; then
+            echo "ℹ️  No rag-document-handler containers found"
         else
-            docker stop $(docker ps -q --filter "name=rag-document-handler") 2>/dev/null || true
+            echo "📦 Found project containers:"
+            echo "$containers" | sed 's/^/   - /'
+            echo ""
+            
+            if $DRY_RUN; then
+                echo "🔍 [DRY RUN] Would process each container individually:"
+                echo "$containers" | while read -r container; do
+                    if [ -n "$container" ]; then
+                        echo ""
+                        echo "   [DRY RUN] Container: $container"
+                        echo "   [DRY RUN] Would ask: Remove container '$container'? (Y/n)"
+                        echo "   [DRY RUN] Would ask: Remove volume for '$container'? (y/N)"
+                        echo "   [DRY RUN] Would remove container and volume based on choices"
+                    fi
+                done
+                
+                # Also handle compose services
+                echo ""
+                echo "   [DRY RUN] Would also process docker-compose services:"
+                echo "   [DRY RUN] Services: webui, milvus, postgres"
+                echo "   [DRY RUN] Would ask about each service container and volume individually"
+            else
+                # Process each container individually
+                echo ""
+                echo "🗑️  Processing containers:"
+                
+                # Process main compose services
+                services=("webui" "milvus" "postgres")
+                for service in "${services[@]}"; do
+                    container_name="rag-document-handler-${service}-1"
+                    container_exists=$(docker ps -a --filter "name=$container_name" --format "{{.Names}}" 2>/dev/null || true)
+                    
+                    if [ -n "$container_exists" ]; then
+                        echo ""
+                        echo "📦 Container: $service ($container_name)"
+                        
+                        # Ask about removing container (default Yes)
+                        read -r -p "   Remove container '$service'? (Y/n): " remove_container
+                        if [[ ! $remove_container =~ ^[Nn]$ ]]; then
+                            
+                            # Ask about removing volume (default No)
+                            read -r -p "   Remove volume for '$service'? (y/N): " remove_volume
+                            if [[ $remove_volume =~ ^[Yy]$ ]]; then
+                                echo "   ✅ Removing container '$service' and any volumes"
+                                docker compose -p rag-document-handler rm -f -s -v "$service" 2>/dev/null || true
+                                # Remove volume by name pattern if it exists
+                                docker volume ls -q | grep -E "rag-document-handler.*${service}" | xargs -r docker volume rm 2>/dev/null || true
+                            else
+                                echo "   ✅ Removing container '$service' (preserving any volumes)"
+                                docker compose -p rag-document-handler rm -f -s "$service" 2>/dev/null || true
+                            fi
+                        else
+                            echo "   ℹ️  Keeping container '$service'"
+                        fi
+                    else
+                        echo ""
+                        echo "📦 Container: $service (not found)"
+                    fi
+                done
+                
+                # Clean up any remaining containers that match the pattern
+                remaining_containers=$(docker ps -aq --filter "name=rag-document-handler" 2>/dev/null || true)
+                if [ -n "$remaining_containers" ]; then
+                    echo ""
+                    echo "🧹 Cleaning up any remaining project containers..."
+                    echo "$remaining_containers" | xargs -r docker rm -f 2>/dev/null || true
+                fi
+            fi
         fi
         
-        # Remove project containers and volumes specifically
-        echo "   Removing project containers and volumes..."
-        if $DRY_RUN; then
-            echo "   [DRY RUN] Would remove: rag-document-handler containers and volumes"
-        else
-            # Use project-specific compose down
-            docker compose -p rag-document-handler down --volumes 2>/dev/null || true
-            # Also remove any remaining project containers
-            docker ps -aq --filter "name=rag-document-handler" | xargs -r docker rm -f 2>/dev/null || true
-        fi
-        
-        # Remove project-specific containers only
-        echo "   Removing project containers..."
-        if $DRY_RUN; then
-            echo "   [DRY RUN] Would remove containers matching: rag-document-handler"
-            docker ps -aq --filter "name=rag-document-handler" | sed 's/^/   [DRY RUN] Container: /' || true
-        else
-            docker ps -aq --filter "name=rag-document-handler" | xargs -r docker rm -f 2>/dev/null || true
-        fi
-        
-        # Remove project-specific volumes (if any exist)
-        echo "   Removing project volumes..."
-        if $DRY_RUN; then
-            echo "   [DRY RUN] Would remove volumes matching: rag-document-handler"
-            docker volume ls -q | grep -E "rag-document-handler" | sed 's/^/   [DRY RUN] Volume: /' 2>/dev/null || true
-        else
-            docker volume ls -q | grep -E "rag-document-handler" | xargs -r docker volume rm 2>/dev/null || true
-        fi
-        
-        # Remove project-specific images only
-        echo "   Removing project images..."
+        # Remove project-specific images
+        echo ""
+        echo "🖼️  Removing project images..."
         if $DRY_RUN; then
             echo "   [DRY RUN] Would remove images matching: rag-document-handler*"
             docker images -q --filter "reference=rag-document-handler*" | sed 's/^/   [DRY RUN] Image: /' || true
@@ -302,10 +349,19 @@ fi
 # Check Docker status
 if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
     containers=$(docker ps -a --filter "name=rag" --filter "name=postgres" --filter "name=milvus" -q)
+    volumes=$(docker volume ls -q | grep -E "rag-document-handler" 2>/dev/null || true)
+    
     if [ -z "$containers" ]; then
         echo "✅ No project containers remaining"
     else
         echo "⚠️  Some containers may still exist - run 'docker ps -a' to check"
+    fi
+    
+    if [ -n "$volumes" ]; then
+        echo "ℹ️  Docker volumes preserved - your data is retained for reinstallation"
+        echo "   To view preserved volumes: docker volume ls | grep rag-document-handler"
+    else
+        echo "✅ No project volumes remaining"
     fi
 fi
 
@@ -313,7 +369,8 @@ echo ""
 echo "🎉 Uninstall completed!"
 echo ""
 echo "📋 Summary of actions taken:"
-echo "   ✅ Docker containers and volumes removed"
+echo "   ✅ Docker containers (handled individually based on user choices)"
+echo "   ✅ Docker volumes (handled individually based on user choices)"
 echo "   ✅ Virtual environment removed"
 echo "   ✅ Database files removed"
 echo "   ✅ Log files removed"
@@ -324,6 +381,7 @@ echo ""
 echo "🔄 To reinstall the project:"
 echo "   1. Run: ./setup.sh"
 echo "   2. Follow the setup prompts"
+echo "   3. Any preserved Docker volumes will retain your data"
 echo ""
 echo "💡 Core project files (source code, configs) have been preserved."
 echo "   Only generated/runtime files have been removed."
