@@ -146,6 +146,11 @@ class RAGKnowledgebaseManager:
             self.database_manager = RAGDatabaseManager(postgres_config)
             logger.info("PostgreSQL integration initialized successfully")
             
+            # Set PostgreSQL manager on MilvusManager for hybrid document retrieval
+            if hasattr(self, 'milvus_manager') and self.milvus_manager:
+                self.milvus_manager.set_postgres_manager(self.postgres_manager)
+                logger.info("Document hybrid retrieval initialized")
+            
             # Initialize hybrid retrieval system for email search
             # 
             # WHAT THIS DOES:
@@ -763,6 +768,44 @@ class RAGKnowledgebaseManager:
             logger.info(f"Storing {len(chunks)} chunks in Milvus for document: {filename}")
             self.milvus_manager.insert_documents(filename, chunks)
             logger.info(f"Successfully stored document '{filename}' in Milvus vector database")
+            
+            # Store document chunks in PostgreSQL for hybrid retrieval
+            status.message = "Storing chunks in PostgreSQL..."
+            status.progress = 85
+            
+            if self.postgres_manager:
+                logger.info(f"Storing {len(chunks)} chunks in PostgreSQL for document: {filename}")
+                try:
+                    for i, chunk in enumerate(chunks):
+                        chunk_id = chunk.metadata.get('chunk_id', f"{document_id}#{i}")
+                        chunk_text = chunk.page_content or ''
+                        page_start = chunk.metadata.get('page')
+                        page_end = chunk.metadata.get('page')  # For single page chunks
+                        section_path = chunk.metadata.get('section_path')
+                        element_types = chunk.metadata.get('element_types', [])
+                        token_count = len(chunk_text.split()) if chunk_text else 0
+                        chunk_hash = chunk.metadata.get('content_hash')
+                        
+                        # Store chunk in PostgreSQL
+                        self.postgres_manager.store_document_chunk(
+                            chunk_id=chunk_id,
+                            document_id=document_id,
+                            chunk_text=chunk_text,
+                            chunk_ordinal=i,
+                            page_start=page_start,
+                            page_end=page_end,
+                            section_path=section_path,
+                            element_types=element_types,
+                            token_count=token_count,
+                            chunk_hash=chunk_hash
+                        )
+                    
+                    logger.info(f"Successfully stored {len(chunks)} document chunks in PostgreSQL")
+                except Exception as e:
+                    logger.error(f"Failed to store document chunks in PostgreSQL: {e}")
+                    # Continue with processing, don't fail the entire operation
+            else:
+                logger.warning("PostgreSQL manager not available, skipping document chunk storage")
             
             # Move file to uploaded folder
             uploaded_path = os.path.join(self.config.UPLOADED_FOLDER, filename)

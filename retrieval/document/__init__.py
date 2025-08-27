@@ -2,13 +2,16 @@
 Document Retrieval Module
 Following DEVELOPMENT_RULES.md for all development requirements
 
-This module will contain document-specific retrieval functionality.
-To be implemented in future phases.
+This module provides document-specific retrieval capabilities including:
+- PostgreSQL Full-Text Search (FTS) retrieval
+- Hybrid retrieval combining vector similarity and FTS
+- Advanced filtering and search options
 """
 
-# TODO: Implement document retrieval components
-# - Document hybrid search
-# - Document content search
-# - Document metadata search
+from .postgres_fts_retriever import DocumentPostgresFTSRetriever
+from .hybrid_retriever import DocumentHybridRetriever
 
-__all__ = []
+__all__ = [
+    'DocumentPostgresFTSRetriever',
+    'DocumentHybridRetriever'
+]

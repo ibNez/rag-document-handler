@@ -8,7 +8,6 @@ Core value: provide a single, reproducible, auditable ETL surface for private kn
 
 For detailed guides, architecture notes, and extended documentation, see the [Documentation Directory](docs/README.md).
 
-For recent changes and new features, see the [CHANGELOG](CHANGELOG.md).
 
 ## 🚀 Quick Start
 
