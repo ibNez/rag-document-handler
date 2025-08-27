@@ -40,7 +40,6 @@ We do not use placeholder, stubbed in data, or any other type of fake code.  We 
 - **Database Schema**: Document all database schemas
 - **README updates**: Keep project documentation current
 - **Configuration documentation**: Document all configuration options with comments
-- **Change logs**: Document significant changes
 
 ### 5. Code Annotation Standards
 - **ALWAYS annotate the code properly**

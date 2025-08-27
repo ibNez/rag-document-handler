@@ -32,16 +32,22 @@ class MilvusManager:
     error handling, and comprehensive logging.
     """
     
-    def __init__(self, config: Config) -> None:
+    def __init__(self, config: Config, postgres_manager: Optional[Any] = None) -> None:
         """
         Initialize Milvus manager.
         
         Args:
             config: Application configuration instance
+            postgres_manager: Optional PostgreSQL manager for hybrid retrieval
         """
         self.config = config
+        self.postgres_manager = postgres_manager
         self.collection_name = config.COLLECTION_NAME
         self.connection_args = {"host": config.MILVUS_HOST, "port": config.MILVUS_PORT}
+        
+        # Hybrid retrieval components (initialized on demand)
+        self.document_fts_retriever: Optional[Any] = None
+        self.document_hybrid_retriever: Optional[Any] = None
         
         # Establish Milvus connection (idempotent)
         try:
@@ -73,6 +79,7 @@ class MilvusManager:
         This should only be called once during application initialization.
         """
         self._initialize_collections()
+        self._initialize_hybrid_retrievers()
 
     def _initialize_collections(self) -> None:
         """Initialize all required collections during application startup - let LangChain auto-create."""
@@ -97,6 +104,52 @@ class MilvusManager:
             raise RuntimeError(f"Cannot initialize email collection '{self.email_collection_name}': {e}")
         
         logger.info("All Milvus collections initialized successfully via LangChain auto-creation")
+
+    def set_postgres_manager(self, postgres_manager: Any) -> None:
+        """
+        Set PostgreSQL manager for hybrid retrieval after initialization.
+        
+        Args:
+            postgres_manager: PostgreSQL manager instance
+        """
+        self.postgres_manager = postgres_manager
+        logger.info("PostgreSQL manager set for MilvusManager, initializing hybrid retrievers...")
+        self._initialize_hybrid_retrievers()
+
+    def _initialize_hybrid_retrievers(self) -> None:
+        """Initialize hybrid retrievers for document search if PostgreSQL is available."""
+        if not self.postgres_manager:
+            logger.info("PostgreSQL manager not available, hybrid retrieval will not be enabled")
+            return
+            
+        try:
+            logger.info("Initializing document hybrid retrievers...")
+            
+            # Import here to avoid circular dependencies
+            from retrieval.document.postgres_fts_retriever import DocumentPostgresFTSRetriever
+            from retrieval.document.hybrid_retriever import DocumentHybridRetriever
+            
+            # Initialize FTS retriever
+            self.document_fts_retriever = DocumentPostgresFTSRetriever(self.postgres_manager.pool)
+            logger.info("Document PostgreSQL FTS retriever initialized")
+            
+            # Initialize hybrid retriever (requires vector store)
+            self._ensure_vector_store()
+            if self.vector_store:
+                vector_retriever = self.vector_store.as_retriever()
+                self.document_hybrid_retriever = DocumentHybridRetriever(
+                    vector_retriever=vector_retriever,
+                    fts_retriever=self.document_fts_retriever,
+                    rrf_constant=60  # Configurable RRF constant
+                )
+                logger.info("Document hybrid retriever initialized successfully")
+            else:
+                logger.error("Vector store not available for hybrid retriever initialization")
+                
+        except Exception as e:
+            logger.error(f"Failed to initialize hybrid retrievers: {e}")
+            self.document_fts_retriever = None
+            self.document_hybrid_retriever = None
 
 
 
@@ -559,7 +612,8 @@ class MilvusManager:
 
     def search_documents(self, query: str, top_k: int = 10) -> List[Dict[str, Any]]:
         """
-        Search documents using vector similarity.
+        Search documents using hybrid retrieval (vector + FTS) when available, 
+        fallback to vector similarity search.
         
         Args:
             query: Search query string
@@ -570,6 +624,41 @@ class MilvusManager:
         """
         logger.info(f"Starting document search for query: '{query}' with top_k={top_k}")
         
+        # Try hybrid retrieval first
+        if self.document_hybrid_retriever:
+            try:
+                logger.info("Using hybrid retrieval (vector + FTS) for document search")
+                hybrid_results = self.document_hybrid_retriever.search(query, k=top_k)
+                
+                formatted = []
+                for i, doc in enumerate(hybrid_results):
+                    result_data = {
+                        "id": i,
+                        "filename": doc.metadata.get("source", "unknown"),
+                        "chunk_id": doc.metadata.get("chunk_id", "unknown"),
+                        "text": doc.page_content,
+                        "similarity_score": doc.metadata.get("combined_score", 0.0),
+                        "source": doc.metadata.get("source", "unknown"),
+                        "retrieval_method": doc.metadata.get("retrieval_method", "hybrid"),
+                        "vector_rank": doc.metadata.get("vector_rank"),
+                        "fts_rank": doc.metadata.get("fts_rank"),
+                        "fts_score": doc.metadata.get("fts_score"),
+                        "page_start": doc.metadata.get("page_start"),
+                        "page_end": doc.metadata.get("page_end"),
+                        "content_type": doc.metadata.get("content_type"),
+                    }
+                    formatted.append(result_data)
+                    logger.debug(f"Hybrid result {i}: source='{result_data['source']}', "
+                               f"method='{result_data['retrieval_method']}', "
+                               f"score={result_data['similarity_score']:.4f}")
+                
+                logger.info(f"Hybrid document search completed successfully, returning {len(formatted)} results")
+                return formatted
+                
+            except Exception as e:
+                logger.error(f"Hybrid search failed, falling back to vector search: {e}")
+        
+        # Fallback to vector-only search
         if not self.vector_store:
             logger.error("Vector store not initialized - ensure proper application startup")
             return []
@@ -583,7 +672,7 @@ class MilvusManager:
             except Exception as e:
                 logger.warning(f"Could not get collection stats before search: {e}")
             
-            logger.debug(f"Performing similarity search with query: '{query}'")
+            logger.debug(f"Performing vector-only similarity search with query: '{query}'")
             results = self.vector_store.similarity_search_with_score(query, k=top_k)
             logger.info(f"Vector search returned {len(results)} results")
             
@@ -596,9 +685,10 @@ class MilvusManager:
                     "text": doc.page_content,
                     "similarity_score": float(score),
                     "source": doc.metadata.get("source", "unknown"),
+                    "retrieval_method": "vector_only",
                 }
                 formatted.append(result_data)
-                logger.debug(f"Result {i}: source='{result_data['source']}', score={score:.4f}, text_length={len(doc.page_content)}")
+                logger.debug(f"Vector result {i}: source='{result_data['source']}', score={score:.4f}, text_length={len(doc.page_content)}")
             
             logger.info(f"Document search completed successfully, returning {len(formatted)} formatted results")
             return formatted
@@ -906,11 +996,26 @@ Now, answer ONLY the following user question with proper citations and download 
             # Standard document/web search pipeline
             self._ensure_vector_store()
             
-            # Retrieve relevant documents
-            if not self.vector_store:
-                raise RuntimeError("Vector store not initialized after _ensure_vector_store()")
-            results = self.vector_store.similarity_search_with_score(query, k=top_k)
-            logger.info(f"Retrieved {len(results)} documents from vector search")
+            # Retrieve relevant documents using hybrid search when available
+            results = []
+            if self.document_hybrid_retriever:
+                try:
+                    logger.info("Using hybrid retrieval (vector + FTS) for RAG search")
+                    retrieved_docs = self.document_hybrid_retriever.search(query, k=top_k)
+                    # Convert to the expected format (doc, score) tuples
+                    results = [(doc, doc.metadata.get("combined_score", 0.0)) for doc in retrieved_docs]
+                    logger.info(f"Retrieved {len(results)} documents from hybrid search")
+                except Exception as e:
+                    logger.error(f"Hybrid retrieval failed, falling back to vector search: {e}")
+                    results = []
+            
+            # Fallback to vector-only search if hybrid failed or unavailable
+            if not results:
+                if not self.vector_store:
+                    raise RuntimeError("Vector store not initialized after _ensure_vector_store()")
+                logger.info("Using vector-only search for RAG")
+                results = self.vector_store.similarity_search_with_score(query, k=top_k)
+                logger.info(f"Retrieved {len(results)} documents from vector search")
             
             if not results:
                 return {

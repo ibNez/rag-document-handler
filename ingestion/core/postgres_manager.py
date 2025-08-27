@@ -137,6 +137,24 @@ class PostgreSQLManager:
             CONSTRAINT fk_email_chunks_email FOREIGN KEY (email_id) REFERENCES emails(message_id) ON DELETE CASCADE,
             CONSTRAINT uk_email_chunks_position UNIQUE(email_id, chunk_index)
         );
+
+        -- Document chunks table for hybrid retrieval (similar to email_chunks)
+        CREATE TABLE IF NOT EXISTS document_chunks (
+            chunk_id VARCHAR(255) PRIMARY KEY,
+            document_id VARCHAR(255) NOT NULL,
+            chunk_text TEXT NOT NULL,
+            chunk_ordinal INTEGER NOT NULL,
+            page_start INTEGER NULL,
+            page_end INTEGER NULL,
+            section_path TEXT NULL,
+            element_types TEXT[] NULL,
+            token_count INTEGER,
+            chunk_hash VARCHAR(64),
+            embedding_version VARCHAR(50) DEFAULT 'mxbai-embed-large',
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            CONSTRAINT fk_document_chunks_document FOREIGN KEY (document_id) REFERENCES documents(document_id) ON DELETE CASCADE,
+            CONSTRAINT uk_document_chunks_position UNIQUE(document_id, chunk_ordinal)
+        );
         
                 -- URLs table (migrated from SQLite)
         CREATE TABLE IF NOT EXISTS urls (
@@ -203,6 +221,13 @@ class PostgreSQLManager:
         CREATE INDEX IF NOT EXISTS idx_email_chunks_hash ON email_chunks(chunk_hash);
         CREATE INDEX IF NOT EXISTS idx_email_chunks_position ON email_chunks(email_id, chunk_index);
         
+        -- Document chunks indexes
+        CREATE INDEX IF NOT EXISTS idx_document_chunks_document_id ON document_chunks(document_id);
+        CREATE INDEX IF NOT EXISTS idx_document_chunks_hash ON document_chunks(chunk_hash);
+        CREATE INDEX IF NOT EXISTS idx_document_chunks_position ON document_chunks(document_id, chunk_ordinal);
+        CREATE INDEX IF NOT EXISTS idx_document_chunks_page ON document_chunks(page_start, page_end);
+        CREATE INDEX IF NOT EXISTS idx_document_chunks_element_types ON document_chunks USING GIN(element_types);
+        
         -- Email accounts indexes
         CREATE INDEX IF NOT EXISTS idx_email_accounts_offset ON email_accounts(last_synced_offset);
         
@@ -222,6 +247,10 @@ class PostgreSQLManager:
         
         -- Email chunks FTS index
         CREATE INDEX IF NOT EXISTS idx_email_chunks_fts ON email_chunks 
+        USING GIN(to_tsvector('english', chunk_text));
+        
+        -- Document chunks FTS index
+        CREATE INDEX IF NOT EXISTS idx_document_chunks_fts ON document_chunks 
         USING GIN(to_tsvector('english', chunk_text));
         """
         
@@ -377,6 +406,152 @@ class PostgreSQLManager:
                 "connected": False,
                 "error": str(e)
             }
+    
+    def store_document_chunk(self, chunk_id: str, document_id: str, chunk_text: str, 
+                           chunk_ordinal: int, page_start: Optional[int] = None, 
+                           page_end: Optional[int] = None, section_path: Optional[str] = None,
+                           element_types: Optional[List[str]] = None, token_count: Optional[int] = None,
+                           chunk_hash: Optional[str] = None, embedding_version: str = 'mxbai-embed-large') -> None:
+        """
+        Store document chunk for hybrid retrieval.
+        
+        Args:
+            chunk_id: Unique chunk identifier
+            document_id: Parent document identifier
+            chunk_text: Text content of the chunk
+            chunk_ordinal: Sequential chunk number within document
+            page_start: Starting page number (optional)
+            page_end: Ending page number (optional)
+            section_path: Hierarchical section path (e.g., "H1 > H2 > List")
+            element_types: List of element types from Unstructured
+            token_count: Number of tokens in chunk
+            chunk_hash: Content hash for deduplication
+            embedding_version: Version/model used for embeddings
+        """
+        query = """
+            INSERT INTO document_chunks (
+                chunk_id, document_id, chunk_text, chunk_ordinal, page_start, page_end,
+                section_path, element_types, token_count, chunk_hash, embedding_version
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (chunk_id) 
+            DO UPDATE SET 
+                chunk_text = EXCLUDED.chunk_text,
+                page_start = EXCLUDED.page_start,
+                page_end = EXCLUDED.page_end,
+                section_path = EXCLUDED.section_path,
+                element_types = EXCLUDED.element_types,
+                token_count = EXCLUDED.token_count,
+                chunk_hash = EXCLUDED.chunk_hash,
+                embedding_version = EXCLUDED.embedding_version
+        """
+        
+        with self.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, [
+                    chunk_id, document_id, chunk_text, chunk_ordinal, page_start, page_end,
+                    section_path, element_types, token_count, chunk_hash, embedding_version
+                ])
+                conn.commit()
+                logger.debug(f"Stored document chunk: {chunk_id}")
+    
+    def get_document_chunks(self, document_id: str) -> List[Dict[str, Any]]:
+        """
+        Get all chunks for a document.
+        
+        Args:
+            document_id: Document identifier
+            
+        Returns:
+            List of chunk dictionaries with metadata
+        """
+        query = """
+            SELECT chunk_id, document_id, chunk_text, chunk_ordinal, page_start, page_end,
+                   section_path, element_types, token_count, chunk_hash, embedding_version,
+                   created_at
+            FROM document_chunks 
+            WHERE document_id = %s 
+            ORDER BY chunk_ordinal
+        """
+        
+        with self.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, [document_id])
+                return [dict(row) for row in cur.fetchall()]
+    
+    def search_document_chunks_fts(self, query: str, limit: int = 20, 
+                                 document_id: Optional[str] = None,
+                                 filetype_filter: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Full-text search across document chunks with optional filtering.
+        
+        Args:
+            query: Search query
+            limit: Maximum number of results
+            document_id: Optional document ID filter
+            filetype_filter: Optional content type filter
+            
+        Returns:
+            List of chunks with FTS scores and metadata
+        """
+        base_query = """
+            SELECT 
+                dc.chunk_id,
+                dc.document_id,
+                dc.chunk_text,
+                dc.chunk_ordinal,
+                dc.page_start,
+                dc.page_end,
+                dc.section_path,
+                dc.element_types,
+                dc.token_count,
+                ts_rank(to_tsvector('english', dc.chunk_text), plainto_tsquery('english', %s)) as fts_score,
+                d.title,
+                d.content_type,
+                d.file_path,
+                d.created_at
+            FROM document_chunks dc
+            JOIN documents d ON dc.document_id = d.document_id
+            WHERE to_tsvector('english', dc.chunk_text) @@ plainto_tsquery('english', %s)
+        """
+        
+        params = [query, query]
+        
+        # Add optional filters
+        if document_id:
+            base_query += " AND dc.document_id = %s"
+            params.append(document_id)
+            
+        if filetype_filter:
+            base_query += " AND d.content_type = %s"
+            params.append(filetype_filter)
+        
+        base_query += " ORDER BY fts_score DESC LIMIT %s"
+        params.append(str(limit))
+        
+        with self.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(base_query, params)
+                return [dict(row) for row in cur.fetchall()]
+    
+    def delete_document_chunks(self, document_id: str) -> int:
+        """
+        Delete all chunks for a document.
+        
+        Args:
+            document_id: Document identifier
+            
+        Returns:
+            Number of deleted chunks
+        """
+        query = "DELETE FROM document_chunks WHERE document_id = %s"
+        
+        with self.get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, [document_id])
+                deleted_count = cur.rowcount
+                conn.commit()
+                logger.info(f"Deleted {deleted_count} chunks for document: {document_id}")
+                return deleted_count
     
     def close(self) -> None:
         """Close connection pool."""
