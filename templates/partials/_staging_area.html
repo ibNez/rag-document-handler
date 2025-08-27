@@ -1,0 +1,88 @@
+<!-- Staging Area - Files Awaiting Processing -->
+<div id="staging-area" class="row mb-4">
+    <div class="col-md-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="fas fa-clock me-2"></i>Staging Area</h5>
+                <span class="badge bg-secondary">{{ staging_files|length }} files</span>
+            </div>
+            <div class="card-body">
+                {% if staging_files %}
+                    <div class="row">
+                        {% for file in staging_files %}
+                            <div class="col-md-6 mb-3">
+                                <div class="card file-card h-100">
+                                    <div class="card-body">
+                                        <div class="d-flex justify-content-between align-items-start mb-2">
+                                            <h6 class="card-title mb-0">
+                                                {% if file.status %}
+                                                    <span class="status-indicator status-{{ file.status.status }}"></span>
+                                                {% endif %}
+                                                {{ file.name }}
+                                            </h6>
+                                            <div class="dropdown">
+                                                <button class="btn btn-sm btn-outline-secondary dropdown-toggle" 
+                                                        type="button" data-bs-toggle="dropdown">
+                                                    <i class="fas fa-ellipsis-v"></i>
+                                                </button>
+                                                <ul class="dropdown-menu">
+                                                    <li>
+                                                        <button type="button" class="dropdown-item process-file-btn" 
+                                                                data-filename="{{ file.name }}"
+                                                                data-url="{{ url_for('process_file', filename=file.name) }}">
+                                                            <i class="fas fa-play me-1"></i>Process
+                                                        </button>
+                                                    </li>
+                                                    <li>
+                                                        <button type="button" class="dropdown-item text-danger delete-file-btn" 
+                                                                data-filename="{{ file.name }}"
+                                                                data-url="{{ url_for('delete_file_bg', folder='staging', filename=file.name) }}">
+                                                            <i class="fas fa-trash me-1"></i>Delete
+                                                        </button>
+                                                    </li>
+                                                </ul>
+                                            </div>
+                                        </div>
+                                        
+                                        <small class="text-muted">
+                                            Size: {{ "%.1f"|format(file.size / 1024 / 1024) }} MB | 
+                                            Modified: <span class="dt-local" data-utc="{{ file.modified.isoformat() }}">{{ file.modified.isoformat() }}</span>
+                                        </small>
+                                        
+                                        {% if file.status %}
+                                            <div class="mt-2">
+                                                <small class="d-block">{{ file.status.message }}</small>
+                                                {% if file.status.progress > 0 %}
+                                                    <div class="progress progress-custom">
+                                                        <div class="progress-bar bg-success {% if file.status.status in ['queued','processing','chunking','embedding','storing'] %}progress-animated{% endif %}"
+                                                             role="progressbar" aria-valuemin="0" aria-valuemax="100"
+                                                             aria-valuenow="{{ file.status.progress }}"
+                                                             data-initial-progress="{{ file.status.progress }}"
+                                                             style="width: 0%"></div>
+                                                    </div>
+                                                {% endif %}
+                                                {% if file.status.chunks_count > 0 %}
+                                                    <small class="text-info">Chunks: {{ file.status.chunks_count }}</small>
+                                                {% endif %}
+                                            </div>
+                                        {% endif %}
+                                        
+                                        <!-- Dynamic status area for deletion progress -->
+                                        <div class="mt-2 staging-status-area" data-filename="{{ file.name }}" style="display: none;">
+                                            <!-- Status will be populated via JavaScript -->
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        {% endfor %}
+                    </div>
+                {% else %}
+                    <div class="text-center text-muted py-4">
+                        <i class="fas fa-inbox fa-3x mb-3"></i>
+                        <p>No files in staging area. Upload documents to get started.</p>
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
