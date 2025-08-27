@@ -2,10 +2,12 @@
 
 Welcome to the documentation hub for the **RAG Knowledgebase Manager** project. This directory contains comprehensive guides that expand on the root `README.md`.
 
-The application provides a complete RAG solution using a dual database architecture with refactored ingestion modules:
+The application provides a complete RAG solution using a dual database architecture with refactored ingestion modules, panel-specific statistics providers, and a modular template system:
 - **PostgreSQL**: Document metadata, URLs, emails, and analytics with JSONB flexibility
 - **Milvus**: Vector embeddings and similarity search for semantic retrieval
 - **Modular Ingestion**: Separate modules for email, URL, and document processing
+- **Panel-Specific Statistics**: Dedicated statistics providers for each dashboard section
+- **Template Partials**: Well-organized, maintainable template structure using modular components
 
 ## Quick Start
 
@@ -30,7 +32,13 @@ ingestion/
 
 rag_manager/
 ├── managers/     # Milvus vector operations and RAG search
-└── web/          # Flask routes and web interface
+└── web/          # Flask routes, web interface, and panel-specific statistics
+    ├── panels/   # Individual statistics providers for each dashboard panel
+    └── stats.py  # Statistics coordinator
+
+templates/
+├── partials/     # Modular template components for maintainable UI
+└── *.html        # Main templates using partials system
 ```
 
 ## Table of Contents
@@ -38,6 +46,7 @@ rag_manager/
 - [Installation](installation.md) - Setup options, development mode, and deployment
 - [Usage Guide](usage.md) - Web interface walkthrough and features
 - [System Architecture](architecture.md) - Database design and component overview
+- [Template Architecture](template-architecture.md) - Partials system and panel-specific statistics
 - [Database Schema](database-schema.md) - Complete database field documentation
 - [Email Processing](email-processing.md) - Email ingestion pipeline and troubleshooting
 - [Contributing](contributing.md) - Development workflow and standards

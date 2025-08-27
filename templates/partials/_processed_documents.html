@@ -1,0 +1,103 @@
+<!-- Processed Documents Section -->
+<div class="row">
+    <div class="col-md-12">
+        <div class="card" id="processed-documents-section">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="fas fa-check-circle me-2"></i>Processed Documents</h5>
+                <span class="badge bg-success">{{ uploaded_files|length }} files</span>
+            </div>
+            <div class="card-body">
+                {% if uploaded_files %}
+                    <div class="table-responsive">
+                        <table class="table table-hover align-middle mb-0">
+                            <thead class="table-light">
+                                <tr>
+                                    <th scope="col">Title</th>
+                                    <th scope="col">Size</th>
+                                    <th scope="col">Processed</th>
+                                    <th scope="col">Pages</th>
+                                    <th scope="col">Words</th>
+                                    <th scope="col">Chunks</th>
+                                    <th scope="col">Status</th>
+                                    <th scope="col" class="text-end">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for file in uploaded_files %}
+                                <tr data-uploaded-row="{{ file.name }}">
+                                    <td>
+                                        <div class="d-flex align-items-start">
+                                            <span class="status-indicator status-completed me-2"></span>
+                                            <div>
+                                                <div class="fw-semibold d-flex align-items-center gap-2">
+                                                    <a href="{{ url_for('download_file', filename=file.name) }}" class="text-decoration-none">{{ file.title or file.name }}</a>
+                                                    <button class="btn btn-xs btn-outline-secondary btn-sm py-0 px-1" data-bs-toggle="modal" data-bs-target="#editDocModal-{{ file.name|replace('.', '_') }}" title="Edit title"><i class="fas fa-pen small"></i></button>
+                                                </div>
+                                                <div class="text-muted small">{{ file.name }}</div>
+                                                {% if file.top_keywords %}
+                                                    <div class="small mt-1 text-truncate" style="max-width:300px;" title="Keywords: {{ file.top_keywords|join(', ') }}">
+                                                        <i class="fas fa-tags text-muted"></i>
+                                                        {% for kw in file.top_keywords[:6] %}
+                                                            <span class="badge bg-light text-dark border">{{ kw }}</span>
+                                                        {% endfor %}
+                                                        {% if file.top_keywords|length > 6 %}<span class="badge bg-secondary">+{{ file.top_keywords|length - 6 }}</span>{% endif %}
+                                                    </div>
+                                                {% endif %}
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td>{{ "%.1f"|format(file.size / 1024 / 1024) }} MB</td>
+                                    <td><span class="dt-local" data-utc="{{ file.modified.isoformat() }}">{{ file.modified.isoformat() }}</span></td>
+                                    <td>{% if file.page_count is not none %}{{ file.page_count }}{% else %}-{% endif %}</td>
+                                    <td>{% if file.word_count is not none %}{{ file.word_count }}{% else %}-{% endif %}</td>
+                                    <td>
+                                        {% if file.chunks_count is not none %}
+                                            <span class="badge bg-info text-dark">{{ file.chunks_count }}</span>
+                                        {% else %}-{% endif %}
+                                    </td>
+                                    <td>
+                                        {% set st = file.status %}
+                                        {% if st and ('deletion' in (st.message or '').lower() or 'archiving' in (st.message or '').lower() or 'removing embeddings' in (st.message or '').lower()) %}
+                                            <div class="small mb-1">{{ st.message }}</div>
+                                            <div class="progress progress-custom" style="height:6px;">
+                                                <div class="progress-bar bg-danger progress-animated uploaded-delete-progress"
+                                                     role="progressbar" aria-valuemin="0" aria-valuemax="100"
+                                                     data-filename="{{ file.name }}" data-initial-progress="{{ st.progress or 0 }}"
+                                                     style="width: 0%"></div>
+                                            </div>
+                                        {% else %}
+                                            <span class="text-muted small">Ready</span>
+                                        {% endif %}
+                                    </td>
+                                    <td class="text-end">
+                                        {% set st = file.status %}
+                                        {% if st and ('deletion' in (st.message or '').lower() or 'archiving' in (st.message or '').lower() or 'removing embeddings' in (st.message or '').lower()) %}
+                                            <button type="button" class="btn btn-outline-danger btn-sm" disabled>
+                                                <i class="fas fa-spinner fa-spin"></i>
+                                            </button>
+                                        {% else %}
+                                            <div class="btn-group btn-group-sm" role="group">
+                                                <button type="button" class="btn btn-outline-danger action-btn delete-file-btn" 
+                                                        title="Delete" 
+                                                        data-filename="{{ file.name }}"
+                                                        data-url="{{ url_for('delete_file_bg', folder='uploaded', filename=file.name) }}">
+                                                    <i class="fas fa-trash"></i>
+                                                </button>
+                                            </div>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                {% else %}
+                    <div class="text-center text-muted py-4">
+                        <i class="fas fa-database fa-3x mb-3"></i>
+                        <p>No documents processed yet. Process files from staging area.</p>
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>

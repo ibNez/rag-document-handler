@@ -87,7 +87,7 @@ function initializeAutoRefresh() {
 
 ## Code Structure
 
-The application has been reorganized into logical modules following Python best practices:
+The application has been reorganized into logical modules following Python best practices with enhanced template organization:
 
 ```
 rag_manager/
@@ -98,6 +98,142 @@ rag_manager/
 │   ├── config.py                  # Centralized configuration management
 │   └── models.py                  # Data models and dataclasses
 ├── managers/
+│   ├── __init__.py
+│   ├── milvus_manager.py          # Vector database operations
+│   └── postgres_manager.py       # PostgreSQL operations
+├── web/
+│   ├── __init__.py
+│   ├── routes.py                  # Flask routes and web endpoints
+│   ├── stats.py                   # Statistics coordinator
+│   └── panels/                    # Panel-specific statistics providers
+│       ├── __init__.py
+│       ├── email_panel.py         # Email panel statistics
+│       ├── url_panel.py           # URL panel statistics
+│       ├── knowledgebase_panel.py # Document panel statistics
+│       └── system_panel.py        # System panel statistics
+└── scheduler_manager.py           # Background task scheduling
+
+templates/
+├── index.html                     # Main dashboard (now uses partials)
+├── search.html                    # Search interface
+└── partials/                      # Modular template components
+    ├── _head.html                 # Document head and meta tags
+    ├── _navbar.html               # Main navigation bar
+    ├── _flash_messages.html       # Flash message display
+    ├── _stats_panel.html          # Statistics dashboard panel
+    ├── _file_upload.html          # File upload section
+    ├── _staging_area.html         # Staging area for processing
+    ├── _url_management.html       # URL management interface
+    ├── _url_edit_modals.html      # URL edit modal dialogs
+    ├── _email_accounts.html       # Email accounts management
+    ├── _email_modals.html         # Email account modal dialogs
+    ├── _processed_documents.html  # Processed documents display
+    ├── _document_edit_modals.html # Document edit modal dialogs
+    └── _scripts.html              # JavaScript and external scripts
+
+ingestion/
+├── core/                          # Database abstraction and PostgreSQL management
+├── email/                         # Email processing with multiple connector support
+├── url/                           # URL crawling and content processing
+├── document/                      # Document extraction and chunking
+└── utils/                         # Shared utilities (crypto, scheduling)
+```
+
+## Enhanced Statistics Architecture
+
+The application now features a panel-specific statistics architecture that provides better organization and maintainability:
+
+### Statistics Coordinator (`web/stats.py`)
+The main `StatsProvider` class acts as a coordinator that delegates to individual panel providers:
+- Lightweight coordination layer
+- Clean imports from panels package  
+- Simple delegation methods for each panel type
+- Consistent error handling across all panels
+
+### Individual Panel Statistics Providers
+
+**Email Panel Statistics (`web/panels/email_panel.py`):**
+- Email account metrics and sync status
+- Attachment counts and processing statistics
+- Most active account identification
+- Due-for-sync calculations with proper interval handling
+
+**URL Panel Statistics (`web/panels/url_panel.py`):**
+- URL scraping counts and status tracking
+- Due date calculations with refresh intervals
+- Robots.txt compliance and crawl settings
+- Snapshot management statistics
+
+**Knowledgebase Panel Statistics (`web/panels/knowledgebase_panel.py`):**
+- Document collection statistics from Milvus and PostgreSQL
+- Metadata analytics and keyword extraction
+- Collection health and indexing status
+- Cross-database data consistency checks
+
+**System Panel Statistics (`web/panels/system_panel.py`):**
+- Database connection status monitoring
+- Milvus cluster health checks
+- Processing queue monitoring
+- System resource and connectivity validation
+
+### Partials Structure
+
+**Core Layout Partials:**
+- `_head.html`: Document metadata, stylesheets, and external resources
+- `_navbar.html`: Main navigation bar with responsive design
+- `_scripts.html`: JavaScript libraries and application scripts
+
+**Content Partials:**
+- `_flash_messages.html`: Flash message display system
+- `_stats_panel.html`: Comprehensive statistics dashboard
+- `_file_upload.html`: Document upload interface
+- `_staging_area.html`: File processing staging area
+- `_processed_documents.html`: Processed documents management
+
+**Feature-Specific Partials:**
+- `_url_management.html`: URL management interface with table display
+- `_url_edit_modals.html`: URL editing modal dialogs
+- `_email_accounts.html`: Email account management interface  
+- `_email_modals.html`: Email account modal dialogs (add, edit, delete)
+- `_document_edit_modals.html`: Document metadata editing modals
+
+### Template Organization Benefits
+
+1. **Maintainability**: Each section is self-contained and easy to modify
+2. **Reusability**: Partials can be included across multiple pages
+3. **Team Development**: Multiple developers can work on different UI sections simultaneously
+4. **Debugging**: Issues can be isolated to specific template partials
+5. **Performance**: Easier to optimize specific sections without affecting others
+6. **Consistency**: Shared components ensure consistent UI patterns
+
+### Main Template Structure
+
+The main `index.html` follows a clean, declarative structure:
+
+```html
+<!DOCTYPE html>
+<html lang="en">
+{% include 'partials/_head.html' %}
+<body class="bg-light">
+    {% include 'partials/_navbar.html' %}
+    
+    <div class="container mt-4">
+        {% include 'partials/_flash_messages.html' %}
+        {% include 'partials/_stats_panel.html' %}
+        {% include 'partials/_file_upload.html' %}
+        {% include 'partials/_staging_area.html' %}
+        {% include 'partials/_url_management.html' %}
+        {% include 'partials/_url_edit_modals.html' %}
+        {% include 'partials/_email_accounts.html' %}
+        {% include 'partials/_email_modals.html' %}
+        {% include 'partials/_processed_documents.html' %}
+        {% include 'partials/_document_edit_modals.html' %}
+    </div>
+    
+    {% include 'partials/_scripts.html' %}
+</body>
+</html>
+```
 │   ├── __init__.py
 │   └── milvus_manager.py          # Milvus database operations and RAG search
 └── web/

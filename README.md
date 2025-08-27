@@ -8,6 +8,8 @@ Core value: provide a single, reproducible, auditable ETL surface for private kn
 
 For detailed guides, architecture notes, and extended documentation, see the [Documentation Directory](docs/README.md).
 
+For recent changes and new features, see the [CHANGELOG](CHANGELOG.md).
+
 ## 🚀 Quick Start
 
 **Interactive Setup (Recommended):**
@@ -28,14 +30,16 @@ For complete installation options and deployment guides, see [Installation Docum
 
 ## 🏗️ Architecture Overview
 
-The RAG Knowledge Base Manager uses a modular, dual-database architecture with enhanced email processing, real-time dashboard capabilities, and comprehensive auto-refresh functionality.
+The RAG Knowledge Base Manager uses a modular, dual-database architecture with enhanced email processing, real-time dashboard capabilities, comprehensive auto-refresh functionality, and a well-organized template structure using partials.
 
 **Core Components:**
 - **Modular Architecture**: Clean separation of concerns with dedicated modules for email, URL, and document processing
 - **Dual Database System**: PostgreSQL for metadata, Milvus for vector embeddings
 - **Advanced Email Integration**: IMAP, Gmail API, and Exchange support with encrypted credential storage
-- **Real-Time Dashboard**: Comprehensive auto-refresh for all panels
-- **Conversational AI**: Enhanced RAG-powered chat interface
+- **Real-Time Dashboard**: Comprehensive auto-refresh for all panels with modular template partials
+- **Conversational AI**: Enhanced RAG-powered chat interface with intelligent query classification
+- **Panel-Specific Statistics**: Dedicated statistics providers for each dashboard panel
+- **Template Partials**: Well-organized, maintainable template structure with reusable components
 
 For detailed architectural information, system design, component interactions, directory structure, and enhanced features, see the [Architecture Documentation](docs/architecture.md).
 

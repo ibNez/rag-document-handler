@@ -1,6 +1,6 @@
 # Usage Guide
 
-The application exposes a Flask web interface for managing documents, URLs, emails and performing RAG-powered search. The refactored architecture uses PostgreSQL for metadata and Milvus for vector embeddings.
+The application exposes a Flask web interface for managing documents, URLs, emails and performing RAG-powered search. The refactored architecture uses PostgreSQL for metadata, Milvus for vector embeddings, and a modular template system with partials for improved maintainability.
 
 ## Starting the Application
 
@@ -21,6 +21,79 @@ The refactored application uses:
 - **PostgreSQL**: Document metadata, URL scheduling, email accounts and messages
 - **Milvus**: Vector embeddings for semantic search
 - **Modular Ingestion**: Separate processing for documents, URLs, and emails
+- **Panel-Specific Statistics**: Dedicated statistics providers for each dashboard section
+- **Template Partials**: Well-organized, maintainable template structure
+
+## Enhanced Dashboard Interface
+
+The web interface has been completely refactored using a modular partials system that provides:
+
+### Statistics Panel
+The main dashboard features a comprehensive statistics panel that displays real-time information across four key areas:
+
+**Connections Status:**
+- SQL database connectivity and version information
+- Milvus vector database status and health
+- Collection statistics and entity counts
+- Email collection metrics and indexing status
+
+**Document Analytics:**
+- Total document count and processing statistics
+- Average words per document and chunk distribution
+- Median chunk character counts for optimization insights
+- Embedding dimensions and indexing configuration
+- Top keywords extracted from document content
+
+**URL Management Metrics:**
+- Total URLs tracked and their processing status
+- Active URLs and domain crawling statistics
+- Robots.txt compliance and ignored rules count
+- Scraped vs. never-scraped URL breakdown
+- URLs due for refresh based on scheduling intervals
+
+**Email Account Overview:**
+- Total configured accounts and sync status
+- Accounts due for synchronization
+- Never-synced accounts requiring attention
+- Total email count and attachment statistics
+- Embedding configuration and indexing status
+- Most active account identification
+- Latest email processing timestamps
+
+### Modular Section Organization
+
+The interface is organized into distinct, well-labeled sections:
+
+**File Management:**
+- **Upload Section**: Clean file upload interface with format validation
+- **Staging Area**: Files awaiting processing with progress tracking
+- **Processed Documents**: Completed files with metadata and actions
+
+**URL Management:**
+- **Add URL Form**: Simple URL addition with automatic title extraction
+- **URL Table**: Comprehensive URL listing with status, scheduling, and robots.txt information
+- **Edit Modals**: In-line editing for URL metadata, crawling settings, and snapshot configuration
+
+**Email Management:**
+- **Account Configuration**: Add, edit, and delete email accounts
+- **Sync Monitoring**: Real-time sync status and progress tracking
+- **Connection Testing**: Validation of email server connectivity
+
+### Template Partials System
+
+The interface is built using a modular partials system that provides:
+
+**Benefits for Users:**
+- **Consistent Experience**: Uniform UI patterns across all sections
+- **Fast Loading**: Optimized partial rendering for better performance
+- **Error Isolation**: Issues in one section don't affect others
+- **Real-time Updates**: Auto-refresh capabilities for live data
+
+**Benefits for Developers:**
+- **Maintainable Code**: Each section is self-contained and easy to modify
+- **Team Development**: Multiple developers can work on different sections simultaneously
+- **Reusable Components**: Partials can be shared across multiple pages
+- **Clear Organization**: Well-labeled components with specific purposes
 
 ## Features
 
