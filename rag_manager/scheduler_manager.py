@@ -18,6 +18,10 @@ class SchedulerManager:
         self.email_processing_status = {}
         self._process_url_background = None
         self._refresh_email_account_background = None
+        
+        # Add concurrency limits to prevent database pool exhaustion
+        self.max_concurrent_urls = getattr(config, 'MAX_CONCURRENT_URLS', 5)  # Limit concurrent URL processing
+        self.max_concurrent_emails = getattr(config, 'MAX_CONCURRENT_EMAILS', 3)  # Limit concurrent email processing
     
     def set_background_processors(self, url_processor, email_processor):
         """Set the background processing methods from the main app."""
@@ -112,8 +116,23 @@ class SchedulerManager:
                     active_emails_total,
                 )
                 started = 0
-                # Process due URLs
+                
+                # Count currently running tasks
+                running_url_tasks = sum(1 for status in self.url_processing_status.values() 
+                                      if status.status == "processing")
+                running_email_tasks = sum(1 for status in self.email_processing_status.values() 
+                                        if status.status == "processing")
+                
+                logger.debug(f"Currently running: {running_url_tasks} URL tasks, {running_email_tasks} email tasks")
+                
+                # Process due URLs (with concurrency limit)
+                url_slots_available = max(0, self.max_concurrent_urls - running_url_tasks)
+                urls_to_process = 0
                 for rec in due_urls:
+                    if urls_to_process >= url_slots_available:
+                        logger.debug(f"URL concurrency limit reached ({self.max_concurrent_urls}), skipping remaining URLs")
+                        break
+                        
                     url_id = rec.get('id')
                     if url_id is None or url_id in self.url_processing_status:
                         continue
@@ -123,9 +142,16 @@ class SchedulerManager:
                         t.daemon = True
                         t.start()
                         started += 1
+                        urls_to_process += 1
                 
-                # Process due email accounts
+                # Process due email accounts (with concurrency limit)
+                email_slots_available = max(0, self.max_concurrent_emails - running_email_tasks)
+                emails_to_process = 0
                 for account in due_accounts:
+                    if emails_to_process >= email_slots_available:
+                        logger.debug(f"Email concurrency limit reached ({self.max_concurrent_emails}), skipping remaining accounts")
+                        break
+                        
                     acct_id = account.get('id')
                     if acct_id is None or acct_id in self.email_processing_status:
                         continue
@@ -135,6 +161,7 @@ class SchedulerManager:
                         t.daemon = True
                         t.start()
                         started += 1
+                        emails_to_process += 1
                 sleep_for = self.config.SCHEDULER_POLL_SECONDS_BUSY if started else self.config.SCHEDULER_POLL_SECONDS_IDLE
                 logger.debug(
                     f"Scheduler cycle {cycle}: started {started} task(s); sleeping {sleep_for}s"

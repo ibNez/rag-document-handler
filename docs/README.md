@@ -44,16 +44,14 @@ templates/
 ## Table of Contents
 
 - [Installation](installation.md) - Setup options, development mode, and deployment
-- [Usage Guide](usage.md) - Web interface walkthrough and features
-- [System Architecture](architecture.md) - Database design and component overview
-- [Template Architecture](template-architecture.md) - Partials system and panel-specific statistics
+- [Usage Guide](usage.md) - Web interface walkthrough, email processing, and URL snapshots
+- [System Architecture](architecture.md) - Database design, component overview, email processing, and hybrid retrieval
+- [Configuration](configuration.md) - Environment variables, email settings, and snapshot configuration
 - [Database Schema](database-schema.md) - Complete database field documentation
-- [Email Processing](email-processing.md) - Email ingestion pipeline and troubleshooting
 - [Contributing](contributing.md) - Development workflow and standards
-- [Gmail Email Ingestion](gmail_ingestion.md) - Gmail integration setup
-- [Exchange Email Ingestion](exchange_ingestion.md) - Exchange server integration
+- [Document Ingestion POC](document-ingest-poc.md) - Document processing proof of concept
+- [PostgreSQL Guide](postgresql_guide.md) - Database setup and management
 - [Roadmap](roadmap.md) - Future features and enhancements
-- [Realm Tiles Prompt](realm_tiles_prompt.md) - AI prompt engineering guide
 
 ## Management Commands
 

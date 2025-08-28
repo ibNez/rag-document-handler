@@ -2,7 +2,7 @@
 Document processing module for RAG Knowledgebase Manager.
 
 This module handles document processing operations including text extraction,
-chunking, and embedding generation using UnstructuredLoader.
+advanced chunking strategies, and embedding generation using UnstructuredLoader.
 """
 
 import json
@@ -15,6 +15,7 @@ from langchain_ollama import OllamaEmbeddings, ChatOllama
 from langchain_core.documents import Document
 
 from rag_manager.core.config import Config
+from .advanced_chunking import AdvancedChunker, ChunkingConfig
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -23,7 +24,7 @@ logger = logging.getLogger(__name__)
 class DocumentProcessor:
     """
     Handles document processing operations including text extraction,
-    chunking, and embedding generation using UnstructuredLoader.
+    advanced chunking strategies, and embedding generation using UnstructuredLoader.
     
     This class follows the development rules with proper type hints,
     error handling, and comprehensive logging.
@@ -41,7 +42,20 @@ class DocumentProcessor:
             model=self.config.EMBEDDING_MODEL, 
             base_url=f"http://{self.config.OLLAMA_EMBEDDING_HOST}:{self.config.OLLAMA_EMBEDDING_PORT}"
         )
-        logger.info(f"DocumentProcessor initialized with {self.config.EMBEDDING_MODEL}")
+        
+        # Initialize advanced chunker
+        chunking_strategy = getattr(config, 'DOCUMENT_CHUNKING_STRATEGY', 'title_aware')
+        target_tokens = getattr(config, 'DOCUMENT_TARGET_TOKENS', 850)
+        overlap_percentage = getattr(config, 'DOCUMENT_OVERLAP_PERCENTAGE', 0.125)
+        
+        chunking_config = ChunkingConfig(
+            strategy=chunking_strategy,
+            target_tokens=target_tokens,
+            overlap_percentage=overlap_percentage
+        )
+        self.advanced_chunker = AdvancedChunker(chunking_config)
+        
+        logger.info(f"DocumentProcessor initialized with {self.config.EMBEDDING_MODEL} and {chunking_strategy} chunking")
     
     def load_and_chunk(self, file_path: str, filename: str, document_id: str) -> List[Document]:
         """
@@ -61,22 +75,22 @@ class DocumentProcessor:
         logger.info(f"Loading and chunking document: {filename}")
         
         try:
-            # Use UnstructuredLoader for all document types
+            # Use UnstructuredLoader for document extraction
             loader = UnstructuredLoader(
                 file_path,
-                chunking_strategy=self.config.UNSTRUCTURED_CHUNKING_STRATEGY,
+                chunking_strategy="basic",  # Let advanced chunker handle the strategy
                 max_characters=self.config.UNSTRUCTURED_MAX_CHARACTERS,
                 overlap=self.config.UNSTRUCTURED_OVERLAP,
                 include_orig_elements=self.config.UNSTRUCTURED_INCLUDE_ORIG,
             )
-            documents = loader.load()
-            logger.info(f"Loaded {len(documents)} elements via UnstructuredLoader")
+            raw_documents = loader.load()
+            logger.info(f"Loaded {len(raw_documents)} elements via UnstructuredLoader")
             
             # Validate extraction success
-            if documents:
-                total_chars = sum(len(doc.page_content or '') for doc in documents)
-                avg_chars = total_chars // len(documents) if documents else 0
-                logger.info(f"Successfully extracted {len(documents)} chunks ({total_chars} chars, avg {avg_chars} chars/chunk) from {filename}")
+            if raw_documents:
+                total_chars = sum(len(doc.page_content or '') for doc in raw_documents)
+                avg_chars = total_chars // len(raw_documents) if raw_documents else 0
+                logger.info(f"Successfully extracted {len(raw_documents)} elements ({total_chars} chars, avg {avg_chars} chars/element) from {filename}")
                 
                 if total_chars < 100:  # Flag potentially poor extraction
                     logger.warning(f"Low text content extracted from {filename} ({total_chars} chars) - may need manual review or different extraction method")
@@ -84,30 +98,32 @@ class DocumentProcessor:
                     logger.info(f"Moderate text content extracted from {filename} ({total_chars} chars) - extraction may be suboptimal")
             else:
                 logger.error(f"No content extracted from {filename} - document may be corrupted, empty, or unsupported format")
+                return []
             
-            # Process chunks with lean metadata
-            chunks: List[Document] = []
-            for i, d in enumerate(documents):
-                text = d.page_content or ''
-                meta = d.metadata or {}
-                page = meta.get('page') or meta.get('page_number') or (i + 1)
-                
-                # Deterministic content hash
-                content_hash = hashlib.sha1(text.encode('utf-8')).hexdigest()[:16]
-                
-                # Update metadata with lean schema
-                meta.update({
-                    'source': filename,
-                    'page': page,
-                    'document_id': document_id,
-                    'chunk_id': f"{document_id}:{content_hash}",
-                    'content_hash': content_hash,
-                    'content_length': len(text),
+            # Apply advanced chunking strategies with preserved metadata
+            preserve_metadata = {
+                'filename': filename,
+                'document_id': document_id,
+                'file_path': file_path,
+                'content_type': 'application/pdf' if filename.lower().endswith('.pdf') else 'text/plain',
+                'filetype': filename.split('.')[-1].lower() if '.' in filename else 'unknown'
+            }
+            chunks = self.advanced_chunker.chunk_documents(raw_documents, document_id, preserve_metadata)
+            
+            # Update metadata with additional document-level info
+            for chunk in chunks:
+                chunk.metadata.update({
+                    'content_length': len(chunk.page_content),
                 })
-                d.metadata = meta
-                chunks.append(d)
             
-            logger.info(f"Created {len(chunks)} chunks with metadata")
+            # Log chunking statistics
+            if chunks:
+                stats = self.advanced_chunker.get_chunking_stats(chunks)
+                logger.info(f"Advanced chunking created {stats['total_chunks']} chunks "
+                           f"(avg {stats['avg_tokens_per_chunk']:.1f} tokens/chunk, "
+                           f"strategy: {stats['chunking_strategy']})")
+            
+            logger.info(f"Created {len(chunks)} chunks with enhanced metadata")
             return chunks
             
         except Exception as e:
@@ -271,7 +287,6 @@ class DocumentProcessor:
                 meta = d.metadata or {}
                 page = meta.get('page') or meta.get('page_number') or (i + 1)
                 meta.update({
-                    'source': url,
                     'page': page,
                     'document_id': url_id,
                     'chunk_id': f"{url_id}:{content_hash}",
@@ -322,7 +337,8 @@ class DocumentProcessor:
                     obj = json.loads(resp[start:end])
                     if isinstance(obj, dict) and obj.get('topic'):
                         c.metadata['topic'] = obj['topic']
-            except Exception:
-                c.metadata.setdefault('topic', 'unknown')
+            except Exception as e:
+                logger.error(f"Failed to extract topic from LLM enrichment: {e}")
+                # Don't set default topic - let it remain unset
         
         logger.info("LLM enrichment complete")

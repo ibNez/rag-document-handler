@@ -139,6 +139,7 @@ class WebRoutes:
             # Connection health statuses
             sql_status = self._get_database_status()
             milvus_status = self.rag_manager.milvus_manager.check_connection()
+            ollama_status = self.rag_manager.ollama_health.get_overall_status()
 
             # Get all stats from centralized provider
             all_stats = self.stats_provider.get_all_stats()
@@ -160,6 +161,7 @@ class WebRoutes:
                 email_collection_stats=email_collection_stats,
                 sql_status=sql_status,
                 milvus_status=milvus_status,
+                ollama_status=ollama_status,
                 kb_meta=kb_meta,
                 url_meta=url_meta,
                 email_meta=email_meta,
@@ -582,6 +584,11 @@ class WebRoutes:
         def scheduler_status():
             """Diagnostic endpoint for scheduler status."""
             return jsonify(self.rag_manager._scheduler_status())
+            
+        @self.app.route('/admin/ollama_status')
+        def ollama_status():
+            """Diagnostic endpoint for Ollama services status."""
+            return jsonify(self.rag_manager.ollama_health.get_overall_status())
         
         @self.app.route('/document/<path:filename>/update', methods=['POST'])
         def update_document_metadata(filename):
@@ -803,7 +810,7 @@ class WebRoutes:
 
         @self.app.route('/add_url', methods=['POST'])
         def add_url():
-            """Add a new URL with automatic title extraction."""
+            """Add a new URL with automatic title extraction and initial processing."""
             url = request.form.get('url', '').strip()
             
             if not url:
@@ -813,7 +820,27 @@ class WebRoutes:
             result = self.rag_manager.url_manager.add_url(url)
             if result['success']:
                 extracted_title = result.get('title', 'Unknown')
-                flash(f'URL added successfully with title: "{extracted_title}"', 'success')
+                url_id = result.get('id')
+                
+                # Automatically trigger initial processing with snapshot creation
+                if url_id and not url_id in self.rag_manager.url_processing_status:
+                    logger.info(f"Auto-triggering initial processing for new URL: {url}")
+                    
+                    # Create processing status
+                    self.rag_manager.url_processing_status[url_id] = URLProcessingStatus(
+                        url=url,
+                        title=extracted_title
+                    )
+                    
+                    # Start background processing
+                    import threading
+                    th = threading.Thread(target=self.rag_manager._process_url_background, args=(url_id,))
+                    th.daemon = True
+                    th.start()
+                    
+                    flash(f'URL added successfully with title: "{extracted_title}" - Processing started in background', 'success')
+                else:
+                    flash(f'URL added successfully with title: "{extracted_title}"', 'success')
             else:
                 flash(f'Failed to add URL: {result["message"]}', 'error')
             
@@ -957,7 +984,6 @@ class WebRoutes:
             refresh_raw = request.form.get('refresh_interval_minutes')
             crawl_domain_flag = 1 if request.form.get('crawl_domain') in ('on', '1', 'true', 'True') else 0
             ignore_robots_flag = 1 if request.form.get('ignore_robots') in ('on', '1', 'true', 'True') else 0
-            snapshot_enabled_flag = 1 if request.form.get('snapshot_enabled') in ('on', '1', 'true', 'True') else 0
             
             # Optional retention fields
             sr_raw = request.form.get('snapshot_retention_days')
@@ -972,22 +998,22 @@ class WebRoutes:
                 except ValueError:
                     refresh_interval_minutes = None
             
-            snapshot_retention_days = None
-            snapshot_max_snapshots = None
+            snapshot_retention_days = 0  # Default to 0 (unlimited)
+            snapshot_max_snapshots = 0   # Default to 0 (unlimited)
             try:
                 if sr_raw and sr_raw.strip() != '':
                     v = int(sr_raw)
                     if v >= 0:
                         snapshot_retention_days = v
             except ValueError:
-                snapshot_retention_days = None
+                snapshot_retention_days = 0  # Invalid input defaults to unlimited
             try:
                 if sm_raw and sm_raw.strip() != '':
                     v = int(sm_raw)
                     if v >= 0:
                         snapshot_max_snapshots = v
             except ValueError:
-                snapshot_max_snapshots = None
+                snapshot_max_snapshots = 0  # Invalid input defaults to unlimited
 
             logger.debug(f"Updating URL metadata for ID: '{url_id_str}'")
             logger.debug(f"Form data - title: '{title}', description: '{description}', refresh: {refresh_interval_minutes}")
@@ -995,7 +1021,7 @@ class WebRoutes:
             result = self.rag_manager.url_manager.update_url_metadata(
                 url_id_str, title, description, refresh_interval_minutes,
                 crawl_domain_flag, ignore_robots_flag,
-                snapshot_enabled_flag, snapshot_retention_days, snapshot_max_snapshots
+                snapshot_retention_days, snapshot_max_snapshots
             )
             if result.get('success'):
                 logger.info(f"URL metadata updated successfully for ID: '{url_id_str}'")
@@ -1528,21 +1554,54 @@ class WebRoutes:
                     u['pages'] = u['pages_discovered'] if u['pages_discovered'] is not None else 1
                 except Exception:
                     u['pages'] = 1
-                # Snapshot metrics via filesystem convention: SNAPSHOT_DIR/<url_id>/...
+                    
+                # Add child URL statistics for parent URLs
                 try:
+                    url_id = u.get('id')
+                    if url_id:
+                        child_stats = self.rag_manager.url_manager.get_child_url_stats(url_id)
+                        u['child_stats'] = child_stats
+                        # Check if this URL has any children
+                        u['has_children'] = child_stats['total_children'] > 0
+                        # Calculate progress for parent URLs with children
+                        if u['has_children']:
+                            total = child_stats['total_children']
+                            completed = child_stats['completed_children']
+                            processing = child_stats['processing_children']
+                            u['child_progress_percent'] = (completed / total * 100) if total > 0 else 0
+                            u['is_parent_with_active_children'] = processing > 0
+                except Exception as e:
+                    logger.debug(f"Error getting child stats for URL {u.get('id')}: {e}")
+                    u['child_stats'] = {'total_children': 0, 'processing_children': 0, 'completed_children': 0, 'failed_children': 0}
+                    u['has_children'] = False
+                    u['child_progress_percent'] = 0
+                    u['is_parent_with_active_children'] = False
+                # Snapshot metrics via filesystem convention: SNAPSHOT_DIR/<domain>/<path>/...
+                try:
+                    from urllib.parse import urlparse
+                    
                     base_dir = getattr(self.config, 'SNAPSHOT_DIR', os.path.join('uploaded', 'snapshots'))
-                    url_dir = os.path.join(base_dir, u['id']) if u.get('id') else None
                     count = 0
                     total_bytes = 0
-                    if url_dir and os.path.isdir(url_dir):
-                        for root, _, files in os.walk(url_dir):
-                            for f in files:
-                                fpath = os.path.join(root, f)
-                                try:
-                                    total_bytes += os.path.getsize(fpath)
-                                    count += 1
-                                except Exception:
-                                    continue
+                    
+                    # Extract domain from URL for snapshot directory lookup
+                    if u.get('url'):
+                        parsed_url = urlparse(u['url'])
+                        domain = parsed_url.netloc
+                        if domain:
+                            # Check if domain directory exists (snapshots are stored by domain)
+                            domain_dir = os.path.join(base_dir, domain)
+                            if os.path.isdir(domain_dir):
+                                # Count all files under this domain's snapshot directory
+                                for root, _, files in os.walk(domain_dir):
+                                    for f in files:
+                                        fpath = os.path.join(root, f)
+                                        try:
+                                            total_bytes += os.path.getsize(fpath)
+                                            count += 1
+                                        except Exception:
+                                            continue
+                    
                     u['snapshot_count'] = count if count > 0 else None
                     # Human readable size
                     if total_bytes > 0:

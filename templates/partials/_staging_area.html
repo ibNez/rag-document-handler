@@ -1,14 +1,40 @@
-<!-- Staging Area - Files Awaiting Processing -->
-<div id="staging-area" class="row mb-4">
+<!-- Document Upload & Staging Area -->
+<div class="row mb-4">
     <div class="col-md-12">
         <div class="card">
-            <div class="card-header d-flex justify-content-between align-items-center">
-                <h5 class="mb-0"><i class="fas fa-clock me-2"></i>Staging Area</h5>
-                <span class="badge bg-secondary">{{ staging_files|length }} files</span>
+            <div class="card-header">
+                <h5 class="mb-0"><i class="fas fa-clock me-2"></i>Document Upload & Staging</h5>
             </div>
             <div class="card-body">
-                {% if staging_files %}
-                    <div class="row">
+                <!-- Upload Form - Static, not refreshed -->
+                <div id="upload-form-section" class="upload-section mb-4 p-3 bg-light rounded">
+                    <h6 class="mb-3"><i class="fas fa-cloud-upload-alt me-2"></i>Upload New Document</h6>
+                    <form method="POST" action="{{ url_for('upload_file') }}" enctype="multipart/form-data">
+                        <div class="row">
+                            <div class="col-md-8">
+                                <input type="file" class="form-control" name="file" id="fileInput"
+                                       accept=".pdf,.docx,.doc,.txt,.md" required>
+                                <div class="form-text">
+                                    Supported formats: PDF, DOCX, DOC, TXT, MD (Max: 100MB)
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <button type="submit" class="btn btn-primary w-100">
+                                    <i class="fas fa-upload me-1"></i>Upload to Staging
+                                </button>
+                            </div>
+                        </div>
+                    </form>
+                </div>
+                
+                <!-- Staging Files Area - Dynamic, gets refreshed -->
+                <div id="staging-files-area">
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <h6 class="mb-0"><i class="fas fa-file-alt me-2"></i>Files in Staging</h6>
+                        <span class="badge bg-secondary">{{ staging_files|length }} files</span>
+                    </div>
+                    {% if staging_files %}
+                        <div class="row">
                         {% for file in staging_files %}
                             <div class="col-md-6 mb-3">
                                 <div class="card file-card h-100">
@@ -50,7 +76,7 @@
                                         </small>
                                         
                                         {% if file.status %}
-                                            <div class="mt-2">
+                                            <div class="mt-2 server-status-area">
                                                 <small class="d-block">{{ file.status.message }}</small>
                                                 {% if file.status.progress > 0 %}
                                                     <div class="progress progress-custom">
@@ -67,9 +93,9 @@
                                             </div>
                                         {% endif %}
                                         
-                                        <!-- Dynamic status area for deletion progress -->
+                                        <!-- Dynamic status area for processing/deletion progress -->
                                         <div class="mt-2 staging-status-area" data-filename="{{ file.name }}" style="display: none;">
-                                            <!-- Status will be populated via JavaScript -->
+                                            <!-- Status will be populated via JavaScript and will hide server status when active -->
                                         </div>
                                     </div>
                                 </div>
@@ -77,11 +103,12 @@
                         {% endfor %}
                     </div>
                 {% else %}
-                    <div class="text-center text-muted py-4">
-                        <i class="fas fa-inbox fa-3x mb-3"></i>
-                        <p>No files in staging area. Upload documents to get started.</p>
+                    <div class="text-center text-muted py-3">
+                        <i class="fas fa-file-upload fa-2x mb-2"></i>
+                        <p class="mb-0">No files in staging. Upload a document above to get started.</p>
                     </div>
                 {% endif %}
+                </div> <!-- End staging-files-area -->
             </div>
         </div>
     </div>

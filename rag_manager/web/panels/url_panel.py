@@ -7,8 +7,11 @@ Centralizes URL management statistics, scraping counts, and scheduling metrics.
 """
 
 import logging
+import os
+from pathlib import Path
 from typing import Dict, Any
 from datetime import datetime, timedelta
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +28,8 @@ class URLPanelStats:
         Get all URL statistics for the URL panel.
         
         Returns:
-            Dictionary containing URL panel statistics
+            Dictionary containing URL panel statistics including pages processed 
+            and snapshot disk usage
         """
         try:
             if not self.rag_manager.url_manager:
@@ -45,6 +49,12 @@ class URLPanelStats:
             robots_ignored = sum(1 for url in urls if url.get('ignore_robots_txt', False))
             crawl_on = sum(1 for url in urls if url.get('refresh_interval_minutes', 0) > 0)
             
+            # Calculate pages processed for all URLs (count chunks/documents in vector database)
+            total_pages_processed = self._calculate_total_pages_processed(urls)
+            
+            # Calculate total snapshot disk usage
+            snapshot_size_human = self._calculate_snapshot_disk_usage()
+            
             return {
                 'total': total_urls,
                 'active': active_urls,
@@ -52,12 +62,112 @@ class URLPanelStats:
                 'robots_ignored': robots_ignored,
                 'scraped': scraped,
                 'never_scraped': never_scraped,
-                'due_now': due_now
+                'due_now': due_now,
+                'pages_processed': total_pages_processed,
+                'snapshot_disk_usage': snapshot_size_human
             }
             
         except Exception as e:
             logger.error(f"Failed to get URL panel stats: {e}")
             return self._empty_stats()
+    
+    def _calculate_total_pages_processed(self, urls: list) -> int:
+        """
+        Calculate total pages processed across all URLs by counting chunks/documents 
+        in the vector database for each URL.
+        
+        Args:
+            urls: List of URL dictionaries
+            
+        Returns:
+            Total number of pages/chunks processed
+        """
+        try:
+            if not self.rag_manager.milvus_manager:
+                return 0
+                
+            total_pages = 0
+            
+            for url in urls:
+                url_string = url.get('url', '')
+                url_id = url.get('id', '')
+                
+                if url_string:
+                    # Count chunks for this URL in Milvus
+                    try:
+                        chunk_count = self.rag_manager.milvus_manager.get_chunk_count_for_url(url_string, url_id)
+                        total_pages += chunk_count
+                    except Exception as e:
+                        logger.debug(f"Failed to get chunk count for URL {url_string}: {e}")
+                        continue
+                        
+            return total_pages
+            
+        except Exception as e:
+            logger.error(f"Failed to calculate total pages processed: {e}")
+            return 0
+    
+    def _calculate_snapshot_disk_usage(self) -> str:
+        """
+        Calculate total disk space usage of the snapshot folder in human-readable format.
+        
+        Returns:
+            Human-readable string of total snapshot disk usage (e.g., "15.3 MB")
+        """
+        try:
+            # Get snapshot directory from config
+            snapshot_dir = getattr(self.rag_manager.config, 'SNAPSHOT_DIR', 
+                                 os.path.join('uploaded', 'snapshots'))
+            snapshot_path = Path(snapshot_dir)
+            
+            if not snapshot_path.exists():
+                return "0 B"
+            
+            total_size = 0
+            
+            # Walk through all files in snapshot directory
+            for root, dirs, files in os.walk(snapshot_path):
+                for file in files:
+                    file_path = Path(root) / file
+                    try:
+                        total_size += file_path.stat().st_size
+                    except (OSError, IOError):
+                        # Skip files that can't be accessed
+                        continue
+            
+            # Convert to human-readable format
+            return self._format_bytes(total_size)
+            
+        except Exception as e:
+            logger.error(f"Failed to calculate snapshot disk usage: {e}")
+            return "0 B"
+    
+    def _format_bytes(self, bytes_count: int) -> str:
+        """
+        Convert bytes to human-readable format.
+        
+        Args:
+            bytes_count: Number of bytes
+            
+        Returns:
+            Human-readable string (e.g., "1.5 MB", "3.2 GB")
+        """
+        if bytes_count == 0:
+            return "0 B"
+        
+        units = ['B', 'KB', 'MB', 'GB', 'TB']
+        unit_index = 0
+        size = float(bytes_count)
+        
+        while size >= 1024.0 and unit_index < len(units) - 1:
+            size /= 1024.0
+            unit_index += 1
+        
+        # Format with appropriate decimal places
+        if unit_index == 0:  # Bytes
+            return f"{int(size)} {units[unit_index]}"
+        else:
+            return f"{size:.1f} {units[unit_index]}"
     
     def _is_url_due_for_scraping(self, url: Dict[str, Any]) -> bool:
         """Check if a URL is due for scraping based on refresh interval."""
@@ -98,5 +208,7 @@ class URLPanelStats:
             'robots_ignored': 0,
             'scraped': 0,
             'never_scraped': 0,
-            'due_now': 0
+            'due_now': 0,
+            'pages_processed': 0,
+            'snapshot_disk_usage': '0 B'
         }

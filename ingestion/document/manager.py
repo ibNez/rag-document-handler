@@ -3,6 +3,7 @@
 import logging
 from datetime import datetime
 from typing import Dict, Any, Optional
+from ingestion.utils.file_filters import should_ignore_file
 
 logger = logging.getLogger(__name__)
 
@@ -16,10 +17,15 @@ class DocumentManager:
     
     def upsert_document_metadata(self, filename: str, metadata: Dict[str, Any]) -> None:
         """Update or insert document metadata."""
+        # Filter out system files
+        if should_ignore_file(filename):
+            logger.debug(f"Ignoring system file during upsert: {filename}")
+            return
+            
         try:
             # Map metadata for PostgreSQL storage with explicit columns
             insert_data = {
-                'document_id': filename,
+                'filename': filename,
                 'title': metadata.get('title', filename),
                 'content_preview': metadata.get('content_preview', ''),
                 'file_path': metadata.get('file_path', ''),
@@ -39,15 +45,15 @@ class DocumentManager:
                 with conn.cursor() as cursor:
                     cursor.execute("""
                         INSERT INTO documents (
-                            document_id, title, content_preview, file_path, content_type, 
+                            filename, title, content_preview, file_path, content_type, 
                             file_size, word_count, page_count, chunk_count, avg_chunk_chars,
                             median_chunk_chars, top_keywords, processing_time_seconds, processing_status
                         ) VALUES (
-                            %(document_id)s, %(title)s, %(content_preview)s, %(file_path)s, 
+                            %(filename)s, %(title)s, %(content_preview)s, %(file_path)s, 
                             %(content_type)s, %(file_size)s, %(word_count)s, %(page_count)s,
                             %(chunk_count)s, %(avg_chunk_chars)s, %(median_chunk_chars)s,
                             %(top_keywords)s, %(processing_time_seconds)s, %(processing_status)s
-                        ) ON CONFLICT (document_id) DO UPDATE SET
+                        ) ON CONFLICT (filename) DO UPDATE SET
                             title = EXCLUDED.title,
                             content_preview = EXCLUDED.content_preview,
                             file_path = EXCLUDED.file_path,
@@ -71,10 +77,15 @@ class DocumentManager:
 
     def get_document_metadata(self, filename: str) -> Optional[Dict[str, Any]]:
         """Get document metadata."""
+        # Filter out system files
+        if should_ignore_file(filename):
+            logger.debug(f"Ignoring system file: {filename}")
+            return None
+            
         try:
             with self.postgres.get_connection() as conn:
                 with conn.cursor() as cursor:
-                    cursor.execute("SELECT * FROM documents WHERE document_id = %s", (filename,))
+                    cursor.execute("SELECT * FROM documents WHERE filename = %s", (filename,))
                     row = cursor.fetchone()
                     if not row:
                         logger.info(f"Metadata lookup miss for {filename}")
@@ -82,7 +93,7 @@ class DocumentManager:
                     
                     d = dict(row)
                     # Map PostgreSQL schema back to expected format
-                    d['filename'] = d['document_id']
+                    d['filename'] = d['filename']  # Already correctly named
                     
                     # Convert datetime objects to strings
                     for key, value in d.items():
@@ -99,10 +110,15 @@ class DocumentManager:
 
     def delete_document_metadata(self, filename: str) -> None:
         """Remove a document metadata row permanently."""
+        # Filter out system files
+        if should_ignore_file(filename):
+            logger.debug(f"Ignoring system file during delete: {filename}")
+            return
+            
         try:
             with self.postgres.get_connection() as conn:
                 with conn.cursor() as cursor:
-                    cursor.execute("DELETE FROM documents WHERE document_id = %s", (filename,))
+                    cursor.execute("DELETE FROM documents WHERE filename = %s", (filename,))
                     removed = cursor.rowcount
                     conn.commit()
             logger.info(f"Metadata delete for {filename}; removed_row={removed > 0}")

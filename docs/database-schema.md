@@ -5,9 +5,7 @@ This document provides comprehensive documentation of all database schemas used 
 ## Overview
 
 The system uses a dual-database architecture with refactored data access:
-- **PostgreSQL**: Relationa| `category` | VARCHAR(65535) | Content element type from unstructured library | CompositeElement, TableChunk, etc. |
-| `category_type` | VARCHAR(65535) | Content source type classification | "document" / "url" / "email" |
-| `content_hash` | VARCHAR(65535) | Hash for deduplication | Generated based on content |metadata storage managed through `ingestion/core/postgres_manager.py`
+- **PostgreSQL**: Relational metadata storage managed through `ingestion/core/postgres_manager.py`
 - **Milvus**: Vector embeddings storage accessed via `rag_manager/managers/milvus_manager.py`
 
 ## Data Access Architecture
@@ -18,32 +16,54 @@ The refactored system provides clean separation of database concerns:
 - **Vector Layer**: `rag_manager/managers/milvus_manager.py` manages embeddings and RAG search
 - **Domain Layers**: Email, URL, and document managers use core abstractions
 
+## Schema Design Principles
+
+**Consistent ID Naming Convention:**
+- Every table has `id` field as UUID primary key
+- Foreign keys follow `{tablename}_id` pattern
+- Same UUID values used across PostgreSQL ↔ Milvus for one-to-one mapping
+
+**Document Types:**
+- Files and URLs are both stored as "documents" with `document_type` field
+- Emails are separate entities with their own tables and collections
+
 ## PostgreSQL Schema
 
 ### Tables Overview
 
 | Table | Purpose | Primary Key | Foreign Keys |
 |-------|---------|-------------|--------------|
-| `documents` | File upload metadata | `document_id` | None |
-| `urls` | Web crawling metadata | `id` | None |
-| `email_accounts` | Email account configuration | `id` | None |
-| `email_messages` | Email message metadata | `message_id` | `account_id` → `email_accounts.id` |
+| `documents` | File upload and URL metadata | `id` (UUID) | None |
+| `document_chunks` | Document text chunks for search | `id` (UUID) | `document_id` → `documents.id` |
+| `urls` | URL-specific metadata and crawling settings | `id` (UUID) | `parent_url_id` → `urls.id` |
+| `emails` | Email message metadata | `id` (UUID) | None |
+| `email_chunks` | Email text chunks for search | `id` (UUID) | `email_id` → `emails.id` |
 
 ### Documents Table
 
-Stores metadata for uploaded documents.
+Stores metadata for uploaded documents AND crawled URLs (unified approach).
 
 ```sql
 CREATE TABLE documents (
-    document_id VARCHAR PRIMARY KEY,
-    filename VARCHAR NOT NULL,
-    content_type VARCHAR,
-    file_size INTEGER,
-    upload_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    processing_status VARCHAR DEFAULT 'pending',
-    metadata JSONB,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    document_type VARCHAR(50) NOT NULL DEFAULT 'file', -- 'file' or 'url'
+    title TEXT,
+    content_preview TEXT,
+    file_path TEXT, -- filename for files, URL for URLs
+    content_type VARCHAR(100),
+    file_size BIGINT,
+    word_count INTEGER,
+    page_count INTEGER,
+    chunk_count INTEGER,
+    avg_chunk_chars REAL,
+    median_chunk_chars REAL,
+    top_keywords TEXT[],
+    processing_time_seconds REAL,
+    processing_status VARCHAR(50) DEFAULT 'pending',
+    file_hash VARCHAR(64),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    indexed_at TIMESTAMP WITH TIME ZONE
 );
 ```
 
@@ -51,40 +71,84 @@ CREATE TABLE documents (
 
 | Field | Type | Description | Constraints |
 |-------|------|-------------|-------------|
-| `document_id` | VARCHAR | Unique identifier for the document | PRIMARY KEY, NOT NULL |
-| `filename` | VARCHAR | Original filename from upload | NOT NULL |
-| `content_type` | VARCHAR | MIME type (e.g., 'application/pdf') | Optional |
-| `file_size` | INTEGER | File size in bytes | Optional |
-| `upload_timestamp` | TIMESTAMP | When document was uploaded | DEFAULT CURRENT_TIMESTAMP |
-| `processing_status` | VARCHAR | Processing state: 'pending', 'completed', 'failed' | DEFAULT 'pending' |
-| `metadata` | JSONB | Additional attributes (page_count, author, etc.) | Optional |
-| `created_at` | TIMESTAMP | Record creation time | DEFAULT CURRENT_TIMESTAMP |
-| `updated_at` | TIMESTAMP | Last record update | DEFAULT CURRENT_TIMESTAMP |
+| `id` | UUID | Unique identifier for the document | PRIMARY KEY, DEFAULT uuid_generate_v4() |
+| `document_type` | VARCHAR(50) | Type of document: 'file' or 'url' | NOT NULL, DEFAULT 'file' |
+| `title` | TEXT | Document title or page title | Optional |
+| `content_preview` | TEXT | Preview of document content | Optional |
+| `file_path` | TEXT | Filename for files, URL for web pages | Optional |
+
+> **Architecture Note:** PostgreSQL is the single source of truth for all document metadata. Milvus stores only minimal fields needed for vector operations (document_id, page, content_hash). All metadata queries should use PostgreSQL with UUID relationships.
+
+| `content_type` | VARCHAR(100) | MIME type (e.g., 'application/pdf') | Optional |
+| `file_size` | BIGINT | File size in bytes | Optional |
+| `word_count` | INTEGER | Total word count | Optional |
+| `page_count` | INTEGER | Number of pages | Optional |
+| `chunk_count` | INTEGER | Number of text chunks | Optional |
+| `processing_status` | VARCHAR(50) | Processing state: 'pending', 'completed', 'failed' | DEFAULT 'pending' |
+| `created_at` | TIMESTAMP | Record creation time | DEFAULT NOW() |
+| `updated_at` | TIMESTAMP | Last record update | DEFAULT NOW() |
+
+### Document Chunks Table
+
+Stores text chunks from documents for hybrid retrieval and search.
+
+```sql
+CREATE TABLE document_chunks (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    document_id UUID NOT NULL,
+    chunk_text TEXT NOT NULL,
+    chunk_ordinal INTEGER NOT NULL,
+    page_start INTEGER NULL,
+    page_end INTEGER NULL,
+    section_path TEXT NULL,
+    element_types TEXT[] NULL,
+    token_count INTEGER,
+    chunk_hash VARCHAR(64),
+    embedding_version VARCHAR(50) DEFAULT 'mxbai-embed-large',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    CONSTRAINT fk_document_chunks_document FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE,
+    CONSTRAINT uk_document_chunks_position UNIQUE(document_id, chunk_ordinal)
+);
+```
+
+#### Field Descriptions
+
+| Field | Type | Description | Constraints |
+|-------|------|-------------|-------------|
+| `id` | UUID | Unique identifier for the chunk | PRIMARY KEY, DEFAULT uuid_generate_v4() |
+| `document_id` | UUID | Reference to parent document | FK → documents.id |
+| `chunk_text` | TEXT | The actual text content of the chunk | NOT NULL |
+| `chunk_ordinal` | INTEGER | Sequential chunk number within document | NOT NULL |
+| `page_start` | INTEGER | Starting page number | Optional |
+| `page_end` | INTEGER | Ending page number | Optional |
+| `section_path` | TEXT | Hierarchical section path | Optional |
+| `element_types` | TEXT[] | Types of elements from unstructured library | Optional |
+| `token_count` | INTEGER | Number of tokens in chunk | Optional |
+| `chunk_hash` | VARCHAR(64) | Content hash for deduplication | Optional |
 
 ### URLs Table
 
-Stores metadata for web URLs and crawling configuration.
+Stores URL-specific metadata and crawling configuration separate from the unified documents table.
 
 ```sql
 CREATE TABLE urls (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    url VARCHAR NOT NULL UNIQUE,
-    title VARCHAR,
+    url TEXT NOT NULL UNIQUE,
+    title TEXT,
     description TEXT,
-    status VARCHAR DEFAULT 'active',
-    content_type VARCHAR(100),
-    content_length BIGINT,
-    last_crawled TIMESTAMP,
-    crawl_depth INTEGER DEFAULT 0,
-    refresh_interval_minutes INTEGER DEFAULT 1440,
+    status VARCHAR(50) DEFAULT 'active',
+    refresh_interval_minutes INTEGER,
+    last_crawled TIMESTAMP WITH TIME ZONE,
+    last_update_status VARCHAR(50),
+    last_refresh_started TIMESTAMP WITH TIME ZONE,
+    is_refreshing BOOLEAN DEFAULT FALSE,
     crawl_domain BOOLEAN DEFAULT FALSE,
     ignore_robots BOOLEAN DEFAULT FALSE,
-    snapshot_enabled BOOLEAN DEFAULT FALSE,
-    snapshot_retention_days INTEGER,
-    snapshot_max_snapshots INTEGER,
-    metadata JSONB DEFAULT '{}',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    snapshot_retention_days INTEGER DEFAULT 30,
+    snapshot_max_snapshots INTEGER DEFAULT 10,
+    parent_url_id UUID REFERENCES urls(id) ON DELETE CASCADE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 ```
 
@@ -92,24 +156,33 @@ CREATE TABLE urls (
 
 | Field | Type | Description | Constraints |
 |-------|------|-------------|-------------|
-| `id` | UUID | Auto-generated unique identifier | PRIMARY KEY, DEFAULT gen_random_uuid() |
-| `url` | VARCHAR | The web URL to crawl | NOT NULL, UNIQUE |
-| `title` | VARCHAR | Extracted page title | Optional |
-| `description` | TEXT | User-provided description | Optional |
-| `status` | VARCHAR | Crawl status: 'active', 'inactive', 'failed' | DEFAULT 'active' |
-| `content_type` | VARCHAR(100) | MIME type of crawled content | Optional |
-| `content_length` | BIGINT | Size of crawled content in bytes | Optional |
-| `last_crawled` | TIMESTAMP | Last successful crawl time | Optional |
-| `crawl_depth` | INTEGER | Current crawl depth level | DEFAULT 0 |
-| `refresh_interval_minutes` | INTEGER | Refresh frequency in minutes | DEFAULT 1440 (24 hours) |
-| `crawl_domain` | BOOLEAN | Whether to crawl entire domain | DEFAULT FALSE |
-| `ignore_robots` | BOOLEAN | Whether to ignore robots.txt | DEFAULT FALSE |
-| `snapshot_enabled` | BOOLEAN | Enable point-in-time snapshots for this URL | DEFAULT FALSE |
-| `snapshot_retention_days` | INTEGER | Retain snapshots for N days (NULL = unlimited) | Optional |
-| `snapshot_max_snapshots` | INTEGER | Max number of snapshots to keep (NULL = unlimited) | Optional |
-| `metadata` | JSONB | Additional extensible metadata | DEFAULT '{}' |
-| `created_at` | TIMESTAMP | Record creation time | DEFAULT CURRENT_TIMESTAMP |
-| `updated_at` | TIMESTAMP | Last record update | DEFAULT CURRENT_TIMESTAMP |
+| `id` | UUID | Unique identifier for the URL | PRIMARY KEY, DEFAULT gen_random_uuid() |
+| `url` | TEXT | The actual URL to crawl | NOT NULL, UNIQUE |
+| `title` | TEXT | Page title extracted from crawl | Optional |
+| `description` | TEXT | Description or metadata about URL | Optional |
+| `status` | VARCHAR(50) | URL status: 'active', 'inactive' | DEFAULT 'active' |
+| `refresh_interval_minutes` | INTEGER | Minutes between crawls | Optional (null = no scheduling) |
+| `last_crawled` | TIMESTAMP | When URL was last successfully crawled | Optional |
+| `last_update_status` | VARCHAR(50) | Result of last crawl attempt | Optional |
+| `last_refresh_started` | TIMESTAMP | When current/last refresh started | Optional |
+| `is_refreshing` | BOOLEAN | Whether URL is currently being processed | DEFAULT FALSE |
+| `crawl_domain` | BOOLEAN | Whether to discover child URLs | DEFAULT FALSE |
+| `ignore_robots` | BOOLEAN | Whether to ignore robots.txt rules | DEFAULT FALSE |
+| `snapshot_retention_days` | INTEGER | Days to keep snapshots (0 = forever) | DEFAULT 30 |
+| `snapshot_max_snapshots` | INTEGER | Max snapshots to keep (0 = unlimited) | DEFAULT 10 |
+| `parent_url_id` | UUID | Reference to parent URL for discovered children | REFERENCES urls(id) |
+| `created_at` | TIMESTAMP | Record creation time | DEFAULT NOW() |
+| `updated_at` | TIMESTAMP | Last record update | DEFAULT NOW() |
+
+#### Key Features
+
+- **Snapshot Configuration**: Snapshots are **always enabled** for all URLs (removed snapshot_enabled toggle for consistency)
+- **Parent-Child Relationships**: URLs discovered via domain crawling reference their parent via `parent_url_id`
+- **Processing Protection**: `is_refreshing` flag prevents overlapping crawl sessions
+- **Scheduling Prevention**: Parent URLs cannot be re-scheduled while children are still processing
+- **Robots.txt Support**: Optional compliance with crawl delays and access rules
+
+**Note:** URLs are now stored in the unified `documents` table with `document_type = 'url'`. This provides consistent ID management and metadata handling across all document types.
 
 ### URL Snapshots Table
 
@@ -118,7 +191,7 @@ Stores point-in-time captures for crawled URLs and links to stored artifacts.
 ```sql
 CREATE TABLE url_snapshots (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    url_id UUID NOT NULL REFERENCES urls(id) ON DELETE CASCADE,
+    document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
     snapshot_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     pdf_document_id VARCHAR,
     mhtml_document_id VARCHAR,
@@ -132,7 +205,7 @@ CREATE TABLE url_snapshots (
 | Field | Type | Description | Constraints |
 |-------|------|-------------|-------------|
 | `id` | UUID | Snapshot identifier | PRIMARY KEY, DEFAULT gen_random_uuid() |
-| `url_id` | UUID | Associated URL | NOT NULL, FK → urls.id |
+| `document_id` | UUID | Associated document (URL type) | NOT NULL, FK → documents.id |
 | `snapshot_ts` | TIMESTAMP | Capture timestamp (UTC) | DEFAULT CURRENT_TIMESTAMP |
 | `pdf_document_id` | VARCHAR | Reference to PDF in documents | Optional |
 | `mhtml_document_id` | VARCHAR | Reference to MHTML in documents | Optional |
@@ -142,7 +215,7 @@ CREATE TABLE url_snapshots (
 Notes:
 - Artifact binaries (PDF/MHTML) are stored on disk; `documents` table tracks metadata and paths.
 - Milvus `document_id` for URL embeddings should be set to `url_snapshots.id` to ensure point-in-time traceability.
-- Snapshot capture is controlled per-URL via `urls.snapshot_enabled`; retention can be enforced via `snapshot_retention_days` and/or `snapshot_max_snapshots`.
+- Snapshot capture is controlled per-URL via document metadata; retention can be enforced via configuration.
 
 ### Email Accounts Table
 
@@ -238,21 +311,60 @@ CREATE TABLE email_messages (
 
 ## Milvus Schema
 
+## Milvus Schema
+
+### Collections Overview
+
+| Collection | Purpose | Primary Identifier | Content Types |
+|------------|---------|-------------------|---------------|
+| `documents` | Document and URL embeddings | `document_id` (UUID) | Files and URLs |
+| `emails` | Email embeddings | `email_id` (UUID) | Email messages |
+
 ### Documents Collection
 
-The Milvus collection stores vector embeddings with metadata for all content types using a unified schema.
+The Milvus collection stores vector embeddings with **minimal metadata**. PostgreSQL is the single source of truth for all document metadata.
 
 ```python
 # Collection: documents
 # Dimension: 384 (mxbai-embed-large model)
 fields = [
-    FieldSchema(name="document_id", dtype=DataType.VARCHAR, max_length=65535, is_primary=True),
-    FieldSchema(name="source", dtype=DataType.VARCHAR, max_length=65535),
+    FieldSchema(name="document_id", dtype=DataType.VARCHAR, max_length=65535),
     FieldSchema(name="page", dtype=DataType.INT64),
-    FieldSchema(name="chunk_id", dtype=DataType.VARCHAR, max_length=65535),
-    FieldSchema(name="topic", dtype=DataType.VARCHAR, max_length=65535),
-    FieldSchema(name="category", dtype=DataType.VARCHAR, max_length=65535),
-    FieldSchema(name="category_type", dtype=DataType.VARCHAR, max_length=65535),
+    FieldSchema(name="content_hash", dtype=DataType.VARCHAR, max_length=65535),
+    FieldSchema(name="text", dtype=DataType.VARCHAR, max_length=65535),
+    FieldSchema(name="pk", dtype=DataType.INT64, is_primary=True, auto_id=True),
+    FieldSchema(name="vector", dtype=DataType.FLOAT_VECTOR, dim=384)
+]
+```
+
+#### Field Descriptions (Clean Architecture)
+
+| Field | Type | Description | Content Usage |
+|-------|------|-------------|---------------|
+| `document_id` | VARCHAR(65535) | UUID from documents.id | Reference to PostgreSQL document |
+| `page` | INT64 | Page or chunk number | Basic navigation reference |
+| `content_hash` | VARCHAR(65535) | Hash for deduplication | Generated based on content |
+| `text` | VARCHAR(65535) | Searchable text content | Extracted text chunk |
+| `pk` | INT64 | Auto-generated primary key | Milvus internal ID |
+| `vector` | FLOAT_VECTOR(384) | Embedding vector | Generated by mxbai-embed-large |
+
+**Note**: All other metadata (filename, source, title, document_type, etc.) is stored in PostgreSQL and retrieved via `document_id` UUID relationship. This eliminates redundancy and ensures single source of truth.
+
+### Emails Collection
+
+The Milvus collection stores vector embeddings for email content with minimal metadata.
+
+```python
+# Collection: emails  
+# Dimension: 384 (mxbai-embed-large model)
+fields = [
+    FieldSchema(name="email_id", dtype=DataType.VARCHAR, max_length=65535),
+    FieldSchema(name="page", dtype=DataType.INT64),
+    FieldSchema(name="content_hash", dtype=DataType.VARCHAR, max_length=65535),
+    FieldSchema(name="text", dtype=DataType.VARCHAR, max_length=65535),
+    FieldSchema(name="pk", dtype=DataType.INT64, is_primary=True, auto_id=True),
+    FieldSchema(name="vector", dtype=DataType.FLOAT_VECTOR, dim=384)
+]
     FieldSchema(name="content_hash", dtype=DataType.VARCHAR, max_length=65535),
     FieldSchema(name="content_length", dtype=DataType.INT64),
     FieldSchema(name="text", dtype=DataType.VARCHAR, max_length=65535),
@@ -261,97 +373,91 @@ fields = [
 ]
 ```
 
-#### Field Descriptions
-
-| Field | Type | Description | Content Type Usage |
-|-------|------|-------------|-------------------|
-| `document_id` | VARCHAR(65535) | Primary identifier | File ID / URL ID / Email message_id |
-| `source` | VARCHAR(65535) | Content source location | File path / URL / email:{from_addr} |
-| `page` | INT64 | Page or chunk number | Document page / URL chunk index / Email chunk index |
-| `chunk_id` | VARCHAR(65535) | Unique chunk identifier | Generated composite ID |
-| `topic` | VARCHAR(65535) | Main subject or title | Filename / Page title / Email subject |
-| `category` | VARCHAR(65535) | Content type classification | "document" / "url" / "email" |
-| `content_hash` | VARCHAR(65535) | Hash for deduplication | Generated based on content |
-| `content_length` | INT64 | Character count of text | Length of text field |
-| `text` | VARCHAR(65535) | Searchable text content | Extracted text chunk |
-| `pk` | INT64 | Auto-generated primary key | Milvus internal ID |
-| `vector` | FLOAT_VECTOR(384) | Embedding vector | Generated by mxbai-embed-large |
-
-### Index Configuration
-
-```python
-# Vector similarity index
-index_params = {
-    "index_type": "IVF_FLAT",
-    "metric_type": "COSINE",
-    "params": {"nlist": 128}
-}
-```
-
 ## Schema Mapping Rules
 
-### Document Upload → Milvus
+### File Upload → PostgreSQL + Milvus
 ```python
+# PostgreSQL documents table
 {
-    "document_id": document_id,
-    "source": f"file:{filename}",
+    "id": document_uuid,  # Auto-generated UUID
+    "document_type": "file",
+    "title": extracted_title,
+    "file_path": filename,
+    "content_type": "application/pdf"
+}
+
+# PostgreSQL document_chunks table  
+{
+    "id": chunk_id,  # Auto-generated UUID
+    "document_id": document_id,  # FK to documents.id
+    "chunk_text": text_content,
+    "chunk_ordinal": chunk_index
+}
+
+# Milvus documents collection (clean minimal schema)
+{
+    "document_id": document_id,  # ID reference to PostgreSQL
     "page": page_number,
-    "chunk_id": f"{document_id}:{chunk_index}",
-    "topic": filename,
-    "category": element_type,  # From unstructured library
-    "category_type": "document",
-    "content_hash": f"doc_{document_id}_{chunk_index}",
-    "content_length": len(text_chunk),
+    "content_hash": "abc123...",
     "text": text_chunk
+    # Note: All other metadata retrieved from PostgreSQL via document_id
 }
 ```
 
-### URL Crawl → Milvus
-When `urls.snapshot_enabled = true`, use the snapshot id to ensure point-in-time traceability; otherwise fall back to the URL id.
-
+### URL Crawl → PostgreSQL + Milvus
 ```python
-# If snapshots enabled for this URL
+# PostgreSQL documents table
 {
-    "document_id": snapshot_id,  # from url_snapshots.id
-    "source": url,
-    "page": chunk_index,
-    "chunk_id": f"{snapshot_id}:{chunk_index}",
-    "topic": page_title,
-    "category": "NarrativeText",  # Or other element types
-    "category_type": "url",
-    "content_hash": f"url_{snapshot_id}_{chunk_index}",
-    "content_length": len(text_chunk),
-    "text": text_chunk
+    "id": document_uuid,  # Auto-generated UUID  
+    "document_type": "url",
+    "title": page_title,
+    "file_path": url,
+    "content_type": "text/html"
 }
 
-# If snapshots disabled for this URL
+# PostgreSQL document_chunks table
 {
-    "document_id": url_id,
-    "source": url,
+    "id": chunk_id,  # Auto-generated UUID
+    "document_id": document_id,  # FK to documents.id
+    "chunk_text": text_content,
+    "chunk_ordinal": chunk_index
+}
+
+# Milvus documents collection (clean minimal schema)
+{
+    "document_id": document_id,  # ID reference to PostgreSQL
     "page": chunk_index,
-    "chunk_id": f"{url_id}:{chunk_index}",
-    "topic": page_title,
-    "category": "NarrativeText",  # Or other element types
-    "category_type": "url",
-    "content_hash": f"url_{url_id}_{chunk_index}",
-    "content_length": len(text_chunk),
+    "content_hash": "def456...",
     "text": text_chunk
+    # Note: URL, page_title, document_type retrieved from PostgreSQL
 }
 ```
 
-### Email Processing → Milvus
+### Email Processing → PostgreSQL + Milvus
 ```python
+# PostgreSQL emails table
 {
-    "document_id": message_id,
-    "source": f"email:{from_addr}",
+    "id": email_uuid,  # Auto-generated UUID
+    "subject": email_subject,
+    "from_addr": sender_address,
+    "message_id": original_message_id
+}
+
+# PostgreSQL email_chunks table
+{
+    "id": chunk_id,  # Auto-generated UUID
+    "email_id": email_id,  # FK to emails.id
+    "chunk_text": text_content,
+    "chunk_ordinal": chunk_index
+}
+
+# Milvus emails collection (clean minimal schema)
+{
+    "email_id": email_id,  # ID reference to PostgreSQL
     "page": chunk_index,
-    "chunk_id": f"{message_id}:{chunk_index}",
-    "topic": subject,
-    "category": "NarrativeText",  # Or other element types
-    "category_type": "email",
-    "content_hash": f"email_{message_id}_{chunk_index}",
-    "content_length": len(text_chunk),
+    "content_hash": "ghi789...",
     "text": text_chunk
+    # Note: subject, from_addr, etc. retrieved from PostgreSQL
 }
 ```
 

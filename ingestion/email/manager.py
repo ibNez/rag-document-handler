@@ -13,7 +13,7 @@ import logging
 from datetime import datetime, UTC
 from typing import Any, Dict, List, Optional
 
-from ingestion.utils.db_utils import PostgreSQLManager
+from ingestion.core.postgres_manager import PostgreSQLManager
 from ingestion.utils.crypto import encrypt, decrypt
 
 logger = logging.getLogger(__name__)
@@ -356,13 +356,17 @@ class PostgreSQLEmailManager:
         for result in results:
             metadata = result['metadata']
             chunk_text = result['chunk_text']
-            email_id = metadata.get('message_id', metadata.get('source', 'unknown'))
+            email_id = metadata.get('message_id')
+            
+            if not email_id:
+                logger.error(f"Email chunk missing required 'message_id' metadata: {metadata}")
+                continue
             
             if email_id not in unique_emails:
                 unique_emails[email_id] = {
                     'ref_num': len(unique_emails) + 1,
                     'subject': metadata.get('subject', metadata.get('topic', '')),
-                    'sender': metadata.get('from_addr', metadata.get('source', '')),
+                    'sender': metadata.get('from_addr', ''),
                     'recipient': metadata.get('to_addrs', ''),
                     'date': metadata.get('date_utc', metadata.get('date', '')),
                     'chunks': []

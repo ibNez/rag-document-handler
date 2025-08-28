@@ -25,20 +25,37 @@ class PostgreSQLConfig:
     database: str = os.getenv('POSTGRES_DB', 'rag_metadata')
     user: str = os.getenv('POSTGRES_USER', 'rag_user')
     password: str = os.getenv('POSTGRES_PASSWORD', 'secure_password')
-    min_connections: int = 1
-    max_connections: int = 10
+    min_connections: int = 2
+    max_connections: int = 20  # Increased from 10 to handle more concurrent operations
 
 class PostgreSQLManager:
     """PostgreSQL manager for RAG document metadata and analytics."""
     
-    def __init__(self, config: Optional[PostgreSQLConfig] = None):
-        """Initialize PostgreSQL manager with connection pooling."""
-        self.config = config or PostgreSQLConfig()
-        self._initialize_pool()
-        self._ensure_schema()
+    def __init__(self, config_or_pool=None):
+        """
+        Initialize PostgreSQL manager with connection pooling.
+        
+        Args:
+            config_or_pool: Either a PostgreSQLConfig object or a connection pool.
+                          If None, creates default config.
+        """
+        # Check if it's a connection pool (duck typing)
+        if hasattr(config_or_pool, 'getconn') and hasattr(config_or_pool, 'putconn'):
+            # It's a connection pool - use it directly
+            self.pool = config_or_pool
+            self.config = None
+            logger.info("PostgreSQL manager initialized with existing pool")
+        else:
+            # It's a config object (or None)
+            self.config = config_or_pool or PostgreSQLConfig()
+            self._initialize_pool()
+            self._ensure_schema()
     
     def _initialize_pool(self) -> None:
         """Initialize connection pool."""
+        if not self.config:
+            raise ValueError("Cannot initialize pool without config")
+            
         try:
             self.pool = ThreadedConnectionPool(
                 self.config.min_connections,
@@ -58,6 +75,9 @@ class PostgreSQLManager:
     @contextmanager
     def get_connection(self):
         """Context manager for database connections."""
+        if not self.pool:
+            raise RuntimeError("No connection pool available")
+            
         conn = None
         try:
             # Log connection attempt (but avoid accessing private pool attributes)
@@ -79,18 +99,24 @@ class PostgreSQLManager:
                 self.pool.putconn(conn)
     
     def _ensure_schema(self) -> None:
-        """Create necessary tables and indexes."""
+        """Create necessary tables and indexes. Skip if using external pool."""
+        if not self.config:
+            # Skip schema creation when using external pool - assume it's already set up
+            logger.debug("Skipping schema creation for external pool")
+            return
+            
         schema_sql = """
         -- Enable required extensions
         CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
         
-        -- Documents table for metadata storage
+        -- Documents table for metadata storage (files AND URLs)
         CREATE TABLE IF NOT EXISTS documents (
             id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-            document_id VARCHAR(255) UNIQUE NOT NULL,
+            document_type VARCHAR(50) NOT NULL DEFAULT 'file', -- 'file' or 'url'
             title TEXT,
             content_preview TEXT,
-            file_path TEXT,
+            file_path TEXT, -- Full path to file for files, URL for URLs
+            filename TEXT, -- Just the filename (e.g., 'document.pdf') for files, NULL for URLs
             content_type VARCHAR(100),
             file_size BIGINT,
             word_count INTEGER,
@@ -140,8 +166,8 @@ class PostgreSQLManager:
 
         -- Document chunks table for hybrid retrieval (similar to email_chunks)
         CREATE TABLE IF NOT EXISTS document_chunks (
-            chunk_id VARCHAR(255) PRIMARY KEY,
-            document_id VARCHAR(255) NOT NULL,
+            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+            document_id UUID NOT NULL,
             chunk_text TEXT NOT NULL,
             chunk_ordinal INTEGER NOT NULL,
             page_start INTEGER NULL,
@@ -152,7 +178,7 @@ class PostgreSQLManager:
             chunk_hash VARCHAR(64),
             embedding_version VARCHAR(50) DEFAULT 'mxbai-embed-large',
             created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-            CONSTRAINT fk_document_chunks_document FOREIGN KEY (document_id) REFERENCES documents(document_id) ON DELETE CASCADE,
+            CONSTRAINT fk_document_chunks_document FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE,
             CONSTRAINT uk_document_chunks_position UNIQUE(document_id, chunk_ordinal)
         );
         
@@ -170,13 +196,14 @@ class PostgreSQLManager:
             refresh_interval_minutes INTEGER DEFAULT 1440,
             crawl_domain BOOLEAN DEFAULT FALSE,
             ignore_robots BOOLEAN DEFAULT FALSE,
-            snapshot_enabled BOOLEAN DEFAULT FALSE,
-            snapshot_retention_days INTEGER,
-            snapshot_max_snapshots INTEGER,
+            snapshot_retention_days INTEGER DEFAULT 0,
+            snapshot_max_snapshots INTEGER DEFAULT 0,
             is_refreshing BOOLEAN DEFAULT FALSE,
             last_refresh_started TIMESTAMP WITH TIME ZONE,
             last_content_hash TEXT,
             last_update_status VARCHAR(50),
+            parent_url_id UUID REFERENCES urls(id) ON DELETE CASCADE,
+            child_url_count INTEGER DEFAULT 0,
             created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
             updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
         );
@@ -204,7 +231,6 @@ class PostgreSQLManager:
         ALTER TABLE email_accounts ADD COLUMN IF NOT EXISTS total_emails_in_mailbox INTEGER DEFAULT 0;
         
         -- Create indexes for performance
-        CREATE INDEX IF NOT EXISTS idx_documents_document_id ON documents(document_id);
         CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(processing_status);
         CREATE INDEX IF NOT EXISTS idx_documents_created ON documents(created_at);
         CREATE INDEX IF NOT EXISTS idx_documents_keywords ON documents USING GIN(top_keywords);
@@ -233,6 +259,7 @@ class PostgreSQLManager:
         
         CREATE INDEX IF NOT EXISTS idx_urls_url ON urls(url);
         CREATE INDEX IF NOT EXISTS idx_urls_status ON urls(status);
+        CREATE INDEX IF NOT EXISTS idx_urls_parent_url_id ON urls(parent_url_id);
         
         CREATE INDEX IF NOT EXISTS idx_email_accounts_email ON email_accounts(email_address);
         CREATE INDEX IF NOT EXISTS idx_email_accounts_name ON email_accounts(account_name);
@@ -265,46 +292,68 @@ class PostgreSQLManager:
                     logger.error(f"Failed to initialize schema: {e}")
                     raise
     
-    def store_document(self, document_id: str, title: Optional[str] = None, content_preview: Optional[str] = None,
-                      file_path: Optional[str] = None, content_type: Optional[str] = None, file_size: Optional[int] = None,
-                      word_count: Optional[int] = None, **kwargs) -> str:
-        """Store document metadata."""
+    def store_document(self, file_path: str, filename: str, 
+                      title: Optional[str] = None, content_preview: Optional[str] = None,
+                      content_type: Optional[str] = None, file_size: Optional[int] = None,
+                      word_count: Optional[int] = None, document_type: str = 'file', **kwargs) -> str:
+        """
+        Store document metadata and return the UUID.
+        
+        Args:
+            title: Document title (optional)
+            content_preview: Preview of document content (optional)
+            file_path: REQUIRED - Full path to file for files, URL for URLs
+            filename: REQUIRED - Filename for files, descriptive name for URLs
+            content_type: MIME type (optional)
+            file_size: File size in bytes (optional)
+            word_count: Number of words in document (optional)
+            document_type: Type of document ('file' or 'url')
+            **kwargs: Additional metadata (ignored)
+            
+        Returns:
+            The UUID of the stored document
+            
+        Raises:
+            ValueError: If required fields are missing or invalid
+        """
+        # Validate required fields according to DEVELOPMENT_RULES
+        if not file_path or not file_path.strip():
+            logger.error(f"Missing required field: file_path")
+            raise ValueError("file_path is required and cannot be empty")
+        
+        if not filename or not filename.strip():
+            logger.error(f"Missing required field: filename")
+            raise ValueError("filename is required and cannot be empty")
+        
+        logger.info(f"Storing document: file_path='{file_path}', filename='{filename}', type='{document_type}'")
         
         query = """
-            INSERT INTO documents (document_id, title, content_preview, file_path, 
-                                 content_type, file_size, word_count, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
-            ON CONFLICT (document_id) 
-            DO UPDATE SET 
-                title = EXCLUDED.title,
-                content_preview = EXCLUDED.content_preview,
-                file_path = EXCLUDED.file_path,
-                content_type = EXCLUDED.content_type,
-                file_size = EXCLUDED.file_size,
-                word_count = EXCLUDED.word_count,
-                updated_at = NOW()
+            INSERT INTO documents (title, content_preview, file_path, filename,
+                                 content_type, file_size, word_count, document_type, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
             RETURNING id
         """
         
         with self.get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(query, [
-                    document_id, title, content_preview, file_path,
-                    content_type, file_size, word_count
+                    title, content_preview, file_path, filename,
+                    content_type, file_size, word_count, document_type
                 ])
                 result = cur.fetchone()
                 conn.commit()
+                document_id = str(result['id'])
                 logger.info(f"Stored document metadata: {document_id}")
-                return str(result['id'])
+                return document_id
     
     def update_processing_status(self, document_id: str, status: str) -> None:
-        """Update document processing status."""
+        """Update document processing status by ID."""
         query = """
             UPDATE documents 
             SET processing_status = %s, 
                 indexed_at = CASE WHEN %s = 'completed' THEN NOW() ELSE indexed_at END,
                 updated_at = NOW()
-            WHERE document_id = %s
+            WHERE id = %s
         """
         
         with self.get_connection() as conn:
@@ -316,7 +365,7 @@ class PostgreSQLManager:
     def search_documents(self, query: str, limit: int = 50) -> List[Dict[str, Any]]:
         """Full-text search across documents."""
         search_sql = """
-            SELECT document_id, title, content_preview, content_type, 
+            SELECT id, title, content_preview, content_type, document_type,
                    page_count, chunk_count, word_count, 
                    avg_chunk_chars, median_chunk_chars, top_keywords,
                    processing_time_seconds, processing_status,
@@ -407,16 +456,15 @@ class PostgreSQLManager:
                 "error": str(e)
             }
     
-    def store_document_chunk(self, chunk_id: str, document_id: str, chunk_text: str, 
+    def store_document_chunk(self, document_id: str, chunk_text: str, 
                            chunk_ordinal: int, page_start: Optional[int] = None, 
                            page_end: Optional[int] = None, section_path: Optional[str] = None,
                            element_types: Optional[List[str]] = None, token_count: Optional[int] = None,
-                           chunk_hash: Optional[str] = None, embedding_version: str = 'mxbai-embed-large') -> None:
+                           chunk_hash: Optional[str] = None, embedding_version: str = 'mxbai-embed-large') -> str:
         """
         Store document chunk for hybrid retrieval.
         
         Args:
-            chunk_id: Unique chunk identifier
             document_id: Parent document identifier
             chunk_text: Text content of the chunk
             chunk_ordinal: Sequential chunk number within document
@@ -427,13 +475,16 @@ class PostgreSQLManager:
             token_count: Number of tokens in chunk
             chunk_hash: Content hash for deduplication
             embedding_version: Version/model used for embeddings
+            
+        Returns:
+            The UUID of the created chunk
         """
         query = """
             INSERT INTO document_chunks (
-                chunk_id, document_id, chunk_text, chunk_ordinal, page_start, page_end,
+                document_id, chunk_text, chunk_ordinal, page_start, page_end,
                 section_path, element_types, token_count, chunk_hash, embedding_version
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (chunk_id) 
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (document_id, chunk_ordinal) 
             DO UPDATE SET 
                 chunk_text = EXCLUDED.chunk_text,
                 page_start = EXCLUDED.page_start,
@@ -443,16 +494,20 @@ class PostgreSQLManager:
                 token_count = EXCLUDED.token_count,
                 chunk_hash = EXCLUDED.chunk_hash,
                 embedding_version = EXCLUDED.embedding_version
+            RETURNING id
         """
         
         with self.get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(query, [
-                    chunk_id, document_id, chunk_text, chunk_ordinal, page_start, page_end,
+                    document_id, chunk_text, chunk_ordinal, page_start, page_end,
                     section_path, element_types, token_count, chunk_hash, embedding_version
                 ])
+                result = cur.fetchone()
                 conn.commit()
+                chunk_id = str(result['id'])
                 logger.debug(f"Stored document chunk: {chunk_id}")
+                return chunk_id
     
     def get_document_chunks(self, document_id: str) -> List[Dict[str, Any]]:
         """
@@ -465,7 +520,7 @@ class PostgreSQLManager:
             List of chunk dictionaries with metadata
         """
         query = """
-            SELECT chunk_id, document_id, chunk_text, chunk_ordinal, page_start, page_end,
+            SELECT id, document_id, chunk_text, chunk_ordinal, page_start, page_end,
                    section_path, element_types, token_count, chunk_hash, embedding_version,
                    created_at
             FROM document_chunks 
@@ -495,7 +550,7 @@ class PostgreSQLManager:
         """
         base_query = """
             SELECT 
-                dc.chunk_id,
+                dc.id,
                 dc.document_id,
                 dc.chunk_text,
                 dc.chunk_ordinal,
@@ -510,7 +565,7 @@ class PostgreSQLManager:
                 d.file_path,
                 d.created_at
             FROM document_chunks dc
-            JOIN documents d ON dc.document_id = d.document_id
+            JOIN documents d ON dc.document_id = d.id
             WHERE to_tsvector('english', dc.chunk_text) @@ plainto_tsquery('english', %s)
         """
         

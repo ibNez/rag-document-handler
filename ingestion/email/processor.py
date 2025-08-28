@@ -30,7 +30,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_ollama import OllamaEmbeddings
 
 from ingestion.utils.chunker import TextChunker
-from ingestion.utils.db_utils import PostgreSQLManager
+from ingestion.core.postgres_manager import PostgreSQLManager
 
 logger = logging.getLogger(__name__)
 

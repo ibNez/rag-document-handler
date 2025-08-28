@@ -56,9 +56,98 @@ This document provides comprehensive information about all configuration variabl
 
 | Variable | Description | Default | Required | Example |
 |----------|-------------|---------|----------|---------|
-| `SNAPSHOT_DIR` | Directory for URL snapshot storage | `uploaded/snapshots` | No | `data/snapshots` |
+| `SNAPSHOT_DIR` | Directory for URL snapshot storage (always enabled) | `uploaded/snapshots` | No | `data/snapshots` |
 | `DEFAULT_CRAWL_INTERVAL_MINUTES` | Default crawl interval for URLs | `1440` | No | `720` (12 hours) |
 | `MAX_CRAWL_DEPTH` | Maximum crawl depth for URLs | `3` | No | `5` |
+
+**Note**: Snapshots are automatically enabled for all URLs to ensure consistency and complete historical preservation. The snapshot_enabled toggle has been removed.
+
+### Robots.txt Enforcement Configuration
+
+| Variable | Description | Default | Required | Example |
+|----------|-------------|---------|----------|---------|
+| `RESPECT_ROBOTS_TXT` | Enable robots.txt enforcement | `true` | No | `false` |
+| `CRAWLER_USER_AGENT` | User agent string for web requests | `RAG-Document-Handler/1.0` | No | `MyBot/2.0 (+http://example.com/bot)` |
+| `ROBOTS_CACHE_TTL` | Robots.txt cache TTL in seconds | `3600` | No | `7200` (2 hours) |
+| `DEFAULT_CRAWL_DELAY` | Default delay between requests (seconds) | `1.0` | No | `2.0` |
+| `MAX_CRAWL_DELAY` | Maximum allowed crawl delay (seconds) | `30.0` | No | `60.0` |
+| `REQUEST_TIMEOUT` | HTTP request timeout (seconds) | `10.0` | No | `15.0` |
+| `MAX_RETRIES` | Maximum HTTP retry attempts | `3` | No | `5` |
+
+### Email Processing Configuration
+
+| Variable | Description | Default | Required | Example |
+|----------|-------------|---------|----------|---------|
+| `EMAIL_ENABLED` | Enable email processing features | `false` | No | `true` |
+| `EMAIL_SYNC_INTERVAL_SECONDS` | Interval between email synchronizations | `300` | No | `600` (10 minutes) |
+| `EMAIL_BATCH_LIMIT` | Maximum emails to process per batch | `100` | No | `50` |
+| `EMAIL_CORRUPTION_DETECTION` | Enable enhanced corruption detection | `true` | No | `false` |
+| `EMAIL_OFFSET_TRACKING` | Enable offset-aware processing | `true` | No | `false` |
+
+**Email Configuration Details:**
+
+- **EMAIL_ENABLED**: Must be `true` to activate email processing features and background synchronization.
+
+- **EMAIL_SYNC_INTERVAL_SECONDS**: Controls how frequently the system checks for new emails across all configured accounts. Lower values provide more real-time processing but increase server load.
+
+- **EMAIL_BATCH_LIMIT**: Limits the number of emails processed in a single batch to prevent memory issues with large mailboxes. Adjust based on available memory and email sizes.
+
+- **EMAIL_CORRUPTION_DETECTION**: Enables enhanced validation of email messages including Message-ID header validation and structure checks. Recommended for production use.
+
+- **EMAIL_OFFSET_TRACKING**: Enables smart offset tracking to resume processing from the last successful position after interruptions.
+
+### Snapshot Configuration
+
+| Variable | Description | Default | Required | Example |
+|----------|-------------|---------|----------|---------|
+| `SNAPSHOT_VIEWPORT_WIDTH` | Browser viewport width for snapshots | `1920` | No | `1366` |
+| `SNAPSHOT_VIEWPORT_HEIGHT` | Browser viewport height for snapshots | `1080` | No | `768` |
+| `SNAPSHOT_PDF_FORMAT` | PDF page format | `A4` | No | `Letter` |
+| `SNAPSHOT_LOCALE` | Browser locale for snapshots | `en-US` | No | `en-GB` |
+| `SNAPSHOT_EMULATE_MEDIA` | Media type to emulate | `print` | No | `screen` |
+| `SNAPSHOT_TIMEOUT_SECONDS` | Page loading timeout | `60` | No | `30` |
+| `PLAYWRIGHT_BROWSER` | Browser engine to use | `chromium` | No | `firefox` |
+
+**Snapshot Configuration Details:**
+
+- **Viewport Settings**: Control the browser viewport size for consistent snapshot generation across different pages.
+
+- **PDF Format**: Standard page formats (A4, Letter, Legal) or custom dimensions.
+
+- **Media Emulation**: Use `print` for print-optimized layouts or `screen` for standard web layouts.
+
+- **Timeout**: Maximum time to wait for page loading before generating snapshot. Increase for slow-loading pages.
+
+### Hybrid Retrieval Configuration
+
+| Variable | Description | Default | Required | Example |
+|----------|-------------|---------|----------|---------|
+| `HYBRID_RETRIEVAL_ENABLED` | Enable hybrid search | `true` | No | `false` |
+| `RRF_CONSTANT` | Reciprocal Rank Fusion constant | `60` | No | `40` |
+| `VECTOR_WEIGHT` | Weight for vector similarity scores | `0.7` | No | `0.8` |
+| `FTS_WEIGHT` | Weight for full-text search scores | `0.3` | No | `0.2` |
+
+**Hybrid Retrieval Details:**
+
+- **HYBRID_RETRIEVAL_ENABLED**: Enables the advanced hybrid search combining vector similarity and PostgreSQL full-text search.
+
+- **RRF_CONSTANT**: Controls the Reciprocal Rank Fusion algorithm sensitivity. Higher values reduce the impact of rank differences.
+
+- **Weight Settings**: Control the relative importance of vector vs. full-text search results in the final ranking.
+
+**Robots.txt Configuration Details:**
+
+- **RESPECT_ROBOTS_TXT**: When `true`, the system checks robots.txt files before crawling and respects crawl delays and permissions. When `false`, robots.txt is ignored (use carefully and only for authorized crawling).
+
+- **CRAWLER_USER_AGENT**: Identifies your crawler in robots.txt requests and web crawling. Should be descriptive and include contact information for responsible crawling.
+
+- **ROBOTS_CACHE_TTL**: How long to cache robots.txt files in memory. Longer values reduce server load but may miss updates to robots.txt files.
+
+- **DEFAULT_CRAWL_DELAY**: Minimum delay between requests to the same origin when robots.txt doesn't specify a delay. Helps prevent server overload.
+
+- **MAX_CRAWL_DELAY**: Maximum delay the system will honor from robots.txt files. Prevents malicious robots.txt files from causing excessive delays.
+
+For detailed robots.txt implementation and usage, see [System Architecture Documentation](architecture.md).
 
 ## Configuration Files
 
@@ -94,7 +183,7 @@ The `.env.example` file contains all configuration variables with their default 
 - **File Upload & Processing**
 - **AI/ML Service Configuration** (Ollama models)
 - **Email Processing Settings**
-- **URL Crawling & Snapshot Configuration**
+- **URL Crawling & Snapshot Configuration** (snapshots always enabled)
 - **Background Task Scheduling**
 
 **Note:** The `.env` file is not tracked in version control for security reasons. Always use the `.env.example` file as your template and never commit sensitive configuration values.
@@ -208,4 +297,4 @@ Solution: Check MAX_CONTENT_LENGTH and UPLOAD_FOLDER permissions
 - [Installation Guide](installation.md) - Setup and deployment instructions
 - [Architecture Documentation](architecture.md) - System design and component interactions
 - [Database Schema](database-schema.md) - Database structure and relationships
-- [Email Processing](email-processing.md) - Email system configuration details
+- [Usage Guide](usage.md) - Complete feature walkthrough including email processing

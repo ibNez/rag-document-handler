@@ -19,9 +19,11 @@ from datetime import datetime
 
 from flask import Flask
 from langchain_core.documents import Document
+from urllib.robotparser import RobotFileParser
 
 from .core.config import Config
 from .core.models import DocumentProcessingStatus, URLProcessingStatus, EmailProcessingStatus
+from .core.ollama_health import OllamaHealthChecker
 from ingestion.document.processor import DocumentProcessor
 from .managers.milvus_manager import MilvusManager
 from .web.routes import WebRoutes
@@ -74,6 +76,9 @@ class RAGKnowledgebaseManager:
         # Initialize core components
         self.document_processor = DocumentProcessor(self.config)
         self.milvus_manager = MilvusManager(self.config)
+        
+        # Initialize Ollama health checker
+        self.ollama_health = OllamaHealthChecker(self.config)
         
         # Initialize Milvus collections during application startup
         logger.info("Initializing Milvus collections during application startup...")
@@ -225,20 +230,37 @@ class RAGKnowledgebaseManager:
             # Validate prerequisites
             if not self.url_manager:
                 logger.error("Cannot initialize URL orchestrator: URL manager not available")
+                logger.error(f"URL manager state: {self.url_manager}")
+                logger.error(f"PostgreSQL manager state: {self.postgres_manager}")
                 self.url_orchestrator = None
                 return
             
+            logger.info("URL manager available, proceeding with orchestrator initialization")
+            
+            # Initialize snapshot service
+            snapshot_service = None
+            try:
+                from ingestion.url.utils.snapshot_service import URLSnapshotService
+                snapshot_service = URLSnapshotService(self.postgres_manager, self.config, self.url_manager)
+                logger.info("URL snapshot service initialized successfully")
+            except Exception as e:
+                logger.warning(f"Failed to initialize snapshot service: {e}")
+                # Continue without snapshot service if it fails
+            
             # Initialize URL orchestrator
+            logger.info("Importing URLOrchestrator")
             from ingestion.url.orchestrator import URLOrchestrator
+            logger.info("Creating URLOrchestrator instance")
             self.url_orchestrator = URLOrchestrator(
                 config=self.config,
                 url_manager=self.url_manager,
                 processor=self.document_processor,  # Use existing document processor for URL content
-                milvus_manager=self.milvus_manager  # Add MilvusManager for vector storage
+                milvus_manager=self.milvus_manager,  # Add MilvusManager for vector storage
+                snapshot_service=snapshot_service   # Add snapshot service for PDF generation
             )
             logger.info("URL orchestrator initialized successfully")
         except Exception as e:
-            logger.error("Failed to initialize URL orchestrator: %s", e)
+            logger.error("Failed to initialize URL orchestrator: %s", e, exc_info=True)
             self.url_orchestrator = None
 
     def _initialize_email_manager(self) -> None:
@@ -386,6 +408,25 @@ class RAGKnowledgebaseManager:
             rp.parse([])
             return (rp, 1)
 
+    def check_robots_allowed(self, url: str) -> bool:
+        """
+        Check if a URL is allowed by robots.txt.
+        
+        Args:
+            url: The URL to check
+            
+        Returns:
+            True if allowed, False if disallowed
+        """
+        try:
+            rp, _ = self._get_robots(url)
+            user_agent = getattr(self, "crawler_user_agent", None) or "*"
+            return rp.can_fetch(user_agent, url)
+        except Exception as e:
+            logger.debug(f"Robots.txt check failed for {url}: {e}")
+            # Return True (allowed) if check fails
+            return True
+
     def _process_url_background(self, url_id: str) -> None:
         """
         Process a URL in a background thread using the URL orchestrator.
@@ -411,8 +452,15 @@ class RAGKnowledgebaseManager:
             url_record = self.url_manager.get_url_by_id(url_id)
             
             if not url_record:
-                logger.error(f"URL {url_id} not found")
-                return
+                # URL might be newly added from domain crawling, give it a moment
+                logger.info(f"URL {url_id} not found, waiting briefly for potential new URL...")
+                import time
+                time.sleep(1)  # Brief pause for database consistency
+                url_record = self.url_manager.get_url_by_id(url_id)
+                
+                if not url_record:
+                    logger.error(f"URL {url_id} not found even after retry")
+                    return
                 
             # Create status tracker
             status = URLProcessingStatus(
@@ -432,7 +480,9 @@ class RAGKnowledgebaseManager:
             status.message = "Processing URL content..."
             status.progress = 25
             
-            result = self.url_orchestrator.process_url(url_id)
+            # Run the async process_url method
+            import asyncio
+            result = asyncio.run(self.url_orchestrator.process_url(url_id))
             
             # Complete successfully or with error
             if result.get("success"):
@@ -517,11 +567,49 @@ class RAGKnowledgebaseManager:
             
             logger.info(f"Starting URL deletion for ID {url_id}: {url_record.get('url', '')}")
             
-            # Delete from URL manager (includes embeddings cleanup)
-            status.message = "Deleting URL and embeddings..."
+            # Delete from URL manager (includes documents and snapshot cleanup)
+            status.message = "Deleting URL and associated data..."
             status.progress = 50
             
             result = self.url_manager.delete_url(url_id)
+            
+            # Additional Milvus cleanup since URL manager can't access it directly
+            if result.get("success"):
+                try:
+                    status.message = "Cleaning up vector embeddings..."
+                    status.progress = 70
+                    
+                    if self.milvus_manager and self.postgres_manager and url_record.get('url'):
+                        url_string = url_record['url']
+                        logger.info(f"Cleaning up Milvus embeddings for URL: {url_string}")
+                        
+                        # Find document IDs for this URL from PostgreSQL
+                        with self.postgres_manager.get_connection() as conn:
+                            with conn.cursor() as cur:
+                                cur.execute(
+                                    "SELECT id FROM documents WHERE document_type = 'url' AND file_path LIKE %s",
+                                    (f"%{url_string}%",)
+                                )
+                                doc_records = cur.fetchall()
+                                
+                                total_deleted = 0
+                                for doc in doc_records:
+                                    doc_id = str(doc['id'])
+                                    try:
+                                        delete_result = self.milvus_manager.delete_document(document_id=doc_id)
+                                        if delete_result.get('success'):
+                                            deleted_count = delete_result.get('deleted_count', 0)
+                                            total_deleted += deleted_count
+                                            logger.debug(f"Deleted {deleted_count} embeddings for document {doc_id}")
+                                    except Exception as e:
+                                        logger.error(f"Failed to delete embeddings for document {doc_id}: {e}")
+                                
+                                logger.info(f"Deleted {total_deleted} total embeddings from Milvus for URL: {url_string}")
+                    else:
+                        logger.warning("Milvus manager not available or URL missing for embedding cleanup")
+                except Exception as e:
+                    logger.error(f"Failed to clean up Milvus embeddings for URL {url_record.get('url', '')}: {e}")
+                    # Don't fail the deletion if Milvus cleanup fails
             
             # Complete successfully or with error
             if result.get("success"):
@@ -670,6 +758,21 @@ class RAGKnowledgebaseManager:
                 words.append(w.capitalize())
         return ' '.join(words)
 
+    def _get_content_type_from_filename(self, filename: str) -> str:
+        """Determine content type from file extension."""
+        ext = os.path.splitext(filename)[1].lower()
+        content_type_map = {
+            '.pdf': 'application/pdf',
+            '.txt': 'text/plain',
+            '.md': 'text/markdown',
+            '.doc': 'application/msword',
+            '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            '.html': 'text/html',
+            '.htm': 'text/html',
+            '.rtf': 'application/rtf'
+        }
+        return content_type_map.get(ext, 'application/octet-stream')
+
     def _process_document_background(self, filename: str) -> None:
         """
         Process a document in the background with progress tracking.
@@ -688,14 +791,30 @@ class RAGKnowledgebaseManager:
             status.message = "Loading and chunking document..."
             status.progress = 30
             
-            # Create deterministic document ID
-            abs_path = str(Path(file_path).resolve())
-            file_stat = os.stat(file_path)
-            file_sig = f"{abs_path}|{file_stat.st_size}|{int(file_stat.st_mtime)}"
-            document_id = hashlib.sha1(file_sig.encode('utf-8')).hexdigest()[:16]
-            logger.info(f"Processing document '{filename}' with ID: {document_id}")
+            logger.info(f"Processing document '{filename}'")
             
-            # Load and chunk document
+            # Step 1: Store document in PostgreSQL first to get UUID
+            if not self.postgres_manager:
+                raise Exception("PostgreSQL manager not available - cannot process document")
+            
+            # Initialize with filename-based title as fallback
+            initial_title = self._fallback_title_from_filename(filename)
+            
+            # Determine content type from file extension
+            content_type = self._get_content_type_from_filename(filename)
+            
+            # Store document metadata and get UUID
+            logger.debug(f"Storing document metadata in PostgreSQL for: {filename}")
+            document_id = self.postgres_manager.store_document(
+                title=initial_title,
+                file_path=file_path,  # Store full file path
+                filename=filename,    # Store just the filename
+                content_type=content_type,
+                document_type='file'
+            )
+            logger.info(f"Document stored with ID: {document_id}")
+            
+            # Step 2: Load and chunk document with proper UUID
             logger.debug(f"Starting document loading and chunking for: {filename}")
             chunks = self.document_processor.load_and_chunk(file_path, filename, document_id)
             status.chunks_count = len(chunks)
@@ -718,7 +837,27 @@ class RAGKnowledgebaseManager:
             status.progress = 55
             
             logger.debug(f"Starting keyword extraction for: {filename}")
-            kw_data = self.document_processor.extract_keywords(chunks)
+            
+            # Check Ollama classification service for keyword extraction
+            try:
+                classification_status = self.ollama_health.check_classification_service()
+                if not classification_status.connected:
+                    logger.warning(f"Ollama classification service unavailable for keyword extraction: {classification_status.error_message}")
+                    # Provide fallback minimal keywords
+                    kw_data = {'global_keywords': [], 'llm_title': None}
+                    logger.info(f"Using fallback keyword extraction for {filename}")
+                elif not classification_status.model_loaded:
+                    logger.warning(f"Classification model '{classification_status.model_name}' not loaded for keyword extraction")
+                    kw_data = {'global_keywords': [], 'llm_title': None}
+                    logger.info(f"Using fallback keyword extraction for {filename}")
+                else:
+                    logger.info(f"Using Ollama classification service for keyword extraction (model: {classification_status.model_name})")
+                    kw_data = self.document_processor.extract_keywords(chunks)
+            except Exception as e:
+                logger.warning(f"Keyword extraction failed for {filename}: {e}")
+                kw_data = {'global_keywords': [], 'llm_title': None}
+                logger.info(f"Using fallback keyword extraction for {filename}")
+            
             global_keywords = kw_data['global_keywords']
             logger.info(f"Extracted {len(global_keywords)} global keywords for document: {filename}")
             
@@ -758,16 +897,65 @@ class RAGKnowledgebaseManager:
             status.progress = 60
             
             logger.debug(f"Starting topic enrichment for: {filename}")
-            self.document_processor.enrich_topics(chunks)
-            logger.info(f"Topic enrichment completed for: {filename}")
+            
+            # Check Ollama classification service before topic enrichment
+            try:
+                classification_status = self.ollama_health.check_classification_service()
+                if not classification_status.connected:
+                    logger.warning(f"Ollama classification service unavailable: {classification_status.error_message}")
+                    logger.info(f"Skipping topic enrichment for {filename} - classification service unavailable")
+                elif not classification_status.model_loaded:
+                    logger.warning(f"Classification model '{classification_status.model_name}' not loaded")
+                    logger.info(f"Skipping topic enrichment for {filename} - model not available")
+                else:
+                    logger.info(f"Ollama classification service confirmed available (model: {classification_status.model_name})")
+                    self.document_processor.enrich_topics(chunks)
+                    logger.info(f"Topic enrichment completed for: {filename}")
+            except Exception as e:
+                logger.warning(f"Topic enrichment failed for {filename}: {e}")
+                logger.info(f"Continuing document processing without topic enrichment")
             
             status.status = "storing"
             status.message = "Storing in Milvus..."
             status.progress = 80
             
             logger.info(f"Storing {len(chunks)} chunks in Milvus for document: {filename}")
-            self.milvus_manager.insert_documents(filename, chunks)
-            logger.info(f"Successfully stored document '{filename}' in Milvus vector database")
+            
+            # Check Ollama embedding service before attempting storage
+            try:
+                # Quick health check for embedding service
+                ollama_status = self.ollama_health.check_embedding_service()
+                if not ollama_status.connected:
+                    error_msg = f"Ollama embedding service unavailable: {ollama_status.error_message}"
+                    logger.error(error_msg)
+                    status.status = "error"
+                    status.message = f"Embedding service unavailable. Please ensure Ollama is running with model '{ollama_status.model_name}'"
+                    return
+                elif not ollama_status.model_loaded:
+                    error_msg = f"Required embedding model '{ollama_status.model_name}' not loaded in Ollama"
+                    logger.error(error_msg)
+                    status.status = "error"
+                    status.message = f"Model '{ollama_status.model_name}' not available in Ollama"
+                    return
+                
+                logger.info(f"Ollama embedding service confirmed available (model: {ollama_status.model_name}, response: {ollama_status.response_time_ms:.1f}ms)")
+                
+                # Proceed with Milvus storage using ONLY the UUID as document identifier
+                # All metadata lives in PostgreSQL, Milvus only stores vectors + UUID reference
+                self.milvus_manager.insert_documents(document_id, chunks)
+                logger.info(f"Successfully stored document '{filename}' with ID '{document_id}' in Milvus vector database")
+                
+            except Exception as e:
+                if "connection" in str(e).lower() or "timeout" in str(e).lower():
+                    logger.error(f"Ollama embedding service connection error for {filename}: {e}")
+                    status.status = "error"
+                    status.message = f"Failed to connect to embedding service. Please check that Ollama is running on {self.config.OLLAMA_EMBEDDING_HOST}:{self.config.OLLAMA_EMBEDDING_PORT}"
+                    return
+                else:
+                    logger.error(f"Failed to store document '{filename}' in Milvus: {e}")
+                    status.status = "error"
+                    status.message = f"Storage failed: {str(e)[:100]}..."
+                    return
             
             # Store document chunks in PostgreSQL for hybrid retrieval
             status.message = "Storing chunks in PostgreSQL..."
@@ -777,7 +965,6 @@ class RAGKnowledgebaseManager:
                 logger.info(f"Storing {len(chunks)} chunks in PostgreSQL for document: {filename}")
                 try:
                     for i, chunk in enumerate(chunks):
-                        chunk_id = chunk.metadata.get('chunk_id', f"{document_id}#{i}")
                         chunk_text = chunk.page_content or ''
                         page_start = chunk.metadata.get('page')
                         page_end = chunk.metadata.get('page')  # For single page chunks
@@ -786,10 +973,9 @@ class RAGKnowledgebaseManager:
                         token_count = len(chunk_text.split()) if chunk_text else 0
                         chunk_hash = chunk.metadata.get('content_hash')
                         
-                        # Store chunk in PostgreSQL
-                        self.postgres_manager.store_document_chunk(
-                            chunk_id=chunk_id,
-                            document_id=document_id,
+                        # Store chunk in PostgreSQL with proper UUID foreign key
+                        chunk_id = self.postgres_manager.store_document_chunk(
+                            document_id=document_id,  # Use real UUID from document creation
                             chunk_text=chunk_text,
                             chunk_ordinal=i,
                             page_start=page_start,
@@ -799,6 +985,10 @@ class RAGKnowledgebaseManager:
                             token_count=token_count,
                             chunk_hash=chunk_hash
                         )
+                        
+                        # Update chunk metadata with the actual database IDs for consistency
+                        chunk.metadata['chunk_id'] = str(chunk_id)
+                        chunk.metadata['document_id'] = str(document_id)  # Standard field name - ID reference
                     
                     logger.info(f"Successfully stored {len(chunks)} document chunks in PostgreSQL")
                 except Exception as e:
@@ -812,27 +1002,48 @@ class RAGKnowledgebaseManager:
             shutil.move(file_path, uploaded_path)
             logger.debug(f"Moved processed file from staging to uploaded: {uploaded_path}")
             
-            # Upsert document metadata row
+            # Update document metadata with processing results
             elapsed = (datetime.now() - status.start_time).total_seconds() if status.start_time else None
             try:
-                if self.document_manager:
-                    metadata_dict = {
-                        'title': status.title,
-                        'page_count': page_count,
-                        'chunk_count': len(chunks),
-                        'word_count': word_count,
-                        'avg_chunk_chars': avg_len,
-                        'median_chunk_chars': med_len,
-                        'top_keywords': global_keywords,  # Pass as list, not JSON string
-                        'processing_time_seconds': elapsed,
-                        'processing_status': 'completed'
-                    }
-                    self.document_manager.upsert_document_metadata(filename, metadata_dict)
-                    logger.info(f"Successfully updated metadata for {filename} with {len(chunks)} chunks")
+                if self.postgres_manager:
+                    # Update the existing document record with processing results
+                    update_query = """
+                        UPDATE documents 
+                        SET 
+                            title = %s,
+                            page_count = %s,
+                            chunk_count = %s,
+                            word_count = %s,
+                            avg_chunk_chars = %s,
+                            median_chunk_chars = %s,
+                            top_keywords = %s,
+                            processing_time_seconds = %s,
+                            processing_status = %s,
+                            updated_at = NOW()
+                        WHERE id = %s
+                    """
+                    
+                    with self.postgres_manager.get_connection() as conn:
+                        with conn.cursor() as cur:
+                            cur.execute(update_query, [
+                                status.title,
+                                page_count,
+                                len(chunks),
+                                word_count,
+                                avg_len,
+                                med_len,
+                                global_keywords,
+                                elapsed,
+                                'completed',
+                                document_id
+                            ])
+                            conn.commit()
+                    
+                    logger.info(f"Successfully updated metadata for document ID {document_id} ({filename}) with {len(chunks)} chunks")
                 else:
-                    logger.warning("Document manager not available for document metadata storage")
+                    logger.warning("PostgreSQL manager not available for document metadata update")
             except Exception as e:
-                logger.error(f"Failed to upsert document metadata for {filename}: {e}")
+                logger.error(f"Failed to update document metadata for {filename}: {e}")
                 raise  # Don't hide the error, let it fail properly
             
             status.status = "completed"
@@ -843,11 +1054,12 @@ class RAGKnowledgebaseManager:
         except Exception as e:
             # Also update database status to 'failed' on error
             try:
-                if self.document_manager:
-                    self.document_manager.upsert_document_metadata(
-                        filename,
-                        {'processing_status': 'failed'}
-                    )
+                # Update status using ID if we have it, otherwise skip database update
+                if self.postgres_manager and 'document_id' in locals():
+                    self.postgres_manager.update_processing_status(locals()['document_id'], 'failed')
+                    logger.info(f"Updated document {locals()['document_id']} status to 'failed'")
+                else:
+                    logger.warning(f"Cannot update database status to 'failed' - document not yet created in database")
             except Exception as db_error:
                 logger.warning(f"Failed to update database status to 'failed' for {filename}: {db_error}")
                 
@@ -880,12 +1092,40 @@ class RAGKnowledgebaseManager:
             file_path = os.path.join(folder_path, filename)
             
             if folder == 'uploaded':
+                st.message = 'Looking up document...'
+                st.progress = 15
+                
+                # Find the document ID by filename
+                document_id = None
+                try:
+                    if self.postgres_manager:
+                        with self.postgres_manager.get_connection() as conn:
+                            with conn.cursor() as cur:
+                                # Use the filename field for lookup
+                                cur.execute("SELECT id FROM documents WHERE filename = %s", [filename])
+                                result = cur.fetchone()
+                                if result:
+                                    document_id = str(result['id'])
+                                    logger.info(f"Found document ID {document_id} for filename {filename}")
+                                else:
+                                    logger.warning(f"No document found with filename {filename}")
+                    else:
+                        logger.warning("PostgreSQL manager not available for document lookup")
+                except Exception as e:
+                    logger.error(f"Failed to lookup document ID for {filename}: {e}")
+                
                 st.message = 'Removing embeddings...'
                 st.progress = 20
                 try:
                     logger.info(f"Starting embedding deletion for filename: {filename}")
-                    deletion_result = self.milvus_manager.delete_document(filename=filename)
-                    logger.info(f"Embedding deletion result for {filename}: {deletion_result}")
+                    if document_id:
+                        # Delete using ID for Milvus
+                        deletion_result = self.milvus_manager.delete_document(document_id=document_id)
+                        logger.info(f"Embedding deletion result for ID {document_id}: {deletion_result}")
+                    else:
+                        # Fallback to filename-based deletion for compatibility
+                        deletion_result = self.milvus_manager.delete_document(filename=filename)
+                        logger.info(f"Embedding deletion result for filename {filename}: {deletion_result}")
                     
                     if deletion_result.get('success'):
                         deleted_count = deletion_result.get('deleted_count', 0)
@@ -912,14 +1152,22 @@ class RAGKnowledgebaseManager:
                     logger.error(f"Embedding deletion failed for {filename}: {e}", exc_info=True)
                     raise Exception(f"Failed to delete embeddings: {str(e)}")
                 
-                # Purge metadata row
+                # Purge document and chunks from PostgreSQL
                 try:
-                    if self.document_manager:
-                        self.document_manager.delete_document_metadata(filename)
+                    if self.postgres_manager and document_id:
+                        # Delete document (cascades to chunks via foreign key)
+                        with self.postgres_manager.get_connection() as conn:
+                            with conn.cursor() as cur:
+                                cur.execute("DELETE FROM documents WHERE id = %s", [document_id])
+                                deleted_rows = cur.rowcount
+                                conn.commit()
+                                logger.info(f"Deleted document {document_id} and associated chunks from PostgreSQL (rows: {deleted_rows})")
                     else:
-                        logger.warning("Document manager not available for document metadata deletion")
+                        error_msg = "No PostgreSQL manager available for metadata deletion"
+                        logger.error(error_msg)
+                        raise Exception(error_msg)
                 except Exception as e:
-                    logger.warning(f"Metadata deletion failed for {filename}: {e}")
+                    logger.error(f"Metadata deletion failed for {filename}: {e}")
                 else:
                     st.progress = max(st.progress, 55)
             

@@ -97,6 +97,9 @@ show_help() {
     echo "  🌐 Web interface: http://localhost:3000 (if webui container running)"
     echo "  🔧 Local development: source .venv/bin/activate && python app.py"
     echo "  📊 Status check: ./status.sh"
+    echo "  🤖 Robots.txt monitoring: python tools/robots_monitor.py --test-system"
+    echo "  📈 Performance testing: python tools/robots_performance_test.py"
+    echo "  🧪 Run tests: pytest tests/ -v"
     echo "  🗑️  Cleanup: ./uninstall.sh"
     echo ""
     exit 0
@@ -241,7 +244,7 @@ if [ "$VERBOSE" = true ]; then
     else
         echo -e "${YELLOW}⚠️  Primary installation failed. Attempting fallback explicit package set...${NC}"
         echo "Fallback: core explicit packages" | tee "$FALLBACK_LOG"
-        if pip install flask pymilvus sentence-transformers werkzeug python-dotenv pypdf python-docx chardet requests beautifulsoup4 google-api-python-client google-auth psycopg2-binary 2>&1 | tee -a "$FALLBACK_LOG"; then
+        if pip install flask pymilvus sentence-transformers werkzeug python-dotenv pypdf python-docx chardet requests beautifulsoup4 google-api-python-client google-auth psycopg2-binary playwright 2>&1 | tee -a "$FALLBACK_LOG"; then
             echo -e "${GREEN}✅ Fallback dependencies installed${NC}"
         else
             echo -e "${RED}❌ Fallback installation failed. Review $FALLBACK_LOG${NC}"
@@ -258,7 +261,7 @@ else
         echo -e "${BLUE}🔍 Last 15 lines from primary log:${NC}"
         tail -n 15 "$PRIMARY_LOG"
         start_spinner "Installing fallback explicit packages"
-        if pip install flask pymilvus sentence-transformers werkzeug python-dotenv pypdf python-docx chardet requests beautifulsoup4 google-api-python-client google-auth psycopg2-binary > "$FALLBACK_LOG" 2>&1; then
+        if pip install flask pymilvus sentence-transformers werkzeug python-dotenv pypdf python-docx chardet requests beautifulsoup4 google-api-python-client google-auth psycopg2-binary playwright > "$FALLBACK_LOG" 2>&1; then
             stop_spinner 0 "Fallback dependencies installed"
             echo -e "${BLUE}ℹ️  Logs: primary=$PRIMARY_LOG fallback=$FALLBACK_LOG${NC}"
         else
@@ -299,6 +302,16 @@ fi
 
 # (Directory setup moved earlier; block retained intentionally blank to preserve script flow)
 
+# Install Playwright browsers for URL snapshots
+echo ""
+echo "🎭 Installing Playwright browsers for URL snapshots..."
+python -m playwright install chromium
+if [ $? -eq 0 ]; then
+    echo -e "${GREEN}✅ Playwright browsers installed successfully${NC}"
+else
+    echo -e "${YELLOW}⚠️  Playwright installation had issues, but continuing...${NC}"
+    echo -e "${BLUE}ℹ️  You can install manually later with: python -m playwright install chromium${NC}"
+fi
 
 # Check environment file
 echo ""
