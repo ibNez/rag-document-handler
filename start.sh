@@ -3,8 +3,8 @@
 # RAG Knowledge Base Manager - Start Script
 # This script starts the application with proper environment setup
 
-echo "🚀 Starting RAG Knowledge Base Manager..."
-
+echo "🚀 Starting RAG Knowledge Base Manager"
+echo "The first application start can take some time as we configure the environment..."
 # Check if virtual environment exists
 if [ ! -d ".venv" ]; then
     echo "❌ Virtual environment not found. Please run ./setup.sh first."

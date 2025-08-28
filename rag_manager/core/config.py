@@ -7,7 +7,7 @@ the development rules for centralized configuration management.
 
 import os
 from dataclasses import dataclass, field
-from typing import Set, List
+from typing import Set, List, Optional
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -105,14 +105,35 @@ class Config:
     EMAIL_SYNC_INTERVAL_SECONDS: int = int(os.getenv('EMAIL_SYNC_INTERVAL_SECONDS', '300'))
     EMAIL_DEFAULT_REFRESH_MINUTES: int = int(os.getenv('EMAIL_DEFAULT_REFRESH_MINUTES', '5'))
 
+    # Document Hybrid Retrieval & Reranking Configuration
+    ENABLE_DOCUMENT_RERANKING: bool = os.getenv('ENABLE_DOCUMENT_RERANKING', 'true').lower() == 'true'
+    DOCUMENT_RERANKER_MODEL: str = os.getenv('DOCUMENT_RERANKER_MODEL', 'ms-marco-minilm')
+    DOCUMENT_RERANK_TOP_K: Optional[int] = int(os.getenv('DOCUMENT_RERANK_TOP_K', '0')) or None  # 0 means rerank all
+    DOCUMENT_RRF_CONSTANT: int = int(os.getenv('DOCUMENT_RRF_CONSTANT', '60'))
+    
+    # Advanced Document Chunking Configuration
+    DOCUMENT_CHUNKING_STRATEGY: str = os.getenv('DOCUMENT_CHUNKING_STRATEGY', 'title_aware')  # title_aware, page_aware, basic
+    DOCUMENT_TARGET_TOKENS: int = int(os.getenv('DOCUMENT_TARGET_TOKENS', '850'))  # Target ~800-1,000 tokens
+    DOCUMENT_OVERLAP_PERCENTAGE: float = float(os.getenv('DOCUMENT_OVERLAP_PERCENTAGE', '0.125'))  # 10-15% overlap
+    DOCUMENT_MAX_TOKENS: int = int(os.getenv('DOCUMENT_MAX_TOKENS', '1200'))  # Hard limit
+    DOCUMENT_MIN_TOKENS: int = int(os.getenv('DOCUMENT_MIN_TOKENS', '100'))  # Minimum viable chunk size
+    DOCUMENT_PRESERVE_TABLES: bool = os.getenv('DOCUMENT_PRESERVE_TABLES', 'true').lower() == 'true'
+    DOCUMENT_TRACK_SECTIONS: bool = os.getenv('DOCUMENT_TRACK_SECTIONS', 'true').lower() == 'true'
+    
     # PostgreSQL Migration Feature Flags
     USE_POSTGRESQL_URL_MANAGER: bool = os.getenv('USE_POSTGRESQL_URL_MANAGER', 'false').lower() == 'true'
     POSTGRES_MIGRATION_MODE: str = os.getenv('POSTGRES_MIGRATION_MODE', 'disabled')  # disabled, testing, enabled
 
-    # URL Snapshot settings (per-URL control; this is only a default for new URLs)
-    SNAPSHOT_DEFAULT_ENABLED: bool = os.getenv('SNAPSHOT_DEFAULT_ENABLED', 'false').lower() == 'true'
+    # URL Snapshot settings (always enabled for consistency)
     SNAPSHOT_DIR: str = os.getenv('SNAPSHOT_DIR', os.path.join('uploaded', 'snapshots'))
     SNAPSHOT_FORMATS: List[str] = field(
         default_factory=lambda: os.getenv('SNAPSHOT_FORMATS', 'pdf,mhtml').split(',')
     )
     SNAPSHOT_TIMEOUT_SECONDS: int = int(os.getenv('SNAPSHOT_TIMEOUT_SECONDS', '60'))
+    
+    # Playwright browser settings for snapshots
+    SNAPSHOT_VIEWPORT_WIDTH: int = int(os.getenv('SNAPSHOT_VIEWPORT_WIDTH', '1920'))
+    SNAPSHOT_VIEWPORT_HEIGHT: int = int(os.getenv('SNAPSHOT_VIEWPORT_HEIGHT', '1080'))
+    SNAPSHOT_PDF_FORMAT: str = os.getenv('SNAPSHOT_PDF_FORMAT', 'A4')  # A4, Letter, etc.
+    SNAPSHOT_LOCALE: str = os.getenv('SNAPSHOT_LOCALE', 'en-US')
+    SNAPSHOT_EMULATE_MEDIA: str = os.getenv('SNAPSHOT_EMULATE_MEDIA', 'print')  # print, screen

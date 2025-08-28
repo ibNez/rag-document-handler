@@ -77,8 +77,23 @@ class PostgreSQLURLManager:
             logger.error(f"Error extracting title from {url}: {str(e)}")
             return "Unknown Title"
     
-    def add_url(self, url: str, title: Optional[str] = None, description: Optional[str] = None) -> Dict[str, Any]:
-        """Add a new URL to the database with automatic title extraction."""
+    def add_url(self, url: str, title: Optional[str] = None, description: Optional[str] = None, 
+                parent_url_id: Optional[str] = None, ignore_robots: bool = False, 
+                enable_initial_snapshot: bool = True) -> Dict[str, Any]:
+        """
+        Add a new URL to the database with automatic title extraction.
+        
+        Args:
+            url: The URL to add
+            title: Optional title (will be extracted if not provided)
+            description: Optional description
+            parent_url_id: Optional parent URL ID for child URLs
+            ignore_robots: Whether to ignore robots.txt for this URL
+            enable_initial_snapshot: Whether to enable snapshots for initial processing
+            
+        Returns:
+            Dict with success status and URL details
+        """
         if not self.validate_url(url):
             return {"success": False, "message": "Invalid URL format"}
         
@@ -90,17 +105,20 @@ class PostgreSQLURLManager:
         try:
             with self.postgres.get_connection() as conn:
                 with conn.cursor() as cursor:
-                    # Determine default per-URL snapshot flag from environment
-                    default_snapshot_enabled = os.getenv('SNAPSHOT_DEFAULT_ENABLED', 'false').lower() == 'true'
                     cursor.execute(
-                        """INSERT INTO urls (url, title, description, status, refresh_interval_minutes, crawl_domain, ignore_robots, snapshot_enabled)
-                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
-                        (url, title, description, 'active', 1440, False, False, default_snapshot_enabled)
+                        """INSERT INTO urls (url, title, description, status, refresh_interval_minutes, crawl_domain, ignore_robots, snapshot_retention_days, snapshot_max_snapshots, parent_url_id)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
+                        (url, title, description, 'active', 1440, False, ignore_robots, 0, 0, parent_url_id)
                     )
                     url_id = cursor.fetchone()['id']
                     conn.commit()
-                    logger.info(f"Added URL: {url} with title: {title} (ID: {url_id})")
+                    logger.info(f"Added URL: {url} with title: {title} (ID: {url_id}) {f'(parent: {parent_url_id})' if parent_url_id else '(root URL)'} - Snapshots: always enabled")
                     return {"success": True, "message": "URL added successfully", "id": str(url_id), "title": title}
+        except Exception as e:
+            if "duplicate key" in str(e).lower():
+                return {"success": False, "message": "URL already exists"}
+            logger.error(f"Error adding URL: {str(e)}")
+            return {"success": False, "message": f"Database error: {str(e)}"}
         except Exception as e:
             if "duplicate key" in str(e).lower():
                 return {"success": False, "message": "URL already exists"}
@@ -108,16 +126,221 @@ class PostgreSQLURLManager:
             return {"success": False, "message": f"Database error: {str(e)}"}
     
     def get_all_urls(self) -> List[Dict[str, Any]]:
-        """Retrieve all URLs from the database."""
+        """Retrieve all parent URLs from the database (excludes auto-discovered child URLs)."""
         try:
             with self.postgres.get_connection() as conn:
                 with conn.cursor() as cursor:
                     cursor.execute(
                         """
                SELECT id, url, title, description, status, refresh_interval_minutes, 
-                   crawl_domain, ignore_robots, snapshot_enabled, snapshot_retention_days, snapshot_max_snapshots,
+                   crawl_domain, ignore_robots, snapshot_retention_days, snapshot_max_snapshots,
                    last_crawled, is_refreshing, last_refresh_started, last_content_hash, last_update_status,
-                   created_at, updated_at,
+                   created_at, updated_at, parent_url_id,
+                            CASE 
+                                WHEN refresh_interval_minutes IS NOT NULL 
+                                     AND refresh_interval_minutes > 0 
+                                     AND last_crawled IS NOT NULL
+                                THEN last_crawled + INTERVAL '1 minute' * refresh_interval_minutes
+                                ELSE NULL
+                            END AS next_refresh
+                        FROM urls 
+                        WHERE status = 'active' AND parent_url_id IS NULL
+                        ORDER BY created_at DESC
+                        """
+                    )
+                    urls = []
+                    for row in cursor.fetchall():
+                        url_dict = dict(row)
+                        # Convert UUID to string
+                        url_dict['id'] = str(url_dict['id'])
+                        
+                        # Convert boolean to int for SQLite compatibility
+                        url_dict['crawl_domain'] = 1 if url_dict.get('crawl_domain') else 0
+                        url_dict['ignore_robots'] = 1 if url_dict.get('ignore_robots') else 0
+                        
+                        # Map PostgreSQL columns to SQLite equivalents
+                        url_dict['added_date'] = url_dict['created_at']
+                        url_dict['last_scraped'] = url_dict['last_crawled']
+                        
+                        # last_update_status is now a direct column
+                        # No need to extract from metadata
+                        
+                        # Convert datetime objects to strings for JSON serialization
+                        for key, value in url_dict.items():
+                            if isinstance(value, datetime):
+                                url_dict[key] = value.isoformat() if value else None
+                        
+                        urls.append(url_dict)
+                    return urls
+        except Exception as e:
+            logger.error(f"Error retrieving URLs: {str(e)}")
+            return []
+
+    def get_child_urls(self, parent_url_id: str) -> List[Dict[str, Any]]:
+        """Retrieve all child URLs discovered from domain crawling for a specific parent URL."""
+        try:
+            with self.postgres.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT id, url, title, description, status, last_crawled, last_update_status,
+                               created_at, updated_at
+                        FROM urls 
+                        WHERE status = 'active' AND parent_url_id = %s
+                        ORDER BY created_at DESC
+                        """,
+                        (parent_url_id,)
+                    )
+                    child_urls = []
+                    for row in cursor.fetchall():
+                        url_dict = dict(row)
+                        # Convert UUID to string
+                        url_dict['id'] = str(url_dict['id'])
+                        
+                        # Convert datetime objects to strings for JSON serialization
+                        for key, value in url_dict.items():
+                            if isinstance(value, datetime):
+                                url_dict[key] = value.isoformat() if value else None
+                        
+                        child_urls.append(url_dict)
+                    return child_urls
+        except Exception as e:
+            logger.error(f"Error retrieving child URLs for parent {parent_url_id}: {str(e)}")
+            return []
+
+    def get_child_url_stats(self, parent_url_id: str) -> Dict[str, Any]:
+        """Get statistics for child URLs of a parent URL."""
+        try:
+            with self.postgres.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT 
+                            COUNT(*) as total_children,
+                            COUNT(CASE WHEN is_refreshing = TRUE THEN 1 END) as processing_children,
+                            COUNT(CASE WHEN last_crawled IS NOT NULL THEN 1 END) as completed_children,
+                            COUNT(CASE WHEN last_update_status = 'error' THEN 1 END) as failed_children
+                        FROM urls 
+                        WHERE status = 'active' AND parent_url_id = %s
+                        """,
+                        (parent_url_id,)
+                    )
+                    row = cursor.fetchone()
+                    if row:
+                        return dict(row)
+                    return {
+                        'total_children': 0,
+                        'processing_children': 0,
+                        'completed_children': 0,
+                        'failed_children': 0
+                    }
+        except Exception as e:
+            logger.error(f"Error getting child URL stats for parent {parent_url_id}: {str(e)}")
+            return {
+                'total_children': 0,
+                'processing_children': 0,
+                'completed_children': 0,
+                'failed_children': 0
+            }
+
+    def get_robots_status(self, url_id: str) -> Dict[str, Any]:
+        """
+        Get robots.txt configuration and status for a specific URL.
+        
+        Args:
+            url_id: The UUID of the URL to check
+            
+        Returns:
+            Dict with robots.txt status information
+        """
+        try:
+            with self.postgres.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT id, url, ignore_robots, last_update_status, created_at
+                        FROM urls 
+                        WHERE id = %s AND status = 'active'
+                        """,
+                        (url_id,)
+                    )
+                    row = cursor.fetchone()
+                    
+                    if not row:
+                        return {"success": False, "message": "URL not found"}
+                    
+                    url_info = dict(row)
+                    
+                    return {
+                        "success": True,
+                        "id": str(url_info['id']),
+                        "url": url_info['url'],
+                        "ignore_robots": bool(url_info['ignore_robots']),
+                        "robots_enforcement": "disabled" if url_info['ignore_robots'] else "enabled",
+                        "last_update_status": url_info['last_update_status'],
+                        "created_at": url_info['created_at'].isoformat() if url_info['created_at'] else None
+                    }
+                    
+        except Exception as e:
+            logger.error(f"Error getting robots status for URL {url_id}: {str(e)}")
+            return {"success": False, "message": f"Database error: {str(e)}"}
+
+    def update_robots_setting(self, url_id: str, ignore_robots: bool) -> Dict[str, Any]:
+        """
+        Update the robots.txt ignore setting for a specific URL.
+        
+        Args:
+            url_id: The UUID of the URL to update
+            ignore_robots: Whether to ignore robots.txt for this URL
+            
+        Returns:
+            Dict with update result
+        """
+        try:
+            with self.postgres.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        UPDATE urls 
+                        SET ignore_robots = %s, updated_at = NOW()
+                        WHERE id = %s AND status = 'active'
+                        RETURNING id, url, ignore_robots
+                        """,
+                        (ignore_robots, url_id)
+                    )
+                    row = cursor.fetchone()
+                    
+                    if not row:
+                        return {"success": False, "message": "URL not found"}
+                    
+                    conn.commit()
+                    url_info = dict(row)
+                    
+                    logger.info(f"Updated robots setting for {url_info['url']}: ignore_robots={ignore_robots}")
+                    
+                    return {
+                        "success": True,
+                        "id": str(url_info['id']),
+                        "url": url_info['url'],
+                        "ignore_robots": bool(url_info['ignore_robots']),
+                        "message": f"Robots.txt enforcement {'disabled' if ignore_robots else 'enabled'}"
+                    }
+                    
+        except Exception as e:
+            logger.error(f"Error updating robots setting for URL {url_id}: {str(e)}")
+            return {"success": False, "message": f"Database error: {str(e)}"}
+
+    def get_all_urls_including_children(self) -> List[Dict[str, Any]]:
+        """Retrieve ALL URLs from the database (includes auto-discovered child URLs)."""
+        try:
+            with self.postgres.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+               SELECT id, url, title, description, status, refresh_interval_minutes, 
+                   crawl_domain, ignore_robots, snapshot_retention_days, snapshot_max_snapshots,
+                   last_crawled, is_refreshing, last_refresh_started, last_content_hash, last_update_status,
+                   created_at, updated_at, parent_url_id,
                             CASE 
                                 WHEN refresh_interval_minutes IS NOT NULL 
                                      AND refresh_interval_minutes > 0 
@@ -135,6 +358,8 @@ class PostgreSQLURLManager:
                         url_dict = dict(row)
                         # Convert UUID to string
                         url_dict['id'] = str(url_dict['id'])
+                        if url_dict.get('parent_url_id'):
+                            url_dict['parent_url_id'] = str(url_dict['parent_url_id'])
                         
                         # Convert boolean to int for SQLite compatibility
                         url_dict['crawl_domain'] = 1 if url_dict.get('crawl_domain') else 0
@@ -143,8 +368,6 @@ class PostgreSQLURLManager:
                         # Map PostgreSQL columns to SQLite equivalents
                         url_dict['added_date'] = url_dict['created_at']
                         url_dict['last_scraped'] = url_dict['last_crawled']
-                        # Normalize snapshot flags
-                        url_dict['snapshot_enabled'] = 1 if url_dict.get('snapshot_enabled') else 0
                         
                         # last_update_status is now a direct column
                         # No need to extract from metadata
@@ -157,11 +380,11 @@ class PostgreSQLURLManager:
                         urls.append(url_dict)
                     return urls
         except Exception as e:
-            logger.error(f"Error retrieving URLs: {str(e)}")
+            logger.error(f"Error retrieving all URLs: {str(e)}")
             return []
     
     def delete_url(self, url_id: str) -> Dict[str, Any]:
-        """Delete a URL from the database."""
+        """Delete a URL from the database and clean up all associated data."""
         logger.info(f"Starting URL deletion process for ID: {url_id}")
         
         # Input validation
@@ -186,16 +409,71 @@ class PostgreSQLURLManager:
                         logger.warning(f"URL deletion failed: No URL found with ID: {url_id}")
                         return {"success": False, "message": "URL not found"}
                     
-                    logger.info(f"Found URL to delete - ID: {url_id}, URL: {existing_url['url']}, Title: {existing_url['title']}")
+                    url_string = existing_url['url']
+                    logger.info(f"Found URL to delete - ID: {url_id}, URL: {url_string}, Title: {existing_url['title']}")
                     
-                    # Perform the deletion
+                    # Step 1: Find and delete associated documents
+                    logger.info(f"Cleaning up documents for URL: {url_string}")
+                    cursor.execute(
+                        "SELECT id, file_path FROM documents WHERE document_type = 'url' AND file_path LIKE %s",
+                        (f"%{url_string}%",)
+                    )
+                    url_documents = cursor.fetchall()
+                    
+                    document_ids = [doc['id'] for doc in url_documents]
+                    snapshot_files = [doc['file_path'] for doc in url_documents]
+                    
+                    logger.info(f"Found {len(url_documents)} documents to clean up")
+                    
+                    # Step 2: Delete document chunks first (foreign key constraint)
+                    if document_ids:
+                        chunk_delete_query = "DELETE FROM document_chunks WHERE document_id = ANY(%s)"
+                        cursor.execute(chunk_delete_query, (document_ids,))
+                        chunks_deleted = cursor.rowcount
+                        logger.info(f"Deleted {chunks_deleted} document chunks")
+                        
+                        # Step 3: Delete documents
+                        doc_delete_query = "DELETE FROM documents WHERE id = ANY(%s)"
+                        cursor.execute(doc_delete_query, (document_ids,))
+                        docs_deleted = cursor.rowcount
+                        logger.info(f"Deleted {docs_deleted} documents")
+                    
+                    # Step 4: Clean up Milvus embeddings (if available)
+                    # Note: Milvus cleanup will be handled by the calling code (RAG manager)
+                    # since URL manager doesn't have direct access to Milvus manager
+                    
+                    # Step 5: Clean up snapshot files from filesystem  
+                    try:
+                        from urllib.parse import urlparse
+                        import os
+                        import shutil
+                        
+                        parsed_url = urlparse(url_string)
+                        domain = parsed_url.netloc
+                        
+                        if domain:
+                            # Use default snapshot directory (since URL manager doesn't have config access)
+                            base_dir = os.path.join('uploaded', 'snapshots')
+                            domain_dir = os.path.join(base_dir, domain)
+                            
+                            if os.path.exists(domain_dir):
+                                logger.info(f"Removing snapshot directory: {domain_dir}")
+                                shutil.rmtree(domain_dir)
+                                logger.info(f"Successfully removed snapshot directory for domain: {domain}")
+                            else:
+                                logger.info(f"No snapshot directory found for domain: {domain}")
+                    except Exception as e:
+                        logger.error(f"Failed to clean up snapshot files: {e}")
+                        # Continue with deletion even if file cleanup fails
+                    
+                    # Step 6: Delete the URL record itself
                     cursor.execute("DELETE FROM urls WHERE id = %s", (url_id,))
                     deleted_count = cursor.rowcount
                     
                     if deleted_count > 0:
                         conn.commit()
-                        logger.info(f"Successfully deleted URL with ID: {url_id} (URL: {existing_url['url']})")
-                        return {"success": True, "message": "URL deleted successfully"}
+                        logger.info(f"Successfully deleted URL and all associated data - ID: {url_id}, URL: {url_string}")
+                        return {"success": True, "message": "URL and all associated data deleted successfully"}
                     else:
                         logger.error(f"URL deletion failed: No rows affected for ID: {url_id}")
                         return {"success": False, "message": "URL not found"}
@@ -258,7 +536,6 @@ class PostgreSQLURLManager:
                         # Normalize booleans for UI compatibility
                         url_dict['crawl_domain'] = 1 if url_dict.get('crawl_domain') else 0
                         url_dict['ignore_robots'] = 1 if url_dict.get('ignore_robots') else 0
-                        url_dict['snapshot_enabled'] = 1 if url_dict.get('snapshot_enabled') else 0
                         
                         # Map PostgreSQL columns to SQLite equivalents
                         url_dict['added_date'] = url_dict['created_at']
@@ -283,7 +560,7 @@ class PostgreSQLURLManager:
 
     def update_url_metadata(self, url_id: str, title: Optional[str], description: Optional[str], 
                            refresh_interval_minutes: Optional[int], crawl_domain: Optional[int], 
-                           ignore_robots: Optional[int], snapshot_enabled: Optional[int] = None,
+                           ignore_robots: Optional[int],
                            snapshot_retention_days: Optional[int] = None, snapshot_max_snapshots: Optional[int] = None) -> Dict[str, Any]:
         """Update URL metadata."""
         try:
@@ -295,7 +572,7 @@ class PostgreSQLURLManager:
                     if not row:
                         return {"success": False, "message": "URL not found"}
                     
-                    # Update the record with explicit columns
+                    # Update the record with explicit columns (snapshots always enabled)
                     cursor.execute(
                         """UPDATE urls SET 
                            title = %s, 
@@ -303,7 +580,6 @@ class PostgreSQLURLManager:
                            refresh_interval_minutes = %s, 
                            crawl_domain = %s, 
                            ignore_robots = %s,
-                           snapshot_enabled = COALESCE(%s, snapshot_enabled),
                            snapshot_retention_days = %s,
                            snapshot_max_snapshots = %s,
                            updated_at = NOW() 
@@ -312,7 +588,6 @@ class PostgreSQLURLManager:
                             title, description, refresh_interval_minutes,
                             bool(crawl_domain) if crawl_domain is not None else None,
                             bool(ignore_robots) if ignore_robots is not None else None,
-                            bool(snapshot_enabled) if snapshot_enabled is not None else None,
                             snapshot_retention_days, snapshot_max_snapshots,
                             str(url_id)
                         )
@@ -390,6 +665,11 @@ class PostgreSQLURLManager:
                             AND refresh_interval_minutes IS NOT NULL
                             AND refresh_interval_minutes > 0
                             AND (is_refreshing IS NOT TRUE OR is_refreshing IS NULL)
+                            AND NOT EXISTS (
+                                SELECT 1 FROM urls child_urls 
+                                WHERE child_urls.parent_url_id = urls.id 
+                                AND child_urls.is_refreshing = TRUE
+                            )
                             AND (
                                 last_crawled IS NULL OR
                                 last_crawled + INTERVAL '1 minute' * refresh_interval_minutes <= NOW()

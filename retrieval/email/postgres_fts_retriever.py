@@ -10,7 +10,7 @@ import logging
 from typing import List, Any, Dict, Optional
 from langchain_core.documents import Document
 
-from ingestion.utils.db_utils import PostgreSQLManager
+from ingestion.core.postgres_manager import PostgreSQLManager
 
 logger = logging.getLogger(__name__)
 
@@ -23,14 +23,14 @@ class PostgresFTSRetriever:
     for fast text search across email content.
     """
     
-    def __init__(self, postgres_pool: Any) -> None:
+    def __init__(self, postgres_manager: PostgreSQLManager) -> None:
         """
         Initialize PostgreSQL FTS retriever.
         
         Args:
-            postgres_pool: PostgreSQL connection pool
+            postgres_manager: PostgreSQL manager instance
         """
-        self.db_manager = PostgreSQLManager(postgres_pool)
+        self.db_manager = postgres_manager
         logger.info("PostgreSQL FTS retriever initialized")
     
     def search(self, query: str, k: int = 10) -> List[Document]:
@@ -99,7 +99,6 @@ class PostgresFTSRetriever:
                                 'date_utc': date_utc,
                                 'category': 'email',
                                 'category_type': 'email',
-                                'source': f"email:{from_addr}",
                                 'retrieval_method': 'postgresql_fts'
                             }
                         )

@@ -23,9 +23,10 @@ class VectorStore(Protocol):
 class DocumentMetadata:
     """Document metadata structure."""
     document_id: str
+    filename: str  # Required: just the filename (e.g., "document.pdf")
+    file_path: str  # Required: full path to file (e.g., "/path/to/document.pdf")
     title: Optional[str] = None
     content_preview: Optional[str] = None
-    file_path: Optional[str] = None
     content_type: Optional[str] = None
     file_size: Optional[int] = None
     word_count: Optional[int] = None
@@ -57,10 +58,11 @@ class RAGDatabaseManager:
         try:
             # Store metadata in PostgreSQL
             doc_uuid = self.postgres.store_document(
+                file_path=metadata.file_path,
+                filename=metadata.filename,
                 document_id=metadata.document_id,
                 title=metadata.title,
                 content_preview=metadata.content_preview,
-                file_path=metadata.file_path,
                 content_type=metadata.content_type,
                 file_size=metadata.file_size,
                 word_count=metadata.word_count,

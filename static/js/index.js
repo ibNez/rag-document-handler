@@ -92,12 +92,19 @@
     const indicator = card.querySelector('.status-indicator');
     if(indicator) indicator.className = `status-indicator status-${data.status}`;
     const stagingStatusArea = card.querySelector('.staging-status-area');
+    const serverStatusArea = card.querySelector('.server-status-area');
     const isStaging = !!stagingStatusArea;
 
-    if(isStaging){ stagingStatusArea.style.display='block'; let html='';
+    if(isStaging){ 
+      stagingStatusArea.style.display='block'; 
+      // Hide server status when dynamic status is active
+      if(serverStatusArea) serverStatusArea.style.display='none';
+      
+      let html='';
       if(data.message){ const cls = data.status==='error'? 'text-danger': data.status==='completed'? 'text-success':'text-info'; html += `<small class="d-block ${cls}">${data.message}</small>`; }
       if(typeof data.progress==='number' && data.progress>=0){ const pCls = data.status==='error'? 'bg-danger':'bg-success'; const anim = ['queued','processing','chunking','embedding','storing'].includes(data.status)?'progress-animated':''; html += `<div class="progress progress-custom mt-1" style="height:6px;"><div class="progress-bar ${pCls} ${anim}" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${data.progress}" style="width:${data.progress}%"></div></div>`; }
-      stagingStatusArea.innerHTML = html; }
+      stagingStatusArea.innerHTML = html; 
+    }
     else { const messageEl = card.querySelector('small'); if(messageEl && data.message) messageEl.textContent = data.message; const pb=card.querySelector('.progress-bar'); if(pb && typeof data.progress==='number'){ pb.style.width=`${data.progress}%`; pb.setAttribute('aria-valuenow', String(data.progress)); if(['queued','processing','chunking','embedding','storing'].includes(data.status)) pb.classList.add('progress-animated'); else pb.classList.remove('progress-animated'); } }
 
     if(data.message && data.message.toLowerCase().includes('deletion complete')) { removeCard(card, isStaging); return; }
@@ -136,10 +143,47 @@
   // === Stats & Section Partial Refreshers ===
   // refreshKnowledgebaseStats: Swaps metrics cards inside #knowledgebase-stats.
   function refreshKnowledgebaseStats(){ log('refreshKnowledgebaseStats() start'); fetch(window.location.href).then(r=>r.text()).then(html => { const doc=new DOMParser().parseFromString(html,'text/html'); const newSec=doc.querySelector('#knowledgebase-stats'); const cur=document.querySelector('#knowledgebase-stats'); if(newSec && cur){ cur.innerHTML=newSec.innerHTML; applyLocalTimes(cur); log('knowledgebase stats updated'); } }).catch(e=> log('refreshKnowledgebaseStats() error: '+e)); }
-  // refreshStagingArea: Replaces staging cards container (#staging-area) preserving no local state intentionally.
-  function refreshStagingArea(){ log('refreshStagingArea() start'); fetch(window.location.href).then(r=>r.text()).then(html => { const doc=new DOMParser().parseFromString(html,'text/html'); const newSec=doc.querySelector('#staging-area'); const cur=document.querySelector('#staging-area'); if(newSec && cur){ cur.innerHTML=newSec.innerHTML; applyLocalTimes(cur); log('staging area updated'); } }).catch(e=> log('refreshStagingArea() error: '+e)); }
+  // refreshStagingArea: Replaces only staging files area (#staging-files-area) preserving upload form state.
+  function refreshStagingArea(){ log('refreshStagingArea() start'); fetch(window.location.href).then(r=>r.text()).then(html => { const doc=new DOMParser().parseFromString(html,'text/html'); const newSec=doc.querySelector('#staging-files-area'); const cur=document.querySelector('#staging-files-area'); if(newSec && cur){ cur.innerHTML=newSec.innerHTML; applyLocalTimes(cur); log('staging area updated'); } }).catch(e=> log('refreshStagingArea() error: '+e)); }
   // refreshUrlManagement: Reloads URL management table while preserving the current input value.
-  function refreshUrlManagement(){ log('refreshUrlManagement() start'); fetch(window.location.href).then(r=>r.text()).then(html => { const doc=new DOMParser().parseFromString(html,'text/html'); const newSec=doc.querySelector('#url-management'); const cur=document.querySelector('#url-management'); if(newSec && cur){ const inputValue = cur.querySelector('input[name="url"]')?.value || ''; cur.innerHTML=newSec.innerHTML; if(inputValue){ const input=cur.querySelector('input[name="url"]'); if(input) input.value=inputValue; } applyLocalTimes(cur); log('url management section updated'); } }).catch(e=> log('refreshUrlManagement() error: '+e)); }
+  function refreshUrlManagement(){ 
+    log('refreshUrlManagement() start'); 
+    fetch(window.location.href)
+      .then(r=>r.text())
+      .then(html => { 
+        const doc = new DOMParser().parseFromString(html, 'text/html'); 
+        const newSec = doc.querySelector('#url-management'); 
+        const cur = document.querySelector('#url-management'); 
+        
+        if(newSec && cur) {
+          // Preserve URL input value and focus state
+          const urlInput = cur.querySelector('input[name="url"]');
+          const inputValue = urlInput?.value || '';
+          const hadFocus = urlInput === document.activeElement;
+          const cursorPosition = hadFocus ? urlInput.selectionStart : 0;
+          
+          // Update the content
+          cur.innerHTML = newSec.innerHTML; 
+          
+          // Restore input state
+          if(inputValue) {
+            const newInput = cur.querySelector('input[name="url"]'); 
+            if(newInput) {
+              newInput.value = inputValue;
+              // Restore focus and cursor position if the input had focus
+              if(hadFocus) {
+                newInput.focus();
+                newInput.setSelectionRange(cursorPosition, cursorPosition);
+              }
+            }
+          }
+          
+          applyLocalTimes(cur); 
+          log('url management section updated, input preserved'); 
+        } 
+      })
+      .catch(e=> log('refreshUrlManagement() error: '+e)); 
+  }
 
   // === Deletion Polling (Uploaded + Staging) ===
   // pollUploadedDeletion: Tracks long-running embedding cleanups for already-uploaded documents table rows.
@@ -151,12 +195,69 @@
   // globalClickHandler: Event delegation for delete/process buttons; minimizes individual listeners.
   function globalClickHandler(e){ const del = e.target.closest('.delete-file-btn'); if(del){ handleDelete(del); return; } const proc = e.target.closest('.process-file-btn'); if(proc){ handleProcess(proc); return; } }
   // handleDelete: Orchestrates UI changes and POST request for file deletion (uploaded or staging).
-  function handleDelete(btn){ const filename=btn.getAttribute('data-filename'); const url=btn.getAttribute('data-url'); const isUploaded=url.includes('/uploaded/'); const isStaging=url.includes('/staging/'); const msg = isUploaded ? 'Delete this file and remove from database?\n\nNote: Milvus will clean up embeddings asynchronously in the background.' : 'Delete this file?\n\nNote: Any embeddings will be cleaned up asynchronously by Milvus.'; if(!confirm(msg)) return; if(isUploaded){ const row = btn.closest('tr'); const cells=row.querySelectorAll('td'); const statusCell=cells[cells.length-2]; const actionCell=cells[cells.length-1]; actionCell.innerHTML='<button type="button" class="btn btn-outline-danger btn-sm" disabled><i class="fas fa-spinner fa-spin"></i></button>'; statusCell.innerHTML='<div class="small text-muted">Deletion command sent - Milvus cleanup is async</div>'; } else if(isStaging){ const card=btn.closest('.file-card'); const dropdown=card.querySelector('.dropdown'); const statusArea=card.querySelector('.staging-status-area'); dropdown.innerHTML='<button class="btn btn-sm btn-outline-secondary" disabled><i class="fas fa-spinner fa-spin"></i></button>'; statusArea.style.display='block'; statusArea.innerHTML='<small class="d-block text-muted">Deletion command sent</small>'; }
+  function handleDelete(btn){ 
+    const filename=btn.getAttribute('data-filename'); 
+    const url=btn.getAttribute('data-url'); 
+    const isUploaded=url.includes('/uploaded/'); 
+    const isStaging=url.includes('/staging/'); 
+    const msg = isUploaded ? 'Delete this file and remove from database?\n\nNote: Milvus will clean up embeddings asynchronously in the background.' : 'Delete this file?\n\nNote: Any embeddings will be cleaned up asynchronously by Milvus.'; 
+    if(!confirm(msg)) return; 
+    
+    if(isUploaded){ 
+      const row = btn.closest('tr'); 
+      const cells=row.querySelectorAll('td'); 
+      const statusCell=cells[cells.length-2]; 
+      const actionCell=cells[cells.length-1]; 
+      actionCell.innerHTML='<button type="button" class="btn btn-outline-danger btn-sm" disabled><i class="fas fa-spinner fa-spin"></i></button>'; 
+      statusCell.innerHTML='<div class="small text-muted">Deletion command sent - Milvus cleanup is async</div>'; 
+    } else if(isStaging){ 
+      const card=btn.closest('.file-card'); 
+      const dropdown=card.querySelector('.dropdown'); 
+      const statusArea=card.querySelector('.staging-status-area'); 
+      const serverStatusArea = card.querySelector('.server-status-area');
+      
+      dropdown.innerHTML='<button class="btn btn-sm btn-outline-secondary" disabled><i class="fas fa-spinner fa-spin"></i></button>'; 
+      statusArea.style.display='block'; 
+      // Hide server status when deletion starts
+      if(serverStatusArea) serverStatusArea.style.display='none';
+      statusArea.innerHTML='<small class="d-block text-muted">Deletion command sent</small>'; 
+    }
+    
     fetch(url,{ method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'} })
       .then(r=>{ if(r.ok){ setTimeout(()=>{ if(isUploaded){ const row=document.querySelector(`tr[data-uploaded-row="${filename}"]`); if(row){ row.style.transition='opacity 200ms ease'; row.style.opacity='0'; setTimeout(()=>row.remove(),220);} } else if(isStaging){ const card=document.querySelector(`.staging-status-area[data-filename="${filename}"]`)?.closest('.file-card'); if(card){ const col=card.closest('.col-md-6'); if(col){ col.style.transition='opacity 200ms ease'; col.style.opacity='0'; setTimeout(()=>col.remove(),220);} } } },1000);} else { alert('Delete request failed.'); location.reload(); } })
-      .catch(()=>{ alert('Delete request failed.'); location.reload(); }); }
+      .catch(()=>{ alert('Delete request failed.'); location.reload(); }); 
+  }
   // handleProcess: Sends a processing request for a staging file and updates its card status indicator.
-  function handleProcess(btn){ const filename=btn.getAttribute('data-filename'); const url=btn.getAttribute('data-url'); const card=btn.closest('.file-card'); const dropdown=card.querySelector('.dropdown'); const statusArea=card.querySelector('.staging-status-area'); dropdown.innerHTML='<button class="btn btn-sm btn-outline-secondary" disabled><i class="fas fa-spinner fa-spin"></i></button>'; statusArea.style.display='block'; statusArea.innerHTML='<small class="d-block text-muted">Starting processing...</small>'; fetch(url,{ headers:{'Accept':'application/json'} }).then(r=>{ if(r.ok){ statusArea.innerHTML='<small class="d-block text-success">File queued for processing</small>'; const title=card.querySelector('.card-title'); if(title && !card.querySelector('.status-indicator')){ title.innerHTML += ' <span class="status-indicator status-processing">●</span>'; } } else { alert('Process request failed.'); location.reload(); } }).catch(()=>{ alert('Process request failed.'); location.reload(); }); }
+  function handleProcess(btn){ 
+    const filename=btn.getAttribute('data-filename'); 
+    const url=btn.getAttribute('data-url'); 
+    const card=btn.closest('.file-card'); 
+    const dropdown=card.querySelector('.dropdown'); 
+    const statusArea=card.querySelector('.staging-status-area'); 
+    const serverStatusArea = card.querySelector('.server-status-area');
+    
+    dropdown.innerHTML='<button class="btn btn-sm btn-outline-secondary" disabled><i class="fas fa-spinner fa-spin"></i></button>'; 
+    statusArea.style.display='block'; 
+    // Hide server status when processing starts
+    if(serverStatusArea) serverStatusArea.style.display='none';
+    statusArea.innerHTML='<small class="d-block text-muted">Starting processing...</small>'; 
+    
+    fetch(url,{ headers:{'Accept':'application/json'} }).then(r=>{ 
+      if(r.ok){ 
+        statusArea.innerHTML='<small class="d-block text-success">File queued for processing</small>'; 
+        const title=card.querySelector('.card-title'); 
+        if(title && !card.querySelector('.status-indicator')){ 
+          title.innerHTML += ' <span class="status-indicator status-processing">●</span>'; 
+        } 
+      } else { 
+        alert('Process request failed.'); 
+        location.reload(); 
+      } 
+    }).catch(()=>{ 
+      alert('Process request failed.'); 
+      location.reload(); 
+    }); 
+  }
 
   // === Bootstrap: attach listeners & schedule pollers ===
   document.addEventListener('DOMContentLoaded', () => {

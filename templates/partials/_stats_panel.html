@@ -34,9 +34,45 @@
                                 <div class="metric-sub">{{ collection_stats.num_entities or 0 }} entities</div>
                             </div>
                             <div class="metric-tile">
-                                <div class="metric-label">Emails</div>
+                                <div class="metric-label">Collection</div>
                                 <div class="metric-value">{{ email_collection_stats.name if email_collection_stats else 'emails' }}</div>
                                 <div class="metric-sub">{{ email_collection_stats.num_entities if email_collection_stats else (email_meta.total_emails or 0) }} entities</div>
+                            </div>
+                            <div class="metric-tile">
+                                <div class="metric-label">Ollama Chat</div>
+                                <div class="metric-value">
+                                    <span class="status-dot {{ 'dot-ok' if ollama_status.services.chat.connected and ollama_status.services.chat.model_loaded else 'dot-bad' }}"></span>
+                                    {{ 'Connected' if ollama_status.services.chat.connected and ollama_status.services.chat.model_loaded else 'Unavailable' }}
+                                </div>
+                                {% if ollama_status.services.chat.connected %}
+                                    <div class="metric-sub">{{ ollama_status.services.chat.model_name }}</div>
+                                {% elif ollama_status.services.chat.error_message %}
+                                    <div class="metric-sub text-warning">{{ ollama_status.services.chat.error_message[:30] }}...</div>
+                                {% endif %}
+                            </div>
+                            <div class="metric-tile">
+                                <div class="metric-label">Ollama Embed</div>
+                                <div class="metric-value">
+                                    <span class="status-dot {{ 'dot-ok' if ollama_status.services.embedding.connected and ollama_status.services.embedding.model_loaded else 'dot-bad' }}"></span>
+                                    {{ 'Connected' if ollama_status.services.embedding.connected and ollama_status.services.embedding.model_loaded else 'Unavailable' }}
+                                </div>
+                                {% if ollama_status.services.embedding.connected %}
+                                    <div class="metric-sub">{{ ollama_status.services.embedding.model_name }}</div>
+                                {% elif ollama_status.services.embedding.error_message %}
+                                    <div class="metric-sub text-warning">{{ ollama_status.services.embedding.error_message[:30] }}...</div>
+                                {% endif %}
+                            </div>
+                            <div class="metric-tile">
+                                <div class="metric-label">Ollama Class</div>
+                                <div class="metric-value">
+                                    <span class="status-dot {{ 'dot-ok' if ollama_status.services.classification.connected and ollama_status.services.classification.model_loaded else 'dot-bad' }}"></span>
+                                    {{ 'Connected' if ollama_status.services.classification.connected and ollama_status.services.classification.model_loaded else 'Unavailable' }}
+                                </div>
+                                {% if ollama_status.services.classification.connected %}
+                                    <div class="metric-sub">{{ ollama_status.services.classification.model_name }}</div>
+                                {% elif ollama_status.services.classification.error_message %}
+                                    <div class="metric-sub text-warning">{{ ollama_status.services.classification.error_message[:30] }}...</div>
+                                {% endif %}
                             </div>
                         </div>
                     </div>

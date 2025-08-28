@@ -10,7 +10,7 @@ import logging
 from typing import List, Any, Dict, Optional
 from langchain_core.documents import Document
 
-from ingestion.utils.db_utils import PostgreSQLManager
+from ingestion.core.postgres_manager import PostgreSQLManager
 
 logger = logging.getLogger(__name__)
 
@@ -23,14 +23,14 @@ class DocumentPostgresFTSRetriever:
     for fast text search across document content.
     """
     
-    def __init__(self, postgres_pool: Any) -> None:
+    def __init__(self, postgres_manager: PostgreSQLManager) -> None:
         """
         Initialize PostgreSQL FTS retriever for documents.
         
         Args:
-            postgres_pool: PostgreSQL connection pool
+            postgres_manager: PostgreSQL manager instance
         """
-        self.db_manager = PostgreSQLManager(postgres_pool)
+        self.db_manager = postgres_manager
         logger.info("Document PostgreSQL FTS retriever initialized")
     
     def search(self, query: str, k: int = 10, 
@@ -62,7 +62,7 @@ class DocumentPostgresFTSRetriever:
                     # Build dynamic query with optional filters
                     base_query = """
                         SELECT 
-                            dc.chunk_id,
+                            dc.id,
                             dc.document_id,
                             dc.chunk_text,
                             dc.chunk_ordinal,
@@ -78,7 +78,7 @@ class DocumentPostgresFTSRetriever:
                             d.created_at as document_created,
                             dc.created_at as chunk_created
                         FROM document_chunks dc
-                        JOIN documents d ON dc.document_id = d.document_id
+                        JOIN documents d ON dc.document_id = d.id
                         WHERE to_tsvector('english', dc.chunk_text) @@ plainto_tsquery('english', %s)
                     """
                     
@@ -107,15 +107,28 @@ class DocumentPostgresFTSRetriever:
                     
                     documents = []
                     for row in results:
-                        chunk_id, document_id, chunk_text, chunk_ordinal, page_start, page_end, \
-                        section_path, element_types, token_count, fts_score, title, content_type, \
-                        file_path, document_created, chunk_created = row
+                        # Extract fields directly from database
+                        id = row['id']
+                        document_id = row['document_id']
+                        chunk_text = row['chunk_text']
+                        chunk_ordinal = row['chunk_ordinal']
+                        page_start = row['page_start']
+                        page_end = row['page_end']
+                        section_path = row['section_path']
+                        element_types = row['element_types']
+                        token_count = row['token_count']
+                        fts_score = row['fts_score']
+                        title = row['title']
+                        content_type = row['content_type']
+                        file_path = row['file_path']
+                        document_created = row['document_created']
+                        chunk_created = row['chunk_created']
                         
                         # Create LangChain Document with comprehensive metadata
                         doc = Document(
                             page_content=chunk_text,
                             metadata={
-                                'chunk_id': chunk_id,
+                                'id': id,
                                 'document_id': document_id,
                                 'chunk_ordinal': chunk_ordinal,
                                 'page_start': page_start,
@@ -130,8 +143,7 @@ class DocumentPostgresFTSRetriever:
                                 'document_created': document_created,
                                 'chunk_created': chunk_created,
                                 'category': 'document',
-                                'retrieval_method': 'fts',
-                                'source': f"file:{title or 'unknown'}"
+                                'retrieval_method': 'fts'
                             }
                         )
                         documents.append(doc)
@@ -172,14 +184,14 @@ class DocumentPostgresFTSRetriever:
                     # Build complex query with multiple filters
                     base_query = """
                         SELECT 
-                            dc.chunk_id, dc.document_id, dc.chunk_text, dc.chunk_ordinal,
+                            dc.id, dc.document_id, dc.chunk_text, dc.chunk_ordinal,
                             dc.page_start, dc.page_end, dc.section_path, dc.element_types,
                             dc.token_count,
                             ts_rank(to_tsvector('english', dc.chunk_text), plainto_tsquery('english', %s)) as fts_score,
                             d.title, d.content_type, d.file_path, d.created_at,
                             d.top_keywords
                         FROM document_chunks dc
-                        JOIN documents d ON dc.document_id = d.document_id
+                        JOIN documents d ON dc.document_id = d.id
                         WHERE to_tsvector('english', dc.chunk_text) @@ plainto_tsquery('english', %s)
                     """
                     
@@ -222,14 +234,27 @@ class DocumentPostgresFTSRetriever:
                     
                     documents = []
                     for row in results:
-                        chunk_id, document_id, chunk_text, chunk_ordinal, page_start, page_end, \
-                        section_path, element_types, token_count, fts_score, title, content_type, \
-                        file_path, created_at, top_keywords = row
+                        # Extract fields directly from database
+                        id = row['id']
+                        document_id = row['document_id']
+                        chunk_text = row['chunk_text']
+                        chunk_ordinal = row['chunk_ordinal']
+                        page_start = row['page_start']
+                        page_end = row['page_end']
+                        section_path = row['section_path']
+                        element_types = row['element_types']
+                        token_count = row['token_count']
+                        fts_score = row['fts_score']
+                        title = row['title']
+                        content_type = row['content_type']
+                        file_path = row['file_path']
+                        created_at = row['created_at']
+                        top_keywords = row['top_keywords']
                         
                         doc = Document(
                             page_content=chunk_text,
                             metadata={
-                                'chunk_id': chunk_id,
+                                'id': id,
                                 'document_id': document_id,
                                 'chunk_ordinal': chunk_ordinal,
                                 'page_start': page_start,
@@ -278,7 +303,7 @@ class DocumentPostgresFTSRetriever:
                             COUNT(DISTINCT dc.document_id) as document_count,
                             AVG(ts_rank(to_tsvector('english', dc.chunk_text), plainto_tsquery('english', %s))) as avg_score
                         FROM document_chunks dc
-                        JOIN documents d ON dc.document_id = d.document_id
+                        JOIN documents d ON dc.document_id = d.id
                         WHERE to_tsvector('english', dc.chunk_text) @@ plainto_tsquery('english', %s)
                         GROUP BY d.content_type
                         ORDER BY chunk_count DESC

@@ -1,16 +1,25 @@
 #!/usr/bin/env python
 """
-Document Hybrid Retriever with Reciprocal Rank Fusion (RRF)
+Document Hybrid Retriever with Reciprocal Rank Fusion (RRF) and Cross-Encoder Reranking
 Following DEVELOPMENT_RULES.md for all development requirements
 
 This module combines vector similarity search with PostgreSQL FTS
-for documents using RRF fusion for improved retrieval performance.
+for documents using RRF fusion and cross-encoder reranking for improved retrieval performance.
 """
 
 import logging
 from typing import List, Any, Dict, Optional
 from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
+
+# Import reranking functionality
+try:
+    from rerank.cross_encoder import CrossEncoderReranker, RerankResult
+    RERANKING_AVAILABLE = True
+except ImportError:
+    RERANKING_AVAILABLE = False
+    CrossEncoderReranker = None
+    RerankResult = None
 
 logger = logging.getLogger(__name__)
 
@@ -20,14 +29,17 @@ class DocumentHybridRetriever:
     Hybrid retriever combining vector similarity and PostgreSQL FTS for documents.
     
     Uses Reciprocal Rank Fusion (RRF) to combine results from both
-    retrieval methods for improved performance.
+    retrieval methods, with optional cross-encoder reranking for improved performance.
     """
     
     def __init__(
         self, 
         vector_retriever: BaseRetriever, 
         fts_retriever: Any,  # DocumentPostgresFTSRetriever
-        rrf_constant: int = 60
+        rrf_constant: int = 60,
+        enable_reranking: bool = True,
+        reranker_model: str = "ms-marco-minilm",
+        rerank_top_k: Optional[int] = None
     ) -> None:
         """
         Initialize document hybrid retriever.
@@ -36,10 +48,30 @@ class DocumentHybridRetriever:
             vector_retriever: LangChain vector store retriever for documents
             fts_retriever: Document PostgreSQL FTS retriever
             rrf_constant: RRF constant for fusion (default 60)
+            enable_reranking: Whether to enable cross-encoder reranking
+            reranker_model: Model type for cross-encoder reranking
+            rerank_top_k: Number of top results to rerank (None = rerank all)
         """
         self.vector_retriever = vector_retriever
         self.fts_retriever = fts_retriever
         self.rrf_constant = rrf_constant
+        self.enable_reranking = enable_reranking and RERANKING_AVAILABLE
+        self.rerank_top_k = rerank_top_k
+        
+        # Initialize reranker if available and enabled
+        self.reranker: Optional[Any] = None
+        if self.enable_reranking:
+            try:
+                from rerank.cross_encoder import RerankerFactory
+                self.reranker = RerankerFactory.create_reranker(reranker_model)
+                logger.info(f"Document hybrid retriever initialized with reranking enabled (model: {reranker_model})")
+            except Exception as e:
+                logger.warning(f"Failed to initialize reranker: {e}. Reranking disabled.")
+                self.enable_reranking = False
+        
+        if not self.enable_reranking:
+            logger.info("Document hybrid retriever initialized without reranking")
+            
         logger.info(f"Document hybrid retriever initialized with RRF constant: {rrf_constant}")
     
     def search(self, query: str, k: int = 10, 
@@ -84,6 +116,11 @@ class DocumentHybridRetriever:
             
             # Apply RRF fusion
             fused_docs = self._apply_rrf_fusion(vector_docs, fts_docs, query)
+            
+            # Apply cross-encoder reranking if enabled
+            if self.enable_reranking and self.reranker and len(fused_docs) > 1:
+                logger.debug("Applying cross-encoder reranking to fused results")
+                fused_docs = self._apply_reranking(query, fused_docs, k)
             
             # Return top k results
             result_docs = fused_docs[:k]
@@ -301,6 +338,62 @@ class DocumentHybridRetriever:
         logger.debug(f"Post-fusion filtering: {len(docs)} -> {len(filtered_docs)} documents")
         return filtered_docs
     
+    def _apply_reranking(self, query: str, fused_docs: List[Document], target_k: int) -> List[Document]:
+        """
+        Apply cross-encoder reranking to fused documents.
+        
+        Args:
+            query: Original search query
+            fused_docs: Documents after RRF fusion
+            target_k: Target number of results to return
+            
+        Returns:
+            Reranked documents
+        """
+        try:
+            if not self.reranker or not fused_docs:
+                return fused_docs
+            
+            # Prepare candidates for reranking
+            candidates = []
+            for doc in fused_docs:
+                candidate = {
+                    'chunk_id': doc.metadata.get('chunk_id', ''),
+                    'text': doc.page_content,
+                    'score': doc.metadata.get('rrf_score', 0.0),
+                    'metadata': doc.metadata
+                }
+                candidates.append(candidate)
+            
+            # Apply reranking
+            rerank_top_k = self.rerank_top_k or len(candidates)
+            rerank_results = self.reranker.rerank(query, candidates, rerank_top_k)
+            
+            # Convert back to Document objects
+            reranked_docs = []
+            for result in rerank_results:
+                # Create new document with updated metadata
+                metadata = result.metadata.copy()
+                metadata.update({
+                    'rerank_score': result.rerank_score,
+                    'original_score': result.original_score,
+                    'final_rank': result.final_rank,
+                    'retrieval_method': 'hybrid_reranked'
+                })
+                
+                doc = Document(
+                    page_content=result.text,
+                    metadata=metadata
+                )
+                reranked_docs.append(doc)
+            
+            logger.info(f"Reranked {len(candidates)} documents, returning top {len(reranked_docs)}")
+            return reranked_docs
+            
+        except Exception as e:
+            logger.error(f"Reranking failed: {e}. Returning original fusion results.")
+            return fused_docs
+    
     def get_fusion_statistics(self, query: str) -> Dict[str, Any]:
         """
         Get detailed statistics about fusion performance for a query.
@@ -327,12 +420,14 @@ class DocumentHybridRetriever:
             fts_types = {}
             
             for doc in vector_docs:
-                content_type = doc.metadata.get('content_type', 'unknown')
-                vector_types[content_type] = vector_types.get(content_type, 0) + 1
+                content_type = doc.metadata.get('content_type')
+                if content_type:
+                    vector_types[content_type] = vector_types.get(content_type, 0) + 1
                 
             for doc in fts_docs:
-                content_type = doc.metadata.get('content_type', 'unknown')
-                fts_types[content_type] = fts_types.get(content_type, 0) + 1
+                content_type = doc.metadata.get('content_type')
+                if content_type:
+                    fts_types[content_type] = fts_types.get(content_type, 0) + 1
             
             return {
                 'query': query,

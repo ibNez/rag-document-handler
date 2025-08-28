@@ -77,14 +77,16 @@
                                                         <span class="badge rounded-pill bg-secondary ms-1" title="Crawl-delay from robots.txt">Delay {{ '%.1f'|format(url.robots_crawl_delay) }}s</span>
                                                     {% endif %}
                                                 {% endif %}
-                                                {% if url.snapshot_enabled %}
-                                                    <span class="badge rounded-pill bg-primary ms-1" title="Snapshots enabled for this URL"><i class="fas fa-camera me-1"></i>Snapshots On</span>
-                                                    {% if url.snapshot_retention_days is not none %}
-                                                        <span class="badge rounded-pill bg-light text-dark ms-1" title="Retention days">{{ url.snapshot_retention_days }}d</span>
-                                                    {% endif %}
-                                                    {% if url.snapshot_max_snapshots is not none %}
-                                                        <span class="badge rounded-pill bg-light text-dark ms-1" title="Max snapshots">{{ url.snapshot_max_snapshots }} max</span>
-                                                    {% endif %}
+                                                <span class="badge rounded-pill bg-primary ms-1" title="Snapshots always enabled"><i class="fas fa-camera me-1"></i>Snapshots</span>
+                                                {% if url.snapshot_retention_days is not none and url.snapshot_retention_days > 0 %}
+                                                    <span class="badge rounded-pill bg-light text-dark ms-1" title="Retention days">{{ url.snapshot_retention_days }}d</span>
+                                                {% elif url.snapshot_retention_days == 0 %}
+                                                    <span class="badge rounded-pill bg-light text-dark ms-1" title="Retention days">∞d</span>
+                                                {% endif %}
+                                                {% if url.snapshot_max_snapshots is not none and url.snapshot_max_snapshots > 0 %}
+                                                    <span class="badge rounded-pill bg-light text-dark ms-1" title="Max snapshots">{{ url.snapshot_max_snapshots }} max</span>
+                                                {% elif url.snapshot_max_snapshots == 0 %}
+                                                    <span class="badge rounded-pill bg-light text-dark ms-1" title="Max snapshots">∞ max</span>
                                                 {% endif %}
                                             </div>
                                         </td>
@@ -94,7 +96,12 @@
                                             <div class="text-muted">Next: <span class="dt-local" data-utc="{{ url.next_refresh or '' }}">{{ url.next_refresh or '—' }}</span></div>
                                         </td>
                                         <td class="text-center">
-                                            {{ url.pages if url.pages is not none else '—' }}
+                                            {% if url.has_children %}
+                                                <div>{{ url.child_stats.total_children }}</div>
+                                                <div class="small text-muted">children</div>
+                                            {% else %}
+                                                {{ url.pages if url.pages is not none else '—' }}
+                                            {% endif %}
                                         </td>
                                         <td class="text-center">
                                             {{ url.chunk_count or 0 }}
@@ -120,6 +127,35 @@
                                                          data-url-id="{{ url.id }}"
                                                          data-initial-progress="{{ up.progress or 0 }}"
                                                          style="width: 0%"></div>
+                                                </div>
+                                            {% elif url.has_children and url.is_parent_with_active_children %}
+                                                <div class="small mb-1">
+                                                    <span class="badge bg-warning child-status-badge" title="Child URLs are being processed">Children Processing</span>
+                                                </div>
+                                                <div class="progress child-progress mb-1">
+                                                    <div class="progress-bar"
+                                                         role="progressbar" aria-valuemin="0" aria-valuemax="100"
+                                                         style="width: {{ url.child_progress_percent }}%"
+                                                         title="Child URL Progress: {{ url.child_stats.completed_children }}/{{ url.child_stats.total_children }} completed"></div>
+                                                </div>
+                                                <div class="child-stats-text text-muted">
+                                                    {{ url.child_stats.completed_children }}/{{ url.child_stats.total_children }} children
+                                                    {% if url.child_stats.processing_children > 0 %}
+                                                        ({{ url.child_stats.processing_children }} active)
+                                                    {% endif %}
+                                                    {% if url.child_stats.failed_children > 0 %}
+                                                        <span class="text-danger">({{ url.child_stats.failed_children }} failed)</span>
+                                                    {% endif %}
+                                                </div>
+                                            {% elif url.has_children %}
+                                                <div class="small mb-1">
+                                                    <span class="badge bg-secondary child-status-badge" title="All child URLs completed">Children Complete</span>
+                                                </div>
+                                                <div class="child-stats-text text-muted">
+                                                    {{ url.child_stats.total_children }} children
+                                                    {% if url.child_stats.failed_children > 0 %}
+                                                        <span class="text-danger">({{ url.child_stats.failed_children }} failed)</span>
+                                                    {% endif %}
                                                 </div>
                                             {% elif url.last_update_status %}
                                                 <span class="badge {% if url.last_update_status == 'updated' %}bg-success{% elif url.last_update_status in ['unchanged','no_content'] %}bg-secondary{% else %}bg-light text-dark{% endif %}">

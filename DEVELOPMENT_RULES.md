@@ -1,13 +1,10 @@
-# Alfi Voice Assistant - Development Rules & Standards
+<!-- SOURCE THE ENVIRONMENT!  source .venv/bin/activate
+We do not use placeholder, stubbed in data, or any other type of fake code.  We don't mask our failures with fallbacks we log them and fail out so we can identify and fix the issue.
+We are creating a new application and most not create backward compatibility code. We can simply reinstall to continue testing. -->
+# RAG Knowledge Base Manager - Development Rules & Standards
 
 ## 📋 Overview
 This document contains the development standards, patterns, and requirements for a python project. These rules ensure consistency, maintainability, and proper functionality across all components.
-
----
-SOURCE THE ENVIRONMENT! 
-source .venv/bin/activate
-
-We do not use placeholder, stubbed in data, or any other type of fake code.  We don't mask our failures with fallbacks we log them and fail out so we can identify and fix the issue.
 
 ## 🐍 Python Development Best Practices (MANDATORY)
 

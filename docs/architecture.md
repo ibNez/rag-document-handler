@@ -134,10 +134,103 @@ templates/
 ingestion/
 ├── core/                          # Database abstraction and PostgreSQL management
 ├── email/                         # Email processing with multiple connector support
+│   ├── manager.py                 # PostgreSQL-based account management
+│   ├── email_manager_postgresql.py # Email message storage and retrieval
+│   ├── processor.py               # Email content processing and embedding
+│   ├── orchestrator.py            # Email processing coordination with offset tracking
+│   └── connectors/                # Protocol-specific email retrieval
+│       ├── imap_connector.py      # Enhanced IMAP with corruption detection
+│       ├── gmail_connector.py     # Gmail API integration
+│       └── exchange_connector.py  # Exchange server integration
 ├── url/                           # URL crawling and content processing
 ├── document/                      # Document extraction and chunking
 └── utils/                         # Shared utilities (crypto, scheduling)
 ```
+
+## Enhanced Email Processing Architecture
+
+### Email Component Responsibilities
+
+| Component | Purpose | Key Features |
+|-----------|---------|--------------|
+| `manager.py` | Account credentials and configuration management | Fresh data fetching for UI, encrypted storage |
+| `email_manager_postgresql.py` | Email message metadata storage | Accurate statistics with DISTINCT counts |
+| `processor.py` | Content extraction, chunking, and embedding | Enhanced validation and error handling |
+| `orchestrator.py` | Coordinates processing pipeline | Offset-aware batch processing |
+| `connectors/` | Protocol-specific email retrieval | Corrupted email detection and validation |
+
+### Email Processing Pipeline
+
+#### 1. Account Configuration (`manager.py`)
+- **Storage**: Email accounts stored in `email_accounts` table via PostgreSQL manager
+- **Encryption**: Passwords encrypted using `ingestion/utils/crypto.py` utilities
+- **Validation**: Connection tested through appropriate connector before saving
+- **Scheduling**: Automatic sync intervals managed by orchestrator
+- **Real-time Updates**: Fresh data fetching for edit operations via `/email_accounts` API
+
+#### 2. Protocol-Specific Connectors (`connectors/`)
+- **IMAP Support**: Enhanced IMAP with SSL/TLS, corruption detection, batch processing
+- **Gmail API**: OAuth-based authentication, readonly scope, token management
+- **Exchange Integration**: EWS-based connector with modern authentication support
+- **Error Handling**: Fail-fast approach with detailed logging and offset tracking
+
+#### 3. Enhanced Content Processing (`processor.py`)
+- **Message Validation**: Validates Message-ID headers and email structure
+- **Content Extraction**: HTML and plain text processing with attachment handling
+- **Chunking Strategy**: Intelligent text chunking optimized for email content
+- **Embedding Generation**: Vector embeddings for semantic search capabilities
+- **Metadata Enrichment**: Thread context, sender/recipient analysis, temporal data
+
+### Hybrid Retrieval System Integration
+
+The system features an advanced hybrid retrieval approach integrated into the main search functionality:
+
+#### MilvusManager Enhancements
+- **Hybrid Retrievers**: Combines vector similarity and PostgreSQL full-text search
+- **RRF Fusion**: Uses Reciprocal Rank Fusion to combine search results
+- **Smart Fallback**: Graceful degradation to vector-only search if needed
+- **Rich Metadata**: Enhanced search results with retrieval method information
+
+#### Search Method Priority
+1. **Hybrid Retrieval**: Vector + PostgreSQL FTS with RRF fusion (primary)
+2. **Vector-Only Fallback**: Pure similarity search (backup)
+3. **Error Handling**: Comprehensive logging and graceful degradation
+
+#### Enhanced Search Results
+```python
+{
+    "retrieval_method": "hybrid",
+    "vector_rank": 3,
+    "fts_rank": 1,
+    "fts_score": 0.92,
+    "page_start": 5,
+    "page_end": 6,
+    "content_type": "application/pdf"
+}
+```
+
+## URL Snapshot System Architecture
+
+### Snapshot Generation Pipeline
+- **Browser Automation**: Playwright-based PDF generation with configurable viewport
+- **Content Detection**: Hash-based change detection to avoid duplicate snapshots
+- **Systematic Organization**: Hierarchical directory structure with structured naming
+- **Retention Management**: Automatic cleanup based on configurable age and count limits
+
+### Snapshot Directory Structure
+```
+snapshots/
+  <domain>/                        # Punycode-normalized domain
+    <path_slug>/                   # URL path converted to safe slug
+      <timestampZ>__<metadata>.pdf # PDF snapshot with encoded metadata
+      <timestampZ>__<metadata>.json # Sidecar metadata file
+```
+
+### Naming Convention Components
+- **Timestamp**: UTC ISO format for chronological ordering
+- **Query Hash**: 8-character hash of normalized query parameters
+- **Variant Tokens**: Render settings (format, viewport, locale)
+- **Content Hash**: 8-character hash for deduplication
 
 ## Enhanced Statistics Architecture
 
@@ -163,6 +256,76 @@ The main `StatsProvider` class acts as a coordinator that delegates to individua
 - Due date calculations with refresh intervals
 - Robots.txt compliance and crawl settings
 - Snapshot management statistics
+
+## Enhanced URL Management System
+
+### Parent-Child URL Relationships and Progress Tracking
+
+The URL management system now features sophisticated parent-child relationship tracking for domain crawling operations with comprehensive progress monitoring.
+
+#### Key Features
+
+**Parent-Child URL Discovery:**
+- Parent URLs can discover child URLs through domain crawling
+- Child URLs are linked to their parent via `parent_url_id` foreign key
+- Hierarchical relationship tracking enables coordinated processing
+
+**Scheduling Protection:**
+- Parent URLs cannot be re-scheduled while children are still processing
+- `is_refreshing` flag prevents overlapping crawl sessions
+- SQL query enhanced with child processing status check:
+  ```sql
+  AND NOT EXISTS (
+      SELECT 1 FROM urls child_urls 
+      WHERE child_urls.parent_url_id = urls.id 
+      AND child_urls.is_refreshing = TRUE
+  )
+  ```
+
+**Enhanced Progress Visualization:**
+- **Child Statistics**: Real-time tracking of total, processing, completed, and failed child URLs
+- **Progress Bars**: Visual indicators showing completion percentage for parent URLs
+- **Status Badges**: Dynamic status display based on child processing state
+- **Active Monitoring**: Live updates showing currently processing children
+
+#### UI Enhancements
+
+**Status Column Improvements:**
+- **Regular URLs**: Standard processing status and badges
+- **Parent URLs with Active Children**: "Children Processing" badge with progress bar
+- **Completed Parent URLs**: "Children Complete" badge with summary statistics
+- **Error Reporting**: Failed child URLs highlighted in red text
+
+**Pages Column Enhancement:**
+- **Parent URLs**: Shows total child count instead of page count
+- **Regular URLs**: Maintains original page information display
+
+**Progress Display Format:**
+```
+Status: Children Processing  [Progress Bar: 75%]
+        75/100 children (5 active) (2 failed)
+Pages:  100 children
+```
+
+#### Technical Implementation
+
+**Backend Data Collection (`ingestion/url/manager.py`):**
+```python
+def get_child_url_stats(self, parent_url_id: str) -> Dict[str, Any]:
+    """Get statistics for child URLs of a parent URL."""
+    # Returns: total_children, processing_children, 
+    #          completed_children, failed_children
+```
+
+**Data Enrichment (`rag_manager/web/routes.py`):**
+- Enhanced `_get_enriched_urls()` method includes child statistics
+- Progress percentage calculation for visual indicators
+- Parent-child relationship flags for template logic
+
+**Template Logic (`templates/partials/_url_management.html`):**
+- Conditional rendering based on URL type (parent vs. regular)
+- Progress bar visualization with Bootstrap styling
+- Detailed statistics display with error highlighting
 
 **Knowledgebase Panel Statistics (`web/panels/knowledgebase_panel.py`):**
 - Document collection statistics from Milvus and PostgreSQL
@@ -395,13 +558,74 @@ The Milvus collection uses a unified schema for all content types (documents, UR
 5. **Vector Generation**: Text chunks embedded using Ollama (mxbai-embed-large model)
 6. **Milvus Storage**: Embeddings stored through MilvusManager with mapped metadata fields
 
+#### Enhanced Document Processing Features
+
+**Document Chunks Table**: Added PostgreSQL table for storing document chunks with rich metadata:
+- **chunk_id** (VARCHAR): Unique identifier for each text chunk
+- **document_id** (VARCHAR): Foreign key reference to parent document
+- **chunk_text** (TEXT): Actual text content with GIN FTS index
+- **chunk_ordinal** (INTEGER): Order within document for reconstruction
+- **page_start/page_end** (INTEGER): Page range information for citations
+- **section_path** (TEXT): Hierarchical document structure context
+- **element_types** (TEXT[]): Content classification (paragraph, table, list, etc.)
+- **token_count** (INTEGER): Chunk size for optimization
+- **chunk_hash** (VARCHAR): Deduplication and integrity checking
+
+**Document Hybrid Retrieval System**: Enhanced search combining multiple approaches:
+- **PostgreSQL FTS Retriever**: Full-text search with relevance ranking using `ts_rank`
+- **Vector Similarity Search**: Semantic search through Milvus embeddings
+- **Reciprocal Rank Fusion (RRF)**: Intelligent combination of both result sets
+- **Cross-Encoder Reranking**: Optional final relevance optimization
+- **Rich Filtering**: Support for content type, page range, and element type filtering
+
+**Configuration Options for Document Processing**:
+```bash
+# Document processing enhancements
+ENABLE_DOCUMENT_RERANKING=true
+DOCUMENT_RERANKER_MODEL=ms-marco-minilm
+CHUNKING_STRATEGY=title_aware
+PRESERVE_TABLES=true
+```
+
 ### URL Crawling Flow
 1. **URL Submission**: Users submit URLs through web interface
 2. **URL Management**: URLs stored and scheduled via ingestion/url/manager.py
-3. **Content Crawling**: URLOrchestrator coordinates web page fetching and parsing
-4. **Document Processing**: Content processed through ingestion/document/processor.py
-5. **PostgreSQL Storage**: URL metadata stored in urls table with scheduling information
-6. **Vector Storage**: Page content embedded and stored in Milvus with url category
+3. **Robots.txt Enforcement**: System checks robots.txt compliance before crawling with comprehensive ethical web crawling features
+4. **Content Crawling**: URLOrchestrator coordinates web page fetching and parsing with respect for crawl delays
+5. **Document Processing**: Content processed through ingestion/document/processor.py
+6. **PostgreSQL Storage**: URL metadata stored in urls table with scheduling information
+7. **Vector Storage**: Page content embedded and stored in Milvus with url category
+
+#### Robots.txt Enforcement System
+
+The URL crawling system includes comprehensive robots.txt enforcement to ensure ethical web crawling:
+
+**Core Components:**
+- **CrawlerConfig**: Centralized configuration for crawling behavior and robots.txt settings
+- **AsyncHttpClient**: High-performance HTTP client with dedicated robots.txt fetching capabilities
+- **RobotsCache**: Intelligent caching system for robots.txt files with TTL-based expiration
+- **OriginThrottle**: Per-origin throttling system that respects crawl delays from robots.txt
+- **Enhanced Domain Crawler**: Integrated robots.txt checking and delay enforcement
+
+**Key Features:**
+- **Standards Compliance**: Full robots.txt standard implementation with proper parsing
+- **Efficient Caching**: TTL-based caching minimizes repeated robots.txt requests
+- **Permission Checking**: Fast URL permission validation before crawling attempts
+- **Crawl Delay Enforcement**: Automatic detection and enforcement of site-specified delays
+- **Configurable Behavior**: Per-URL robots.txt bypass for internal/authorized sites
+- **Comprehensive Testing**: Unit tests, integration tests, and performance testing tools
+
+**Configuration Options:**
+```python
+# Environment variables for robots.txt enforcement
+RESPECT_ROBOTS_TXT=true          # Enable/disable robots.txt enforcement
+CRAWLER_USER_AGENT="RAG-Document-Handler/1.0"
+ROBOTS_CACHE_TTL=3600           # Cache TTL in seconds
+DEFAULT_CRAWL_DELAY=1.0         # Default delay between requests
+MAX_CRAWL_DELAY=30.0            # Maximum allowed crawl delay
+```
+
+For detailed robots.txt configuration, see the Configuration section in this documentation and the environment variables in .env.example.
 
 ### Email Processing Flow
 1. **Account Configuration**: Email accounts encrypted and stored via ingestion/email/manager.py
@@ -688,7 +912,7 @@ Milvus mapping for URL snapshots:
 - `chunk_id` = `{snapshot_id}:{chunk_index}`
 
 Operational notes:
-- Snapshots are optional and controlled per-URL via `urls.snapshot_enabled` (default for new URLs comes from `SNAPSHOT_DEFAULT_ENABLED`).
+- Snapshots are always enabled for consistency across all URLs.
 - Retention can be enforced (max snapshots per URL or days to keep).
 - Files are served read-only; database stores metadata and linkages.
 

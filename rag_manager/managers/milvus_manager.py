@@ -130,19 +130,29 @@ class MilvusManager:
             from retrieval.document.hybrid_retriever import DocumentHybridRetriever
             
             # Initialize FTS retriever
-            self.document_fts_retriever = DocumentPostgresFTSRetriever(self.postgres_manager.pool)
+            self.document_fts_retriever = DocumentPostgresFTSRetriever(self.postgres_manager)
             logger.info("Document PostgreSQL FTS retriever initialized")
             
             # Initialize hybrid retriever (requires vector store)
             self._ensure_vector_store()
             if self.vector_store:
                 vector_retriever = self.vector_store.as_retriever()
+                
+                # Configure reranking options
+                enable_reranking = getattr(self.config, 'ENABLE_DOCUMENT_RERANKING', True)
+                reranker_model = getattr(self.config, 'DOCUMENT_RERANKER_MODEL', 'ms-marco-minilm')
+                rerank_top_k = getattr(self.config, 'DOCUMENT_RERANK_TOP_K', None)
+                rrf_constant = getattr(self.config, 'DOCUMENT_RRF_CONSTANT', 60)
+                
                 self.document_hybrid_retriever = DocumentHybridRetriever(
                     vector_retriever=vector_retriever,
                     fts_retriever=self.document_fts_retriever,
-                    rrf_constant=60  # Configurable RRF constant
+                    rrf_constant=rrf_constant,
+                    enable_reranking=enable_reranking,
+                    reranker_model=reranker_model,
+                    rerank_top_k=rerank_top_k
                 )
-                logger.info("Document hybrid retriever initialized successfully")
+                logger.info(f"Document hybrid retriever initialized with reranking: {enable_reranking}")
             else:
                 logger.error("Vector store not available for hybrid retriever initialization")
                 
@@ -222,24 +232,24 @@ class MilvusManager:
             raise RuntimeError("Failed to initialize email vector store")
         return self.email_vector_store
 
-    def insert_documents(self, source: str, docs: List[Document]) -> int:
+    def insert_documents(self, document_id: str, docs: List[Document]) -> int:
         """
-        Insert (or upsert) a list of LangChain Document objects for a given source/URL.
+        Insert (or upsert) a list of LangChain Document objects for a given document ID.
         
-        Ensures deterministic chunk_id & document_id fields and performs simple dedupe
-        based on content_hash.
+        Stores only vectors and document_id reference in Milvus.
+        All metadata is managed by PostgreSQL as single source of truth.
         
         Args:
-            source: Source identifier (filename or URL)
+            document_id: ID of the document in PostgreSQL
             docs: List of Document objects to insert
             
         Returns:
             Number of chunks inserted (after dedupe)
         """
-        logger.info(f"Starting document insertion for source: '{source}' with {len(docs)} chunks")
+        logger.info(f"Starting document insertion for ID: '{document_id}' with {len(docs)} chunks")
         
         if not docs:
-            logger.warning(f"No documents provided for insertion, source: '{source}'")
+            logger.warning(f"No documents provided for insertion, document ID: '{document_id}'")
             return 0
             
         self._ensure_vector_store()
@@ -276,7 +286,7 @@ class MilvusManager:
         for idx, d in enumerate(docs):
             content = (d.page_content or '').strip()
             if not content:
-                logger.debug(f"Skipping empty chunk {idx} for source '{source}'")
+                logger.debug(f"Skipping empty chunk {idx} for document ID '{document_id}'")
                 continue
             meta = dict(d.metadata or {})
             
@@ -299,30 +309,25 @@ class MilvusManager:
                 continue
             seen_hashes.add(ch)
             
-            # Populate required projection fields
-            meta.setdefault('document_id', source)
-            meta.setdefault('source', source)
-            meta.setdefault('page', int(meta.get('page', 0) or 0))
-            meta.setdefault('chunk_id', f"{source}-{idx}")
-            meta.setdefault('topic', meta.get('topic', ''))
-            meta.setdefault('category', meta.get('category', ''))
-            meta.setdefault('category_type', meta.get('category_type', ''))
-            meta['content_hash'] = ch
-            meta['content_length'] = len(content)
-            # Note: pk field removed - auto_id=True means Milvus generates primary keys automatically
+            # Store ONLY minimal metadata needed for Milvus operations
+            # PostgreSQL is the single source of truth for all document metadata
+            meta_minimal = {
+                'document_id': document_id,  # ID reference to PostgreSQL document
+                'content_hash': ch,            # For deduplication
+                'page': int(meta.get('page', 0) or 0)  # Keep page for basic navigation
+            }
             
-            processed_meta = self._sanitize_and_project_meta(meta)
-            metas.append(processed_meta)
             texts.append(content)
+            metas.append(meta_minimal)
             
-            logger.debug(f"Prepared chunk {idx}: length={len(content)}, page={meta.get('page')}, chunk_id={meta.get('chunk_id')}")
+            logger.debug(f"Prepared chunk {idx}: length={len(content)}, page={meta_minimal.get('page')}, document_id={meta_minimal.get('document_id')}")
         
         if duplicates:
-            logger.info(f"Skipped {duplicates} duplicate chunks within current batch for source '{source}'")
+            logger.info(f"Skipped {duplicates} duplicate chunks within current batch for document ID '{document_id}'")
         if db_duplicates:
-            logger.info(f"Skipped {db_duplicates} chunks that already exist in database for source '{source}'")
+            logger.info(f"Skipped {db_duplicates} chunks that already exist in database for document ID '{document_id}'")
         if not texts:
-            logger.warning(f"No valid texts to insert after processing, source: '{source}'")
+            logger.warning(f"No valid texts to insert after processing, document ID: '{document_id}'")
             return 0
         
         logger.info(f"Prepared {len(texts)} unique chunks for insertion into Milvus (skipped {duplicates + db_duplicates} total duplicates)")
@@ -358,12 +363,12 @@ class MilvusManager:
                 
             elapsed = time.perf_counter() - start_time
             logger.info(
-                f"Successfully inserted {len(texts)} unique chunks for source '{source}' in {elapsed:.2f}s"
+                f"Successfully inserted {len(texts)} unique chunks for document ID '{document_id}' in {elapsed:.2f}s"
             )
             return len(texts)
             
         except Exception as e:
-            logger.error(f"Failed inserting documents for source '{source}': {str(e)}", exc_info=True)
+            logger.error(f"Failed inserting documents for document ID '{document_id}': {str(e)}", exc_info=True)
             logger.error(f"Error details - Type: {type(e).__name__}, Args: {e.args}")
             logger.error(f"Vector store state: {self.vector_store is not None}")
             logger.error(f"Collection name: {self.collection_name}")
@@ -423,13 +428,20 @@ class MilvusManager:
                 logger.error(f"Failed to get entity count before deletion: {e}")
                 entities_before = -1
             
-            # Build expression filter
-            if document_id and filename:
-                delete_expr = f'document_id == "{document_id}" or source == "{filename}"'
-            elif document_id:
+            # Build expression filter using only document_id (UUID)
+            # Since we eliminated redundant source field, only use UUID for deletion
+            if document_id:
                 delete_expr = f'document_id == "{document_id}"'
             else:
-                delete_expr = f'source == "{filename}"'
+                logger.warning(f"No document_id provided for deletion, cannot delete by filename alone")
+                return {
+                    "success": False, 
+                    "deleted_count": 0, 
+                    "entities_before": 0, 
+                    "entities_after": 0, 
+                    "verification_remaining": [],
+                    "error": "No document_id provided - filename-only deletion not supported in clean schema"
+                }
             
             logger.info(f"Delete expression: {delete_expr}")
             
@@ -437,7 +449,7 @@ class MilvusManager:
             try:
                 existing_records = col.query(
                     expr=delete_expr,
-                    output_fields=["document_id", "source", "chunk_id"],
+                    output_fields=["document_id", "page", "content_hash"],
                     limit=10
                 )
                 logger.info(f"Found {len(existing_records)} matching records to delete")
@@ -485,7 +497,7 @@ class MilvusManager:
             try:
                 verification_results = col.query(
                     expr=delete_expr,
-                    output_fields=["document_id", "source", "chunk_id"],
+                    output_fields=["document_id", "page", "content_hash"],
                     limit=10
                 )
                 logger.info(f"Verification query found {len(verification_results)} records still matching deletion expression")
@@ -597,23 +609,17 @@ class MilvusManager:
             else:
                 clean[k] = str(v)
         
-        # Then project to fixed lean schema
+        # Then project to minimal schema - only fields needed for Milvus operations
+        # PostgreSQL is the single source of truth for all other metadata
         return {
-            'document_id': str(clean.get('document_id', '')),
-            'source': str(clean.get('source', '')),
-            'page': int(clean.get('page', 0) or 0),
-            'chunk_id': str(clean.get('chunk_id', '')),
-            'topic': str(clean.get('topic', '')),
-            'category': str(clean.get('category', '')),
-            'category_type': str(clean.get('category_type', '')),
-            'content_hash': str(clean.get('content_hash', '')),
-            'content_length': int(clean.get('content_length', 0) or 0),
+            'document_id': str(clean.get('document_id', '')),  # UUID reference to PostgreSQL
+            'page': int(clean.get('page', 0) or 0),           # Keep for basic navigation
+            'content_hash': str(clean.get('content_hash', '')), # For deduplication
         }
 
     def search_documents(self, query: str, top_k: int = 10) -> List[Dict[str, Any]]:
         """
-        Search documents using hybrid retrieval (vector + FTS) when available, 
-        fallback to vector similarity search.
+        Search documents using hybrid retrieval (vector + FTS).
         
         Args:
             query: Search query string
@@ -624,80 +630,50 @@ class MilvusManager:
         """
         logger.info(f"Starting document search for query: '{query}' with top_k={top_k}")
         
-        # Try hybrid retrieval first
-        if self.document_hybrid_retriever:
-            try:
-                logger.info("Using hybrid retrieval (vector + FTS) for document search")
-                hybrid_results = self.document_hybrid_retriever.search(query, k=top_k)
-                
-                formatted = []
-                for i, doc in enumerate(hybrid_results):
-                    result_data = {
-                        "id": i,
-                        "filename": doc.metadata.get("source", "unknown"),
-                        "chunk_id": doc.metadata.get("chunk_id", "unknown"),
-                        "text": doc.page_content,
-                        "similarity_score": doc.metadata.get("combined_score", 0.0),
-                        "source": doc.metadata.get("source", "unknown"),
-                        "retrieval_method": doc.metadata.get("retrieval_method", "hybrid"),
-                        "vector_rank": doc.metadata.get("vector_rank"),
-                        "fts_rank": doc.metadata.get("fts_rank"),
-                        "fts_score": doc.metadata.get("fts_score"),
-                        "page_start": doc.metadata.get("page_start"),
-                        "page_end": doc.metadata.get("page_end"),
-                        "content_type": doc.metadata.get("content_type"),
-                    }
-                    formatted.append(result_data)
-                    logger.debug(f"Hybrid result {i}: source='{result_data['source']}', "
-                               f"method='{result_data['retrieval_method']}', "
-                               f"score={result_data['similarity_score']:.4f}")
-                
-                logger.info(f"Hybrid document search completed successfully, returning {len(formatted)} results")
-                return formatted
-                
-            except Exception as e:
-                logger.error(f"Hybrid search failed, falling back to vector search: {e}")
-        
-        # Fallback to vector-only search
-        if not self.vector_store:
-            logger.error("Vector store not initialized - ensure proper application startup")
-            return []
+        # Require hybrid search to be properly configured
+        if not self.document_hybrid_retriever:
+            raise RuntimeError(
+                "Hybrid search is required but not properly initialized. "
+                "Ensure PostgreSQL is connected and hybrid retrievers are configured during startup."
+            )
         
         try:
-            # Check collection stats before search
-            try:
-                collection = Collection(self.collection_name)
-                entity_count = collection.num_entities
-                logger.debug(f"Collection '{self.collection_name}' has {entity_count} entities")
-            except Exception as e:
-                logger.warning(f"Could not get collection stats before search: {e}")
-            
-            logger.debug(f"Performing vector-only similarity search with query: '{query}'")
-            results = self.vector_store.similarity_search_with_score(query, k=top_k)
-            logger.info(f"Vector search returned {len(results)} results")
+            logger.info("Using hybrid retrieval (vector + FTS) for document search")
+            hybrid_results = self.document_hybrid_retriever.search(query, k=top_k)
             
             formatted = []
-            for i, (doc, score) in enumerate(results):
+            for i, doc in enumerate(hybrid_results):
+                # Use document_id to reference PostgreSQL for metadata
+                document_id = doc.metadata.get("document_id")
+                if not document_id:
+                    error_msg = f"Missing document_id in search result metadata at index {i}"
+                    logger.error(error_msg)
+                    raise ValueError(error_msg)
+                
                 result_data = {
                     "id": i,
-                    "filename": doc.metadata.get("source", "unknown"),
-                    "chunk_id": doc.metadata.get("chunk_id", "unknown"),
+                    "document_id": document_id,  # ID reference to PostgreSQL
                     "text": doc.page_content,
-                    "similarity_score": float(score),
-                    "source": doc.metadata.get("source", "unknown"),
-                    "retrieval_method": "vector_only",
+                    "similarity_score": doc.metadata.get("combined_score", 0.0),
+                    "retrieval_method": doc.metadata.get("retrieval_method", "hybrid"),
+                    "vector_rank": doc.metadata.get("vector_rank"),
+                    "fts_rank": doc.metadata.get("fts_rank"),
+                    "fts_score": doc.metadata.get("fts_score"),
+                    "page": doc.metadata.get("page", 0),
+                    "content_hash": doc.metadata.get("content_hash", ""),
+                    # Note: Other metadata like filename, source should be retrieved from PostgreSQL using document_id
                 }
                 formatted.append(result_data)
-                logger.debug(f"Vector result {i}: source='{result_data['source']}', score={score:.4f}, text_length={len(doc.page_content)}")
+                logger.debug(f"Hybrid result {i}: document_id='{result_data['document_id']}', "
+                           f"method='{result_data['retrieval_method']}', "
+                           f"score={result_data['similarity_score']:.4f}")
             
-            logger.info(f"Document search completed successfully, returning {len(formatted)} formatted results")
+            logger.info(f"Hybrid document search completed successfully, returning {len(formatted)} results")
             return formatted
             
         except Exception as e:
-            logger.error(f"Document search failed for query '{query}': {str(e)}", exc_info=True)
-            logger.error(f"Vector store state: {self.vector_store is not None}")
-            logger.error(f"Collection name: {self.collection_name}")
-            return []
+            logger.error(f"Hybrid document search failed for query '{query}': {str(e)}", exc_info=True)
+            raise RuntimeError(f"Hybrid document search failed: {str(e)}")
 
     def get_collection_stats(self) -> Dict[str, Any]:
         """
@@ -780,8 +756,86 @@ class MilvusManager:
                 "error": str(e),
             }
 
-
-            return 0
+    def get_email_collection_stats(self) -> Dict[str, Any]:
+        """
+        Return email collection stats for UI.
+        
+        Returns:
+            Dictionary containing email collection statistics
+        """
+        try:
+            exists = utility.has_collection(self.email_collection_name)
+            if not exists:
+                return {
+                    "name": self.email_collection_name,
+                    "exists": False,
+                    "num_entities": 0,
+                    "indexed": False,
+                    "metric_type": None,
+                    "dim": None,
+                }
+                
+            col = Collection(self.email_collection_name)
+            try:
+                col.load()
+            except Exception:
+                pass
+                
+            # Default values
+            dim = None
+            metric_type = None
+            indexed = False
+            
+            try:
+                # Infer vector field dim from schema
+                schema = getattr(col, 'schema', None)
+                if schema and hasattr(schema, 'fields'):
+                    for f in schema.fields:
+                        try:
+                            params = getattr(f, 'params', {}) or {}
+                            if 'dim' in params:
+                                dim_value = params.get('dim')
+                                if dim_value is not None:
+                                    dim = int(dim_value)
+                                    break
+                        except Exception:
+                            continue
+            except Exception:
+                pass
+                
+            try:
+                # Check index info
+                idxs = getattr(col, 'indexes', []) or []
+                indexed = len(idxs) > 0
+                if indexed:
+                    try:
+                        # metric type usually available in index params
+                        first = idxs[0]
+                        p = getattr(first, 'params', {}) or {}
+                        metric_type = p.get('metric_type') or p.get('METRIC_TYPE')
+                    except Exception:
+                        metric_type = None
+            except Exception:
+                pass
+                
+            return {
+                "name": self.email_collection_name,
+                "exists": True,
+                "num_entities": getattr(col, 'num_entities', 0),
+                "indexed": indexed,
+                "metric_type": metric_type,
+                "dim": dim,
+            }
+        except Exception as e:
+            return {
+                "name": self.email_collection_name,
+                "exists": False,
+                "num_entities": 0,
+                "indexed": False,
+                "metric_type": None,
+                "dim": None,
+                "error": str(e),
+            }
 
     def _escape_literal(self, s: str) -> str:
         """Escape double quotes in literals for Milvus query expressions."""
@@ -822,7 +876,7 @@ class MilvusManager:
             return 0
 
     def get_chunk_count_for_url(self, url: str, url_id: Optional[str] = None) -> int:
-        """Count chunks for a URL using both source (URL) and document_id (UUID) + legacy hash fallback."""
+        """Count chunks for a URL using document_id (UUID). URL parameter is ignored since we use clean schema."""
         try:
             if not utility.has_collection(self.collection_name):
                 return 0
@@ -832,50 +886,23 @@ class MilvusManager:
             except Exception:
                 pass
 
-            exprs = []
-            if url:
-                exprs.append(f'source == "{self._escape_literal(url)}"')
+            # Only use document_id (UUID) for counting since we eliminated the source field
             if url_id:
-                exprs.append(f'document_id == "{self._escape_literal(url_id)}"')
+                expr = f'document_id == "{self._escape_literal(url_id)}"'
+            else:
+                logger.warning("No url_id provided for URL chunk count - clean schema requires UUID")
+                return 0
             try:
-                legacy_id = hashlib.sha1((url or '').strip().encode('utf-8')).hexdigest()[:16]
-                exprs.append(f'document_id == "{legacy_id}"')
-            except Exception:
-                pass
-
-            seen = set()
-            total = 0
-            max_limit = 16384
-            
-            for expr in exprs:
-                try:
-                    offset = 0
-                    while True:
-                        try:
-                            res = col.query(
-                                expr=expr, 
-                                output_fields=["chunk_id"], 
-                                limit=max_limit,
-                                offset=offset
-                            )
-                            if not isinstance(res, list) or len(res) == 0:
-                                break
-                            
-                            for r in res:
-                                cid = r.get('chunk_id')
-                                if cid and cid not in seen:
-                                    seen.add(cid)
-                                    total += 1
-                            
-                            # If we got less than max_limit, we've reached the end
-                            if len(res) < max_limit:
-                                break
-                            offset += len(res)
-                        except Exception:
-                            break
-                except Exception:
-                    continue
-            return total
+                # Simple count using document_id UUID
+                res = col.query(
+                    expr=expr,
+                    output_fields=["content_hash"],  # Use content_hash for counting unique chunks
+                    limit=16384
+                )
+                return len(res) if isinstance(res, list) else 0
+            except Exception as e:
+                logger.error(f"Failed to count URL chunks for {url_id}: {e}")
+                return 0
         except Exception:
             return 0
 
@@ -993,31 +1020,19 @@ Now, answer ONLY the following user question with proper citations and download 
         classification = self.classify_query_intent(query)
         
         try:
-            # Standard document/web search pipeline
-            self._ensure_vector_store()
+            # Require hybrid search to be properly configured
+            if not self.document_hybrid_retriever:
+                raise RuntimeError(
+                    "Hybrid search is required but not properly initialized. "
+                    "Ensure PostgreSQL is connected and hybrid retrievers are configured during startup."
+                )
             
-            # Retrieve relevant documents using hybrid search when available
-            results = []
-            if self.document_hybrid_retriever:
-                try:
-                    logger.info("Using hybrid retrieval (vector + FTS) for RAG search")
-                    retrieved_docs = self.document_hybrid_retriever.search(query, k=top_k)
-                    # Convert to the expected format (doc, score) tuples
-                    results = [(doc, doc.metadata.get("combined_score", 0.0)) for doc in retrieved_docs]
-                    logger.info(f"Retrieved {len(results)} documents from hybrid search")
-                except Exception as e:
-                    logger.error(f"Hybrid retrieval failed, falling back to vector search: {e}")
-                    results = []
+            # Perform hybrid search - no fallback
+            logger.info("Using hybrid retrieval (vector + FTS) for RAG search")
+            documents = self.document_hybrid_retriever.search(query, k=top_k)
+            logger.info(f"Retrieved {len(documents)} documents from hybrid search")
             
-            # Fallback to vector-only search if hybrid failed or unavailable
-            if not results:
-                if not self.vector_store:
-                    raise RuntimeError("Vector store not initialized after _ensure_vector_store()")
-                logger.info("Using vector-only search for RAG")
-                results = self.vector_store.similarity_search_with_score(query, k=top_k)
-                logger.info(f"Retrieved {len(results)} documents from vector search")
-            
-            if not results:
+            if not documents:
                 return {
                     'answer': "I couldn't find any relevant information to answer your question.",
                     'sources': [],
@@ -1032,7 +1047,7 @@ Now, answer ONLY the following user question with proper citations and download 
                 }
             
             # Format document context
-            context_text, sources = self._format_document_context(results)
+            context_text, sources = self._format_document_context(documents)
             system_prompt = self._get_standard_system_prompt()
             
             # Generate LLM response
@@ -1098,14 +1113,14 @@ Now, answer ONLY the following user question with proper citations and download 
                     'milvus_results': [
                         {
                             'rank': idx + 1,
-                            'source': doc.metadata.get('source', 'unknown'),
-                            'page': doc.metadata.get('page', 'unknown'),
-                            'category': doc.metadata.get('category', 'unknown'),
-                            'category_type': doc.metadata.get('category_type', 'unknown'),
+                            'document_id': doc.metadata.get('document_id'),
+                            'page': doc.metadata.get('page'),
+                            'category': doc.metadata.get('category'),
+                            'category_type': doc.metadata.get('category_type'),
                             'topic': doc.metadata.get('topic', ''),
-                            'similarity_score': float(score),
+                            'similarity_score': float(doc.metadata.get('combined_score', 0.0)),
                             'content_preview': doc.page_content[:150] + "..." if len(doc.page_content) > 150 else doc.page_content
-                        } for idx, (doc, score) in enumerate(results)
+                        } for idx, doc in enumerate(documents)
                     ]
                 }
             }
@@ -1127,64 +1142,125 @@ Now, answer ONLY the following user question with proper citations and download 
                 }
             }
 
-    def _format_document_context(self, results: List[tuple]) -> tuple:
-        """Format document search results for LLM context using existing logic."""
+    def _format_document_context(self, documents: List[Document]) -> tuple:
+        """
+        Format document search results for LLM context using clean schema architecture.
+        
+        Uses PostgreSQL as single source of truth for metadata - queries database 
+        using document_id from Milvus results to get filename and other metadata.
+        """
         try:
-            # Simple keyword-boost rerank: if query words intersect chunk keywords, slightly improve score
-            try:
-                logger.debug("Applying keyword-based reranking")
-                import re
-                q_tokens = set(re.findall(r"[A-Za-z0-9_-]+", ""))  # Empty for now
-                adjusted = []
-                for doc, score in results:
-                    kws = doc.metadata.get("keywords", [])
-                    if isinstance(kws, str):
-                        try:
-                            kws = json.loads(kws)
-                        except Exception:
-                            kws = []
-                    overlap = len(q_tokens.intersection({str(k).lower() for k in kws})) if kws else 0
-                    # Assuming lower score is better (distance); subtract small bonus per overlap
-                    adj_score = score - (0.05 * min(overlap, 5))
-                    adjusted.append((doc, score, adj_score))
-                    
-                # Sort by adjusted score
-                adjusted.sort(key=lambda t: t[2])
-                # Trim to top_k again just in case
-                results = [(d, s) for d, s, _ in adjusted[:len(results)]]
-                logger.debug(f"Reranking complete, using {len(results)} results")
-                
-            except Exception as rerank_err:
-                logger.warning(f"Keyword rerank failed, continuing with original results: {rerank_err}")
-            
-            # Step 3: Check if we have results
-            if not results:
-                logger.warning("No documents found in vector search - vector database may be empty")
+            # Check if we have results
+            if not documents:
+                logger.warning("No documents found in hybrid search - databases may be empty or query failed")
                 return "", []
             
-            # Step 4: Format context from retrieved documents with numbered references
-            logger.debug("Formatting context from retrieved documents with reference system")
+            logger.debug("Formatting context from retrieved documents with clean schema architecture")
             
-            # Create unique source mapping FIRST
-            unique_sources = {}  # filename -> reference_info
+            # Extract unique document_ids from Milvus results
+            unique_document_ids = set()
+            for doc in documents:
+                # Direct access to document metadata - no helper needed
+                document_id = doc.metadata.get('document_id')
+                
+                if document_id:
+                    unique_document_ids.add(document_id)
+                else:
+                    logger.error(f"Document missing required 'document_id' metadata. Doc type: {type(doc)}, Content: {doc}")
+            
+            if not unique_document_ids:
+                logger.error("No valid document_ids found in search results")
+                return "", []
+            
+            # Query PostgreSQL to get metadata for these document_ids
+            document_metadata = {}
+            if self.postgres_manager and hasattr(self.postgres_manager, 'pool') and self.postgres_manager.pool:
+                try:
+                    logger.debug(f"Querying PostgreSQL for metadata of {len(unique_document_ids)} documents")
+                    
+                    # Create SQL query for batch lookup
+                    query = """
+                        SELECT 
+                            id, filename, title, content_type, file_path,
+                            created_at, category, topic, keywords
+                        FROM documents 
+                        WHERE id = ANY($1)
+                    """
+                    
+                    async def fetch_metadata():
+                        async with self.postgres_manager.pool.acquire() as conn:
+                            rows = await conn.fetch(query, list(unique_document_ids))
+                            return rows
+                    
+                    # Since this is called from sync context, we need to handle async properly
+                    import asyncio
+                    try:
+                        loop = asyncio.get_event_loop()
+                        if loop.is_running():
+                            # If loop is already running, use run_in_executor
+                            import concurrent.futures
+                            with concurrent.futures.ThreadPoolExecutor() as executor:
+                                future = executor.submit(asyncio.run, fetch_metadata())
+                                rows = future.result()
+                        else:
+                            rows = loop.run_until_complete(fetch_metadata())
+                    except RuntimeError:
+                        # No event loop in current thread
+                        rows = asyncio.run(fetch_metadata())
+                    
+                    for row in rows:
+                        document_metadata[str(row['id'])] = {
+                            'filename': row['filename'],
+                            'title': row['title'] or row['filename'],
+                            'content_type': row['content_type'],
+                            'file_path': row['file_path'],
+                            'category': row['category'],
+                            'topic': row['topic'],
+                            'keywords': row['keywords'] or []
+                        }
+                    
+                    logger.debug(f"Retrieved metadata for {len(document_metadata)} documents from PostgreSQL")
+                    
+                except Exception as e:
+                    logger.error(f"Failed to query PostgreSQL for document metadata: {e}")
+                    # Continue with limited functionality
+                    document_metadata = {}
+            else:
+                logger.warning("PostgreSQL manager not available - cannot retrieve document metadata")
+            
+            # Create unique source mapping using PostgreSQL data
+            unique_sources = {}  # document_id -> reference_info
             source_counter = 1
             
-            # First pass: identify unique sources and assign reference numbers
-            for doc, score in results:
-                source_name = doc.metadata.get('source', 'unknown')
+            # First pass: create reference mapping using PostgreSQL metadata
+            for doc in documents:
+                document_id = doc.metadata.get('document_id')
+                if not document_id:
+                    continue
                 
-                if source_name not in unique_sources:
-                    # Extract title from filename or use topic
-                    title = doc.metadata.get('topic', '') or source_name.replace('.pdf', '').replace('_', ' ').title()
+                if document_id not in unique_sources:
+                    # Get metadata from PostgreSQL or use fallbacks
+                    postgres_meta = document_metadata.get(document_id, {})
+                    filename = postgres_meta.get('filename', f'document_{document_id[:8]}')
+                    title = postgres_meta.get('title', filename)
+                    content_type = postgres_meta.get('content_type', 'unknown')
                     
-                    unique_sources[source_name] = {
+                    # Determine category_type from content_type
+                    category_type = 'document'  # Default
+                    if 'email' in content_type.lower():
+                        category_type = 'email'
+                    elif 'url' in content_type.lower() or content_type == 'text/html':
+                        category_type = 'url'
+                    
+                    unique_sources[document_id] = {
                         'ref_num': source_counter,
-                        'filename': source_name,
+                        'document_id': document_id,
+                        'filename': filename,
                         'title': title,
-                        'page': doc.metadata.get("page", "unknown"),
-                        'topic': doc.metadata.get("topic", ""),
-                        'keywords': doc.metadata.get("keywords", []),
-                        'category_type': doc.metadata.get("category_type", "unknown")
+                        'content_type': content_type,
+                        'category_type': category_type,
+                        'topic': postgres_meta.get('topic', ''),
+                        'keywords': postgres_meta.get('keywords', [])
                     }
                     source_counter += 1
             
@@ -1192,50 +1268,62 @@ Now, answer ONLY the following user question with proper citations and download 
             docs_content = []
             sources = []
             
-            for doc, score in results:
-                source_name = doc.metadata.get('source', 'unknown')
-                ref_num = unique_sources[source_name]['ref_num']
-                category_type = doc.metadata.get('category_type', 'unknown')
-                page_info = doc.metadata.get('page', 'unknown')
+            for doc in documents:
+                document_id = doc.metadata.get('document_id')
+                if not document_id or document_id not in unique_sources:
+                    logger.error(f"Document missing document_id or not found in unique_sources: {doc}")
+                    continue
+                    
+                source_info = unique_sources[document_id]
+                ref_num = source_info['ref_num']
+                filename = source_info['filename']
+                category_type = source_info['category_type']
+                page_info = doc.metadata.get('page')  # Direct access to page from document metadata
+                
+                # Get similarity score from document metadata
+                similarity_score = doc.metadata.get('combined_score', 0.0)
                 
                 # Build download/source link based on category type
                 source_link = ""
                 if category_type == 'document':
                     # For documents, create download link
-                    source_link = f"Download: /download/{source_name}"
+                    source_link = f"Download: /download/{filename}"
                 elif category_type == 'url':
-                    # For URLs, use the original URL if available, or the source name
-                    original_url = doc.metadata.get('url', source_name)
-                    source_link = f"Link: {original_url}"
+                    # For URLs, try to get original URL or use filename
+                    source_link = f"URL: {filename}"
                 elif category_type == 'email':
                     # For emails, indicate it's an email source
-                    source_link = f"Email: {source_name}"
+                    source_link = f"Email: {filename}"
                 else:
-                    # Fallback for unknown types
-                    source_link = f"Source: {source_name}"
+                    # For other types
+                    source_link = f"Source: {filename}"
+                
+                # Get text content from document
+                text_content = doc.page_content if hasattr(doc, 'page_content') else ""
                 
                 # Enhanced source header with formatted link information
                 source_header = f"Source [{ref_num}]:"
-                source_info = f"Page: {page_info}\n{source_link}"
-                docs_content.append(f"{source_header}\n{doc.page_content}\n{source_info}")
+                page_display = f"Page: {page_info}" if page_info else "Page: Not specified"
+                source_info_text = f"{page_display}\n{source_link}"
+                docs_content.append(f"{source_header}\n{text_content}\n{source_info_text}")
                 
-                # Keep individual chunk info for detailed view
+                # Keep individual chunk info for detailed view (now using PostgreSQL metadata)
                 sources.append({
-                    "filename": source_name,
-                    "page": doc.metadata.get("page", "unknown"),
-                    "category": doc.metadata.get("category", "unknown"),
-                    "category_type": doc.metadata.get("category_type", "unknown"),
-                    "topic": doc.metadata.get("topic", ""),
-                    "keywords": doc.metadata.get("keywords", []),
-                    "similarity_score": float(score),
+                    "document_id": document_id,
+                    "filename": filename,
+                    "page": page_info,
+                    "category": source_info.get('category'),
+                    "category_type": category_type,
+                    "topic": source_info.get('topic', ''),
+                    "keywords": source_info.get('keywords', []),
+                    "similarity_score": float(similarity_score),
                     "ref_num": ref_num,
-                    "content_preview": doc.page_content[:150] + "..." if len(doc.page_content) > 150 else doc.page_content
+                    "content_preview": text_content[:150] + "..." if len(text_content) > 150 else text_content
                 })
             
             context_text = "\n\n".join(docs_content)
-            logger.info(f"Prepared context with {len(sources)} sources from {len(unique_sources)} unique files, total context length: {len(context_text)} characters")
-            logger.debug(f"Unique sources mapping: {unique_sources}")
-            logger.debug(f"Context preview: {context_text[:500]}...")
+            logger.info(f"Prepared context with {len(sources)} sources from {len(unique_sources)} unique documents, total context length: {len(context_text)} characters")
+            logger.debug(f"Unique sources mapping: {list(unique_sources.keys())}")
             
             return context_text, sources
             
