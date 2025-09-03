@@ -503,3 +503,84 @@ fields = [
 -- Check data consistency
 SELECT COUNT(*) FROM email_messages WHERE account_id NOT IN (SELECT id FROM email_accounts);
 ```
+
+## Unified Duplicate Handling (Current Implementation)
+
+The current system uses a SIMPLE, deterministic duplicate prevention strategy at upload time:
+
+- Files: Duplicate prevention = filename presence in staging directory (filesystem check) BEFORE saving
+- URLs: Uniqueness enforced by `urls.url` UNIQUE constraint and (optionally) by checking existence in unified `documents` (document_type='url') when creating a processed snapshot
+- Emails: Deduplication enforced by UNIQUE `message_id` and `header_hash`
+- Chunks: Per-parent uniqueness enforced via composite unique constraints (`(document_id, chunk_ordinal)` / `(email_id, chunk_index)`)
+
+Content hashing roles:
+
+- `file_hash`: ACTUALLY ENFORCED NOW via a UNIQUE constraint on `documents.file_hash` at upload time. If a user uploads the exact same file contents under a different filename, the INSERT will raise a unique‑violation and the upload is rejected (the staging copy is removed in the error handler). We currently do the hash computation after saving the file, then attempt the insert; no pre-hash short‑circuit yet.
+- `chunk_hash`: Used to prevent duplicate chunk inserts (skips at storage layer / supports future integrity scans) but not surfaced to the user directly.
+
+Current duplicate scenarios:
+1. Same filename, same content: Blocked early by filesystem filename existence check (never reaches DB).
+2. Same filename, different content (should be rare): Detected by filename collision branch; user prompted to rename/delete.
+3. Different filename, same content: Blocked by UNIQUE `file_hash` (constraint error intercepted and reported as duplicate – improvement pending for a more user-friendly message by pre-checking hash before save).
+4. Different filename, different content: New row created (normal case).
+
+Planned improvement (not yet implemented): Compute hash in-memory before writing to disk to provide a friendlier duplicate message and avoid temporary file creation.
+
+### Summary Table of Uniqueness / Identity
+| Domain | Primary Identifier | Upload-Time Duplicate Check | DB-Level Uniqueness | Notes |
+|--------|--------------------|-----------------------------|---------------------|-------|
+| Files | `filename` (staging) + row `id` (UUID) | Filesystem: `os.path.exists(staging/filename)` | `documents.filename` UNIQUE | `file_hash` reserved for integrity/future diff |
+| URLs | `url` | Form submission prevents duplicates | `urls.url` UNIQUE; also stored in `documents` (`document_type='url'`) | Two-layer representation (structured + unified doc row) |
+| Emails | `message_id` | Connector ensures no re-fetch by offset + message id | `emails.message_id`, `emails.header_hash` UNIQUE | `content_hash` optional post-ingest |
+| File Chunks | `(document_id, chunk_ordinal)` | N/A (derived) | `uk_document_chunks_position` | Prevents double-chunking |
+| Email Chunks | `(email_id, chunk_index)` | N/A (derived) | `uk_email_chunks_position` | Stable ordering |
+
+### Processing Status Semantics
+| Status | Applies To | Meaning |
+|--------|-----------|---------|
+| `pending` | Files (initial upload), URLs (queued), Emails (not chunked yet) | Record exists but not processed |
+| `processing` | Files | Background worker loading/chunking |
+| `embedding` | Files | Generating embeddings / enrichment |
+| `storing` | Files | Persisting chunks/metadata |
+| `completed` | Files, URLs (after snapshot/process) | Fully processed and queryable |
+| `failed` | Files, URLs, Emails | Terminal error state |
+
+### Lifecycle Overview
+1. User uploads file → filesystem staging + `documents` row (pending)
+2. User clicks Process → background worker finds existing row (NO new insert)
+3. Worker updates row with chunk/page/word stats + sets `completed`
+4. Chunks stored in PostgreSQL + vectors in Milvus
+5. URLs follow a parallel path but originate from URL management panel instead of upload
+6. Emails ingest via orchestrator: account → fetch → store raw → chunk → embed
+
+## Future Extension: Chat Retention (Planned)
+A forthcoming `chats` (or `conversations`) domain will follow the SAME patterns:
+- Primary table with UUID `id`
+- Chunk table (if needed) with `(chat_id, message_index)` uniqueness
+- Consistent status fields (likely always `completed` after write)
+- Potential retention policy table to mirror snapshot retention
+
+> When adding chat retention, mirror this document: extend the Summary Uniqueness table and Lifecycle section.
+
+## Implementation Reference Crosswalk
+| Concern | Canonical Implementation File |
+|---------|-------------------------------|
+| Schema creation | `ingestion/core/postgres_manager.py` |
+| File upload route | `rag_manager/web/routes.py` |
+| Background file processing | `rag_manager/app.py` (`_process_document_background`) |
+| URL snapshot + doc linkage | `ingestion/url/utils/snapshot_service.py` |
+| URL metadata manager | `ingestion/url/manager.py` |
+| Email ingestion orchestrator | `ingestion/email/orchestrator.py` |
+| Email chunk storage | `ingestion/email/processor.py` |
+| Hybrid retrieval | `rag_manager/managers/milvus_manager.py` |
+| Stats aggregation | `rag_manager/web/panels/*.py` |
+
+## Consistency Guardrails
+To prevent regressions when modifying one domain:
+- NEVER introduce a new identifier pattern (always UUID primary keys for core tables)
+- Reuse status vocabulary (see table above)
+- Keep uniqueness enforcement declarative (DB constraints) + minimal pre-checks (filesystem for files)
+- Add any new domain to: schema doc tables, stats panels, and hybrid retrieval only if logically required
+- Prefer UPDATE over INSERT during processing phases (no duplicate logical rows)
+
+# End of augmented schema section.

@@ -363,7 +363,7 @@ class URLSnapshotService:
             original_title = url_record.get("title", domain) if url_record else domain
             
             snapshot_title = f"{original_title} (Snapshot {timestamp})"
-            filename = os.path.basename(pdf_path)
+            filename = os.path.basename(pdf_path)  # Extract just the PDF filename
             
             # Store in documents table
             document_id = self.postgres_manager.store_document(

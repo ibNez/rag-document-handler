@@ -41,13 +41,14 @@ class URLPanelStats:
             # Calculate basic counts
             total_urls = len(urls)
             scraped = sum(1 for url in urls if url.get('last_scraped'))
-            never_scraped = total_urls - scraped
             due_now = sum(1 for url in urls if self._is_url_due_for_scraping(url))
             
             # Additional URL metrics
-            active_urls = sum(1 for url in urls if url.get('refresh_interval_minutes', 0) > 0)
-            robots_ignored = sum(1 for url in urls if url.get('ignore_robots_txt', False))
-            crawl_on = sum(1 for url in urls if url.get('refresh_interval_minutes', 0) > 0)
+            robots_ignored = sum(1 for url in urls if url.get('ignore_robots', 0) == 1)
+            crawl_on = sum(1 for url in urls if url.get('crawl_domain', 0) == 1)
+            
+            # Get sub_urls count directly from database since get_all_urls() only returns parent URLs
+            sub_urls = self._get_sub_urls_count()
             
             # Calculate pages processed for all URLs (count chunks/documents in vector database)
             total_pages_processed = self._calculate_total_pages_processed(urls)
@@ -57,11 +58,10 @@ class URLPanelStats:
             
             return {
                 'total': total_urls,
-                'active': active_urls,
+                'sub_urls': sub_urls,
                 'crawl_on': crawl_on,
                 'robots_ignored': robots_ignored,
                 'scraped': scraped,
-                'never_scraped': never_scraped,
                 'due_now': due_now,
                 'pages_processed': total_pages_processed,
                 'snapshot_disk_usage': snapshot_size_human
@@ -199,15 +199,41 @@ class URLPanelStats:
             logger.debug(f"Error checking if URL is due: {e}")
             return False
     
+    def _get_sub_urls_count(self) -> int:
+        """
+        Get the count of sub-URLs (child URLs) directly from the database.
+        
+        Returns:
+            Number of URLs that have a parent_url_id (i.e., child URLs discovered via domain crawling)
+        """
+        try:
+            if not self.rag_manager.url_manager or not self.rag_manager.url_manager.postgres:
+                return 0
+                
+            with self.rag_manager.url_manager.postgres.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT COUNT(*) as count 
+                        FROM urls 
+                        WHERE status = 'active' AND parent_url_id IS NOT NULL
+                        """
+                    )
+                    result = cursor.fetchone()
+                    return int(result['count'] or 0) if result else 0
+                    
+        except Exception as e:
+            logger.error(f"Failed to get sub-URLs count: {e}")
+            return 0
+    
     def _empty_stats(self) -> Dict[str, Any]:
         """Return empty URL panel stats."""
         return {
             'total': 0,
-            'active': 0,
+            'sub_urls': 0,
             'crawl_on': 0,
             'robots_ignored': 0,
             'scraped': 0,
-            'never_scraped': 0,
             'due_now': 0,
             'pages_processed': 0,
             'snapshot_disk_usage': '0 B'

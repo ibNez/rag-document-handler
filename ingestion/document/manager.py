@@ -25,10 +25,10 @@ class DocumentManager:
         try:
             # Map metadata for PostgreSQL storage with explicit columns
             insert_data = {
-                'filename': filename,
                 'title': metadata.get('title', filename),
                 'content_preview': metadata.get('content_preview', ''),
                 'file_path': metadata.get('file_path', ''),
+                'filename': filename,  # Always include the filename for UPSERT conflict resolution
                 'content_type': metadata.get('content_type', ''),
                 'file_size': metadata.get('file_size', 0),
                 'word_count': metadata.get('word_count', 0),
@@ -38,25 +38,32 @@ class DocumentManager:
                 'median_chunk_chars': metadata.get('median_chunk_chars', 0),
                 'top_keywords': metadata.get('top_keywords', []),
                 'processing_time_seconds': metadata.get('processing_time_seconds', 0),
-                'processing_status': metadata.get('processing_status', 'pending')
+                'processing_status': metadata.get('processing_status', 'pending'),
+                'filename': filename,  # Store the filename parameter as-is for now
+                'document_type': 'file'
             }
             
             with self.postgres.get_connection() as conn:
                 with conn.cursor() as cursor:
+                    # Use proper PostgreSQL UPSERT with ON CONFLICT
+                    # Conflict detection based on file_path + document_type (natural key)
                     cursor.execute("""
                         INSERT INTO documents (
-                            filename, title, content_preview, file_path, content_type, 
+                            title, content_preview, file_path, content_type, 
                             file_size, word_count, page_count, chunk_count, avg_chunk_chars,
-                            median_chunk_chars, top_keywords, processing_time_seconds, processing_status
+                            median_chunk_chars, top_keywords, processing_time_seconds, processing_status,
+                            filename, document_type, created_at, updated_at
                         ) VALUES (
-                            %(filename)s, %(title)s, %(content_preview)s, %(file_path)s, 
+                            %(title)s, %(content_preview)s, %(file_path)s, 
                             %(content_type)s, %(file_size)s, %(word_count)s, %(page_count)s,
                             %(chunk_count)s, %(avg_chunk_chars)s, %(median_chunk_chars)s,
-                            %(top_keywords)s, %(processing_time_seconds)s, %(processing_status)s
-                        ) ON CONFLICT (filename) DO UPDATE SET
+                            %(top_keywords)s, %(processing_time_seconds)s, %(processing_status)s,
+                            %(filename)s, %(document_type)s, NOW(), NOW()
+                        )
+                        ON CONFLICT (filename) 
+                        DO UPDATE SET
                             title = EXCLUDED.title,
                             content_preview = EXCLUDED.content_preview,
-                            file_path = EXCLUDED.file_path,
                             content_type = EXCLUDED.content_type,
                             file_size = EXCLUDED.file_size,
                             word_count = EXCLUDED.word_count,
@@ -67,6 +74,7 @@ class DocumentManager:
                             top_keywords = EXCLUDED.top_keywords,
                             processing_time_seconds = EXCLUDED.processing_time_seconds,
                             processing_status = EXCLUDED.processing_status,
+                            filename = EXCLUDED.filename,
                             updated_at = NOW()
                     """, insert_data)
                     conn.commit()
@@ -85,15 +93,25 @@ class DocumentManager:
         try:
             with self.postgres.get_connection() as conn:
                 with conn.cursor() as cursor:
-                    cursor.execute("SELECT * FROM documents WHERE filename = %s", (filename,))
+                    # Search strategy depends on document type:
+                    # - For file documents: search by filename in file_path (basename match)
+                    # - For URL documents: search by full file_path (URL match)
+                    # - Also check title field as fallback for both types
+                    cursor.execute("""
+                        SELECT * FROM documents 
+                        WHERE title = %s 
+                           OR (document_type = 'file' AND file_path LIKE %s)
+                           OR (document_type = 'url' AND file_path = %s)
+                           OR (filename IS NOT NULL AND filename = %s)
+                    """, (filename, f'%/{filename}', filename, filename))
                     row = cursor.fetchone()
                     if not row:
                         logger.info(f"Metadata lookup miss for {filename}")
                         return None
                     
                     d = dict(row)
-                    # Map PostgreSQL schema back to expected format
-                    d['filename'] = d['filename']  # Already correctly named
+                    # Map PostgreSQL schema back to expected format  
+                    d['filename'] = filename  # Use the searched filename
                     
                     # Convert datetime objects to strings
                     for key, value in d.items():
@@ -118,7 +136,15 @@ class DocumentManager:
         try:
             with self.postgres.get_connection() as conn:
                 with conn.cursor() as cursor:
-                    cursor.execute("DELETE FROM documents WHERE filename = %s", (filename,))
+                    # Delete strategy: same logic as get_document_metadata
+                    # Search by multiple criteria based on document type
+                    cursor.execute("""
+                        DELETE FROM documents 
+                        WHERE title = %s 
+                           OR (document_type = 'file' AND file_path LIKE %s)
+                           OR (document_type = 'url' AND file_path = %s)
+                           OR (filename IS NOT NULL AND filename = %s)
+                    """, (filename, f'%/{filename}', filename, filename))
                     removed = cursor.rowcount
                     conn.commit()
             logger.info(f"Metadata delete for {filename}; removed_row={removed > 0}")
@@ -138,8 +164,8 @@ class DocumentManager:
         try:
             with self.postgres.get_connection() as conn:
                 with conn.cursor() as cursor:
-                    # Get document count first - simple query
-                    cursor.execute("SELECT COUNT(*) as count FROM documents")
+                    # Get document count first - only count completed/processed documents
+                    cursor.execute("SELECT COUNT(*) as count FROM documents WHERE processing_status = 'completed'")
                     result = cursor.fetchone()
                     if result:
                         kb_meta['documents_total'] = int(result['count'] or 0)

@@ -116,7 +116,7 @@ class PostgreSQLManager:
             title TEXT,
             content_preview TEXT,
             file_path TEXT, -- Full path to file for files, URL for URLs
-            filename TEXT, -- Just the filename (e.g., 'document.pdf') for files, NULL for URLs
+            filename TEXT UNIQUE, -- Just the filename (e.g., 'document.pdf') for files and snapshot pdf filename for URLs
             content_type VARCHAR(100),
             file_size BIGINT,
             word_count INTEGER,
@@ -127,7 +127,7 @@ class PostgreSQLManager:
             top_keywords TEXT[], -- PostgreSQL array of strings
             processing_time_seconds REAL,
             processing_status VARCHAR(50) DEFAULT 'pending',
-            file_hash VARCHAR(64),
+            file_hash VARCHAR(64) UNIQUE,
             created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
             updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
             indexed_at TIMESTAMP WITH TIME ZONE

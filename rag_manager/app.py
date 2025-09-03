@@ -793,26 +793,20 @@ class RAGKnowledgebaseManager:
             
             logger.info(f"Processing document '{filename}'")
             
-            # Step 1: Store document in PostgreSQL first to get UUID
+            # Step 1: Get existing document UUID from upload step
             if not self.postgres_manager:
                 raise Exception("PostgreSQL manager not available - cannot process document")
             
-            # Initialize with filename-based title as fallback
-            initial_title = self._fallback_title_from_filename(filename)
-            
-            # Determine content type from file extension
-            content_type = self._get_content_type_from_filename(filename)
-            
-            # Store document metadata and get UUID
-            logger.debug(f"Storing document metadata in PostgreSQL for: {filename}")
-            document_id = self.postgres_manager.store_document(
-                title=initial_title,
-                file_path=file_path,  # Store full file path
-                filename=filename,    # Store just the filename
-                content_type=content_type,
-                document_type='file'
-            )
-            logger.info(f"Document stored with ID: {document_id}")
+            # Find existing document record by filename (created during upload)
+            logger.debug(f"Finding existing document record for: {filename}")
+            with self.postgres_manager.get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT id FROM documents WHERE filename = %s", (filename,))
+                    result = cur.fetchone()
+                    if not result:
+                        raise Exception(f"No document record found for filename: {filename}")
+                    document_id = str(result['id'])
+                    logger.info(f"Found existing document with ID: {document_id}")
             
             # Step 2: Load and chunk document with proper UUID
             logger.debug(f"Starting document loading and chunking for: {filename}")
