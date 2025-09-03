@@ -198,7 +198,9 @@ class WebRoutes:
                     file_hash = self._compute_file_hash(file_path)
                     logger.info(f"Computed hash for {filename}: {file_hash[:16]}...")
                     
-                    # Check for duplicates BEFORE any database operations
+                    # === DUPLICATE DETECTION PHASE ===
+                    # Check for duplicates BEFORE any database operations using file hash
+                    # This prevents users from uploading the same file content multiple times
                     duplicate_check = self._check_for_duplicate_file(file_hash)
                     
                     if duplicate_check['is_duplicate']:
@@ -210,6 +212,7 @@ class WebRoutes:
                         existing_title = existing.get('title', existing['document_id'])
                         existing_status = existing.get('status', 'unknown')
                         
+                        # Provide different messages based on processing status
                         if existing_status == 'completed':
                             flash(
                                 f'File "{filename}" is a duplicate of "{existing_title}" which has already been processed. '
@@ -228,7 +231,9 @@ class WebRoutes:
                         # Early return - do NOT modify database for duplicates
                         return redirect(url_for('index'))
                     
-                    # Not a duplicate - proceed with storing new file record
+                    # === NEW FILE REGISTRATION PHASE ===
+                    # Not a duplicate - proceed with storing new file record in database
+                    # This creates the initial document record with 'pending' status for processing pipeline
                     try:
                         import psycopg2
                         
@@ -241,16 +246,18 @@ class WebRoutes:
                         )
                         
                         with conn.cursor() as cursor:
-                            # Check if this document_id already exists (filename collision)
+                            # === FILENAME COLLISION CHECK ===
+                            # Check if this exact file path already exists to prevent filename collisions
+                            # This is different from content duplication - this checks for same filename
                             cursor.execute(
-                                "SELECT processing_status FROM documents WHERE document_id = %s",
-                                (filename,)
+                                "SELECT processing_status FROM documents WHERE file_path = %s",
+                                (file_path,)
                             )
                             existing_record = cursor.fetchone()
                             
                             if existing_record:
                                 # Filename collision with different content - this shouldn't happen
-                                # but if it does, we need to handle it
+                                # but if it does, we need to handle it gracefully
                                 logger.warning(f"Filename collision detected for {filename} - existing status: {existing_record[0]}")
                                 os.remove(file_path)
                                 flash(
@@ -260,11 +267,13 @@ class WebRoutes:
                                 )
                                 return redirect(url_for('index'))
                             
-                            # Insert new document record with file hash and pending status
+                            # === CREATE DOCUMENT RECORD ===
+                            # Insert new document record with 'pending' status to start processing pipeline
+                            # This creates the database entry that will be picked up by document processors
                             cursor.execute("""
-                                INSERT INTO documents (document_id, title, file_path, processing_status, file_hash, created_at, updated_at)
-                                VALUES (%s, %s, %s, %s, %s, NOW(), NOW())
-                            """, (filename, self._fallback_title_from_filename(filename), file_path, 'pending', file_hash))
+                                INSERT INTO documents (title, file_path, processing_status, file_hash, created_at, updated_at)
+                                VALUES (%s, %s, %s, %s, NOW(), NOW())
+                            """, (self._fallback_title_from_filename(filename), file_path, 'pending', file_hash))
                             conn.commit()
                         
                         conn.close()
@@ -522,8 +531,8 @@ class WebRoutes:
                 
                 with conn.cursor() as cursor:
                     cursor.execute(
-                        "SELECT processing_status, title, word_count, metadata FROM documents WHERE document_id = %s",
-                        (filename,)
+                        "SELECT processing_status, title, word_count FROM documents WHERE title = %s OR file_path LIKE %s",
+                        (filename, f'%{filename}%')
                     )
                     result = cursor.fetchone()
                     
@@ -1468,10 +1477,22 @@ class WebRoutes:
             )
             
             with conn.cursor() as cursor:
-                cursor.execute(
-                    "SELECT processing_status FROM documents WHERE document_id = %s",
-                    (filename,)
-                )
+                # Use improved search logic and prioritize 'completed' status
+                # This handles the case where multiple records exist for the same file
+                cursor.execute("""
+                    SELECT processing_status FROM documents 
+                    WHERE title = %s 
+                       OR (document_type = 'file' AND file_path LIKE %s)
+                       OR (document_type = 'url' AND file_path = %s)
+                       OR (filename IS NOT NULL AND filename = %s)
+                    ORDER BY 
+                        CASE processing_status 
+                            WHEN 'completed' THEN 1 
+                            WHEN 'pending' THEN 2 
+                            ELSE 3 
+                        END
+                    LIMIT 1
+                """, (filename, f'%/{filename}', filename, filename))
                 result = cursor.fetchone()
                 logger.debug(f"Direct DB query for {filename}: result = {result}")
                 if result and len(result) > 0:
@@ -1679,10 +1700,17 @@ class WebRoutes:
     
     def _check_for_duplicate_file(self, file_hash: str) -> Dict[str, Any]:
         """
-        Check if a file with the given hash already exists in the database.
+        Check if a file with the same content hash already exists in the system.
+        
+        This prevents users from uploading identical files multiple times by comparing
+        SHA-256 hashes of file content. This is more reliable than filename-based
+        duplicate detection since users can rename files.
+        
+        The function also ensures the file_hash column exists in the database schema,
+        adding it automatically if it's missing (for backward compatibility).
         
         Args:
-            file_hash: The SHA-256 hash of the file to check
+            file_hash: The SHA-256 hash of the file content to check
             
         Returns:
             Dictionary with duplicate status information:
@@ -1702,7 +1730,9 @@ class WebRoutes:
             )
             
             with conn.cursor() as cursor:
-                # Check if we need to add the file_hash column first
+                # === SCHEMA COMPATIBILITY CHECK ===
+                # Check if we need to add the file_hash column first (backward compatibility)
+                # This handles cases where the database was created before file hashing was implemented
                 cursor.execute("""
                     SELECT column_name 
                     FROM information_schema.columns 
@@ -1711,13 +1741,15 @@ class WebRoutes:
                 
                 if not cursor.fetchone():
                     # Add the file_hash column if it doesn't exist
-                    logger.info("Adding file_hash column to documents table")
+                    logger.info("Adding file_hash column to documents table for duplicate detection")
                     cursor.execute("ALTER TABLE documents ADD COLUMN file_hash VARCHAR(64)")
                     conn.commit()
                 
-                # Now check for duplicates
+                # === DUPLICATE CONTENT CHECK ===
+                # Now check for duplicates using content hash comparison
+                # This finds files with identical content regardless of filename
                 cursor.execute(
-                    "SELECT document_id, title, processing_status, created_at FROM documents WHERE file_hash = %s",
+                    "SELECT id, title, processing_status, created_at FROM documents WHERE file_hash = %s",
                     (file_hash,)
                 )
                 result = cursor.fetchone()
