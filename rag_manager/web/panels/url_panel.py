@@ -46,8 +46,9 @@ class URLPanelStats:
             
             # Additional URL metrics
             active_urls = sum(1 for url in urls if url.get('refresh_interval_minutes', 0) > 0)
-            robots_ignored = sum(1 for url in urls if url.get('ignore_robots_txt', False))
+            robots_ignored = sum(1 for url in urls if url.get('ignore_robots_txt') == 1)
             crawl_on = sum(1 for url in urls if url.get('refresh_interval_minutes', 0) > 0)
+            sub_urls = self._get_sub_urls_count(urls)
             
             # Calculate pages processed for all URLs (count chunks/documents in vector database)
             total_pages_processed = self._calculate_total_pages_processed(urls)
@@ -60,6 +61,7 @@ class URLPanelStats:
                 'active': active_urls,
                 'crawl_on': crawl_on,
                 'robots_ignored': robots_ignored,
+                'sub_urls': sub_urls,
                 'scraped': scraped,
                 'never_scraped': never_scraped,
                 'due_now': due_now,
