@@ -190,50 +190,21 @@ class WebRoutes:
                 file_path = os.path.join(self.config.UPLOAD_FOLDER, filename)
                 
                 try:
-                    # Save file temporarily to compute hash
+                    # Simple duplicate check - if file already exists, reject upload
+                    if os.path.exists(file_path):
+                        logger.warning(f"File {filename} already exists in staging - rejecting upload")
+                        flash(f'File "{filename}" already exists. Please delete the original before uploading again.', 'warning')
+                        return redirect(url_for('index'))
+                    
+                    # Save file to staging folder
                     file.save(file_path)
                     logger.info(f"File uploaded to staging: {filename}")
                     
-                    # Compute file hash for duplicate detection
+                    # Compute file hash for database storage
                     file_hash = self._compute_file_hash(file_path)
                     logger.info(f"Computed hash for {filename}: {file_hash[:16]}...")
                     
-                    # === DUPLICATE DETECTION PHASE ===
-                    # Check for duplicates BEFORE any database operations using file hash
-                    # This prevents users from uploading the same file content multiple times
-                    duplicate_check = self._check_for_duplicate_file(file_hash)
-                    
-                    if duplicate_check['is_duplicate']:
-                        # Remove the uploaded file since it's a duplicate
-                        os.remove(file_path)
-                        logger.info(f"Removed duplicate file from staging: {filename}")
-                        
-                        existing = duplicate_check['existing_file']
-                        existing_title = existing.get('title', existing['document_id'])
-                        existing_status = existing.get('status', 'unknown')
-                        
-                        # Provide different messages based on processing status
-                        if existing_status == 'completed':
-                            flash(
-                                f'File "{filename}" is a duplicate of "{existing_title}" which has already been processed. '
-                                f'If you want to reprocess this file, please delete the original from Processed Documents first.',
-                                'warning'
-                            )
-                        else:
-                            flash(
-                                f'File "{filename}" is a duplicate of "{existing_title}" (status: {existing_status}). '
-                                f'Please delete the original before uploading again.',
-                                'warning'
-                            )
-                        
-                        logger.info(f"Rejected duplicate upload: {filename} (matches {existing['document_id']})")
-                        
-                        # Early return - do NOT modify database for duplicates
-                        return redirect(url_for('index'))
-                    
-                    # === NEW FILE REGISTRATION PHASE ===
-                    # Not a duplicate - proceed with storing new file record in database
-                    # This creates the initial document record with 'pending' status for processing pipeline
+                    # === CREATE DATABASE RECORD ===
                     try:
                         import psycopg2
                         
@@ -262,7 +233,7 @@ class WebRoutes:
                                 os.remove(file_path)
                                 flash(
                                     f'A file named "{filename}" already exists in the system. '
-                                    f'Please rename your file or delete the existing one first.',
+                                    f'Please delete the existing one before adding it again.',
                                     'error'
                                 )
                                 return redirect(url_for('index'))
@@ -271,19 +242,27 @@ class WebRoutes:
                             # Insert new document record with 'pending' status to start processing pipeline
                             # This creates the database entry that will be picked up by document processors
                             cursor.execute("""
-                                INSERT INTO documents (title, file_path, processing_status, file_hash, created_at, updated_at)
-                                VALUES (%s, %s, %s, %s, NOW(), NOW())
-                            """, (self._fallback_title_from_filename(filename), file_path, 'pending', file_hash))
+                                INSERT INTO documents (title, filename, file_path, processing_status, file_hash, created_at, updated_at)
+                                VALUES (%s, %s, %s, %s, %s, NOW(), NOW())
+                            """, (self._fallback_title_from_filename(filename), filename, file_path, 'pending', file_hash))
                             conn.commit()
                         
                         conn.close()
                         logger.info(f"Stored new file record for {filename} in database")
                         
                     except Exception as e:
+                        # Log the full technical error details for debugging
                         logger.error(f"Could not store file record for {filename}: {e}")
+                        
                         # Clean up the file since we couldn't store the record
                         os.remove(file_path)
-                        flash(f'Error storing file record: {str(e)}', 'error')
+                        
+                        # Provide user-friendly error message for duplicate content
+                        error_str = str(e)
+                        if 'duplicate key value violates unique constraint "documents_file_hash_key"' in error_str:
+                            flash('A file matching this file\'s content has already been processed. Please delete the processed document before proceeding with uploading the file again.', 'error')
+                        else:
+                            flash(f'Error storing file record: {error_str}', 'error')
                         return redirect(url_for('index'))
                     
                     flash(f'File "{filename}" uploaded successfully', 'success')
@@ -611,7 +590,15 @@ class WebRoutes:
                 return redirect(url_for('index'))
             try:
                 if title:
-                    self.rag_manager.document_manager.upsert_document_metadata(filename, {'title': title}) if self.rag_manager.document_manager else None
+                    # Get the correct file_path for the upsert
+                    uploaded_path = os.path.join(self.config.UPLOADED_FOLDER, filename)
+                    self.rag_manager.document_manager.upsert_document_metadata(
+                        filename, 
+                        {
+                            'title': title,
+                            'file_path': uploaded_path
+                        }
+                    ) if self.rag_manager.document_manager else None
                     flash('Document title updated', 'success')
                 else:
                     flash('No title provided', 'info')
@@ -628,9 +615,13 @@ class WebRoutes:
             # Update database status to 'pending' when processing starts
             try:
                 if self.rag_manager.document_manager:
+                    staging_path = os.path.join(self.config.UPLOAD_FOLDER, filename)
                     self.rag_manager.document_manager.upsert_document_metadata(
                         filename,
-                        {'processing_status': 'pending'}
+                        {
+                            'processing_status': 'pending',
+                            'file_path': staging_path
+                        }
                     )
             except Exception as e:
                 logger.warning(f"Failed to set processing status to 'pending' for {filename}: {e}")
@@ -751,29 +742,6 @@ class WebRoutes:
             except Exception:
                 return jsonify({'status': 'not_found'})
         
-        @self.app.route('/delete/<folder>/<filename>')
-        def delete_file(folder, filename):
-            """Delete a file from staging or uploaded folder."""
-            if folder not in ['staging', 'uploaded']:
-                flash('Invalid folder', 'error')
-                return redirect(url_for('index'))
-            
-            folder_path = self.config.UPLOAD_FOLDER if folder == 'staging' else self.config.UPLOADED_FOLDER
-            file_path = os.path.join(folder_path, filename)
-            
-            try:
-                if os.path.exists(file_path):
-                    os.remove(file_path)
-                    flash(f'File "{filename}" deleted successfully', 'success')
-                    logger.info(f"File deleted: {filename} from {folder}")
-                else:
-                    flash('File not found', 'error')
-            except Exception as e:
-                flash(f'Error deleting file: {str(e)}', 'error')
-                logger.error(f"Delete error: {str(e)}")
-            
-            return redirect(url_for('index'))
-
         @self.app.route('/delete_file_bg/<folder>/<filename>', methods=['POST','GET'])
         def delete_file_bg(folder: str, filename: str):
             """Start background (soft) deletion for a file."""
@@ -1697,80 +1665,3 @@ class WebRoutes:
         except Exception as e:
             logger.error(f"Error computing hash for {file_path}: {e}")
             raise
-    
-    def _check_for_duplicate_file(self, file_hash: str) -> Dict[str, Any]:
-        """
-        Check if a file with the same content hash already exists in the system.
-        
-        This prevents users from uploading identical files multiple times by comparing
-        SHA-256 hashes of file content. This is more reliable than filename-based
-        duplicate detection since users can rename files.
-        
-        The function also ensures the file_hash column exists in the database schema,
-        adding it automatically if it's missing (for backward compatibility).
-        
-        Args:
-            file_hash: The SHA-256 hash of the file content to check
-            
-        Returns:
-            Dictionary with duplicate status information:
-            - 'is_duplicate': bool indicating if duplicate found
-            - 'existing_file': dict with file info if duplicate found
-        """
-        try:
-            # Use direct database connection to check for existing file hash
-            import psycopg2
-            
-            conn = psycopg2.connect(
-                host=os.getenv('POSTGRES_HOST', 'localhost'),
-                port=os.getenv('POSTGRES_PORT', '5432'),
-                database=os.getenv('POSTGRES_DB', 'rag_metadata'),
-                user=os.getenv('POSTGRES_USER', 'rag_user'),
-                password=os.getenv('POSTGRES_PASSWORD', 'rag_password')
-            )
-            
-            with conn.cursor() as cursor:
-                # === SCHEMA COMPATIBILITY CHECK ===
-                # Check if we need to add the file_hash column first (backward compatibility)
-                # This handles cases where the database was created before file hashing was implemented
-                cursor.execute("""
-                    SELECT column_name 
-                    FROM information_schema.columns 
-                    WHERE table_name = 'documents' AND column_name = 'file_hash'
-                """)
-                
-                if not cursor.fetchone():
-                    # Add the file_hash column if it doesn't exist
-                    logger.info("Adding file_hash column to documents table for duplicate detection")
-                    cursor.execute("ALTER TABLE documents ADD COLUMN file_hash VARCHAR(64)")
-                    conn.commit()
-                
-                # === DUPLICATE CONTENT CHECK ===
-                # Now check for duplicates using content hash comparison
-                # This finds files with identical content regardless of filename
-                cursor.execute(
-                    "SELECT id, title, processing_status, created_at FROM documents WHERE file_hash = %s",
-                    (file_hash,)
-                )
-                result = cursor.fetchone()
-                
-                conn.close()
-                
-                if result:
-                    document_id, title, status, created_at = result
-                    return {
-                        'is_duplicate': True,
-                        'existing_file': {
-                            'document_id': document_id,
-                            'title': title,
-                            'status': status,
-                            'created_at': created_at
-                        }
-                    }
-                else:
-                    return {'is_duplicate': False, 'existing_file': None}
-                    
-        except Exception as e:
-            logger.error(f"Error checking for duplicate file with hash {file_hash}: {e}")
-            # In case of error, allow the upload to proceed (fail-safe)
-            return {'is_duplicate': False, 'existing_file': None}

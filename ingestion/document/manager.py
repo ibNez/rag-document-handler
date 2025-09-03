@@ -28,6 +28,7 @@ class DocumentManager:
                 'title': metadata.get('title', filename),
                 'content_preview': metadata.get('content_preview', ''),
                 'file_path': metadata.get('file_path', ''),
+                'filename': filename,  # Always include the filename for UPSERT conflict resolution
                 'content_type': metadata.get('content_type', ''),
                 'file_size': metadata.get('file_size', 0),
                 'word_count': metadata.get('word_count', 0),
@@ -59,7 +60,7 @@ class DocumentManager:
                             %(top_keywords)s, %(processing_time_seconds)s, %(processing_status)s,
                             %(filename)s, %(document_type)s, NOW(), NOW()
                         )
-                        ON CONFLICT (file_path) 
+                        ON CONFLICT (filename) 
                         DO UPDATE SET
                             title = EXCLUDED.title,
                             content_preview = EXCLUDED.content_preview,
@@ -163,8 +164,8 @@ class DocumentManager:
         try:
             with self.postgres.get_connection() as conn:
                 with conn.cursor() as cursor:
-                    # Get document count first - simple query
-                    cursor.execute("SELECT COUNT(*) as count FROM documents")
+                    # Get document count first - only count completed/processed documents
+                    cursor.execute("SELECT COUNT(*) as count FROM documents WHERE processing_status = 'completed'")
                     result = cursor.fetchone()
                     if result:
                         kb_meta['documents_total'] = int(result['count'] or 0)
