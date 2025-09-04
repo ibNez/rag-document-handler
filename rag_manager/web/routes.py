@@ -148,6 +148,7 @@ class WebRoutes:
             kb_meta = all_stats['knowledgebase']
             url_meta = all_stats['url']
             email_meta = all_stats['email']
+            system_meta = all_stats['system']
 
             # Get URLs and email accounts for display
             urls = self._get_enriched_urls()
@@ -156,6 +157,7 @@ class WebRoutes:
             return render_template(
                 'index.html',
                 staging_files=staging_files,
+                all_staging_files=all_staging_files,
                 uploaded_files=uploaded_files,
                 collection_stats=collection_stats,
                 email_collection_stats=email_collection_stats,
@@ -165,6 +167,7 @@ class WebRoutes:
                 kb_meta=kb_meta,
                 url_meta=url_meta,
                 email_meta=email_meta,
+                system_meta=system_meta,
                 processing_status=self.rag_manager.processing_status,
                 url_processing_status=self.rag_manager.url_processing_status,
                 urls=urls,
@@ -756,9 +759,12 @@ class WebRoutes:
             if not st:
                 self.rag_manager.processing_status[filename] = DocumentProcessingStatus(filename=filename)
             
-            # Start background worker
+            # Start background worker - use appropriate method based on folder
             import threading
-            th = threading.Thread(target=self.rag_manager._delete_file_background, args=(folder, filename))
+            if folder == 'staging':
+                th = threading.Thread(target=self.rag_manager._delete_staging_file_background, args=(filename,))
+            else:  # uploaded
+                th = threading.Thread(target=self.rag_manager._delete_uploaded_file_background, args=(filename,))
             th.daemon = True
             th.start()
             flash('Deletion started in background', 'info')

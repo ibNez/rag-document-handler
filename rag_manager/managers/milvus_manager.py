@@ -42,7 +42,7 @@ class MilvusManager:
         """
         self.config = config
         self.postgres_manager = postgres_manager
-        self.collection_name = config.COLLECTION_NAME
+        self.collection_name = config.DOCUMENT_COLLECTION
         self.connection_args = {"host": config.MILVUS_HOST, "port": config.MILVUS_PORT}
         
         # Hybrid retrieval components (initialized on demand)
@@ -58,7 +58,7 @@ class MilvusManager:
         # Lazy-created vector stores for documents and emails
         self.vector_store: Optional[Milvus] = None
         self.email_vector_store: Optional[Milvus] = None
-        self.email_collection_name = "emails"
+        self.email_collection_name = config.EMAIL_COLLECTION
         
         try:
             # Create a dedicated embeddings instance

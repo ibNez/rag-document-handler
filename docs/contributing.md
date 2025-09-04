@@ -11,12 +11,12 @@ The project adheres to strict development rules documented in [`DEVELOPMENT_RULE
 - Follow modular architecture patterns in `ingestion/` and `rag_manager/`
 - Keep dependencies in `pyproject.toml`
 - Format code with Black and import-sort with isort
-- Add tests for new features using `pytest`
+- Add tests for features using `pytest`
 - Implement comprehensive logging per DEVELOPMENT_RULES.md
 
 ## Refactored Architecture
 
-Understanding the new structure is essential for contributions:
+Understanding the structure is essential for contributions:
 
 ```
 ingestion/           # Data ingestion modules
@@ -41,11 +41,11 @@ templates/          # Web interface templates
 
 The web interface uses a modular partials system for better maintainability:
 
-### Adding New Partials
+### Adding Partials
 
 1. **Create the partial** in `templates/partials/` with underscore prefix:
    ```bash
-   templates/partials/_new_feature.html
+   templates/partials/_feature.html
    ```
 
 2. **Add descriptive comment** at the top:
@@ -55,7 +55,7 @@ The web interface uses a modular partials system for better maintainability:
 
 3. **Include in main template**:
    ```html
-   {% include 'partials/_new_feature.html' %}
+   {% include 'partials/_feature.html' %}
    ```
 
 4. **Test responsiveness** across screen sizes
@@ -79,7 +79,7 @@ The web interface uses a modular partials system for better maintainability:
 
 The statistics system uses dedicated providers for each dashboard panel:
 
-### Adding New Statistics Panels
+### Adding Statistics Panels
 
 1. **Create panel provider** in `rag_manager/web/panels/`:
    ```python

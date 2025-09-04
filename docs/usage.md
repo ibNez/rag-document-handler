@@ -1,6 +1,6 @@
 # Usage Guide
 
-The application exposes a Flask web interface for managing documents, URLs, emails and performing RAG-powered search. The refactored architecture uses PostgreSQL for metadata, Milvus for vector embeddings, and a modular template system with partials for improved maintainability.
+The application exposes a Flask web interface for managing documents, URLs, emails and performing RAG-powered search. The architecture uses PostgreSQL for metadata, Milvus for vector embeddings, and a modular template system with partials for maintainability.
 
 ## Starting the Application
 
@@ -24,44 +24,58 @@ The refactored application uses:
 - **Panel-Specific Statistics**: Dedicated statistics providers for each dashboard section
 - **Template Partials**: Well-organized, maintainable template structure
 
-## Enhanced Dashboard Interface
+## Dashboard Interface
 
-The web interface has been completely refactored using a modular partials system that provides:
+The main dashboard provides a comprehensive view of system status and content management capabilities.
+
+**Navigation Bar:**
+- The "RAG Knowledgebase Manager" title bar remains visible at the top during scrolling
+- Always-visible navigation with Home and Ask AI links
+- Consistent access to core functionality regardless of page position
 
 ### Statistics Panel
-The main dashboard features a comprehensive statistics panel that displays real-time information across four key areas:
+The main dashboard features a comprehensive statistics panel with **threshold-based color coding** that displays real-time information across five key areas:
 
 **Connections Status:**
 - SQL database connectivity and version information
 - Milvus vector database status and health
-- Collection statistics and entity counts
-- Email collection metrics and indexing status
+- Ollama model availability (Chat, Embed, Classification)
 
 **Document Analytics:**
+- Collection statistics and entity counts
 - Total document count and processing statistics
 - Average words per document and chunk distribution
 - Median chunk character counts for optimization insights
-- Embedding dimensions and indexing configuration
 - Top keywords extracted from document content
 
 **URL Management Metrics:**
 - Total URLs tracked and their processing status
-- Active URLs and domain crawling statistics  
-- Parent-child URL relationships and progress tracking
-- Child URL processing statistics (active, completed, failed)
-- Robots.txt compliance and ignored rules count
-- Scraped vs. never-scraped URL breakdown
-- URLs due for refresh based on scheduling intervals
-- Automatic snapshot creation for all URLs (always enabled)
+- Sub-URLs discovered through domain crawling
+- Domain crawling status and robots.txt compliance
+- **Due Now** - URLs requiring processing (color-coded: green <10, yellow 10-49, red ≥50)
+- **Robots Ignored** - Policy override count (color-coded for risk assessment)
 
 **Email Account Overview:**
+- Email collection metrics and entity counts
 - Total configured accounts and sync status
-- Accounts due for synchronization
-- Never-synced accounts requiring attention
+- **Due Now** - Accounts past refresh interval (color-coded: green ≤1, yellow 2-4, red ≥5)
+- **Never Synced** - Accounts requiring configuration attention (color-coded warnings)
+- **Accounts Backlogged** - Detailed backlog analysis with severity buckets (severe >7d, moderate 3-7d, light <3d)
+- **Last Ingest Age** - Oldest freshness delta across accounts (color-coded by staleness)
 - Total email count and attachment statistics
-- Embedding configuration and indexing status
-- Most active account identification
-- Latest email processing timestamps
+- Average emails per account
+
+**CAPACITY Monitoring:**
+- **Total Usage** - Combined disk usage across all components
+- **Disk Free** - Available space with threshold alerts (warning <25%, critical <15%)
+- **PostgreSQL DB** - Database storage consumption
+- **Milvus (estimated)** - Vector database size estimation
+- **Logs, Staging, Uploaded, Deleted, Snapshots** - Individual directory sizes
+
+All tiles use **automatic color coding** based on operational thresholds:
+- 🟢 **Green**: Normal operation
+- 🟡 **Yellow**: Warning threshold reached  
+- 🔴 **Red**: Critical threshold requiring attention
 
 ### Modular Section Organization
 
@@ -103,14 +117,14 @@ The interface is built using a modular partials system that provides:
 
 ## Features
 
-- **Document Upload** – Upload PDF, DOCX, DOC, TXT, or MD files with enhanced processing
+- **Document Upload** – Upload PDF, DOCX, DOC, TXT, or MD files with processing
 - **URL Management** – Store and schedule URL crawling with PostgreSQL-based metadata and parent-child relationship tracking  
 - **Email Integration** – Support for IMAP, Gmail API, and Exchange with encrypted storage
-- **Semantic Search** – Query stored content via vector search with improved accuracy
+- **Semantic Search** – Query stored content via vector search with accuracy
 - **RAG Chat** – Ask questions and receive answers synthesized from relevant documents
 - **Email Classification** – Automatic detection and specialized handling of email-related queries
 
-## Enhanced Query Processing
+## Query Processing
 
 The system now features intelligent query classification that automatically determines whether your questions are about emails or general documents:
 
@@ -184,7 +198,7 @@ fetched.
 - Standard IMAP servers with SSL/TLS support
 - Default port: 993 (SSL) or 143 (non-SSL)
 - Supports batch processing with configurable limits
-- Enhanced corruption detection for malformed emails
+- Corruption detection for malformed emails
 
 #### Gmail API Integration
 1. **Enable Gmail API** in Google Cloud Console
@@ -204,7 +218,7 @@ fetched.
 - **Corruption Detection**: Validates Message-ID headers and email structure
 - **Offset-Aware Processing**: Tracks processed emails to resume from last position
 - **Smart Batching**: Avoids duplicates with intelligent batch processing
-- **Enhanced Error Handling**: Fail-fast approach with detailed logging
+- **Error Handling**: Fail-fast approach with detailed logging
 - **Real-time Monitoring**: Live statistics and processing status updates
 
 ## URL Snapshots
@@ -214,7 +228,7 @@ The system automatically creates PDF snapshots of all web pages for historical p
 ### Snapshot Features
 - **Always Enabled**: Snapshots are automatically created for all URLs (no toggle option)
 - **PDF Generation**: High-quality PDF creation using Playwright browser automation
-- **Content Change Detection**: New snapshots only created when content changes
+- **Content Change Detection**: Snapshots only created when content changes
 - **Systematic Organization**: Hierarchical directory structure with structured naming
 - **Retention Policies**: Automatic cleanup based on age and count limits
 
@@ -250,7 +264,7 @@ The system uses an advanced hybrid retrieval approach that combines vector simil
 2. **Vector-Only Fallback**: Pure vector similarity search if hybrid fails
 3. **Smart Routing**: Automatic fallback with comprehensive error handling
 
-### Enhanced Search Results
+### Search Results
 Documents return rich metadata including:
 - **Retrieval Method**: Indicates if hybrid or vector-only was used
 - **Ranking Information**: Both vector and FTS rank scores
@@ -262,7 +276,7 @@ Documents return rich metadata including:
 - **Semantic Understanding**: Vector search finds conceptually similar content
 - **Keyword Precision**: FTS search finds exact terms and phrases
 - **Combined Power**: RRF fusion leverages strengths of both methods
-- **Enhanced Filtering**: Content type, page ranges, and temporal filtering
+- **Filtering**: Content type, page ranges, and temporal filtering
 
 ## Robots.txt Monitoring & Testing
 
@@ -345,7 +359,3 @@ pytest tests/ --cov=ingestion.url.utils --cov-report=html
 
 For detailed robots.txt configuration and implementation details, see [System Architecture Documentation](architecture.md) and [Configuration Documentation](configuration.md).
 
-## TODOs
-
-- [ ] Image ingestion using TensorFlow object classification with embeddings stored in Milvus.
-- [ ] Export search results to external formats.

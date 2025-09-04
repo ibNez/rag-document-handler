@@ -40,11 +40,14 @@ class URLPanelStats:
             
             # Calculate basic counts
             total_urls = len(urls)
-            scraped = sum(1 for url in urls if url.get('last_scraped'))
             due_now = sum(1 for url in urls if self._is_url_due_for_scraping(url))
+            
+            # Calculate threshold status for due_now (Warning: >10, Critical: >50)
+            due_now_status = self._get_due_now_threshold_status(due_now)
             
             # Additional URL metrics
             robots_ignored = sum(1 for url in urls if url.get('ignore_robots', 0) == 1)
+            robots_ignored_status = self._get_robots_ignored_threshold_status(robots_ignored)
             crawl_on = sum(1 for url in urls if url.get('crawl_domain', 0) == 1)
             
             # Get sub_urls count directly from database since get_all_urls() only returns parent URLs
@@ -61,8 +64,9 @@ class URLPanelStats:
                 'sub_urls': sub_urls,
                 'crawl_on': crawl_on,
                 'robots_ignored': robots_ignored,
-                'scraped': scraped,
+                'robots_ignored_status': robots_ignored_status,
                 'due_now': due_now,
+                'due_now_status': due_now_status,
                 'pages_processed': total_pages_processed,
                 'snapshot_disk_usage': snapshot_size_human
             }
@@ -226,6 +230,42 @@ class URLPanelStats:
             logger.error(f"Failed to get sub-URLs count: {e}")
             return 0
     
+    def _get_due_now_threshold_status(self, due_now: int) -> str:
+        """
+        Get threshold status for URLs due now.
+        
+        Args:
+            due_now: Number of URLs due for processing
+            
+        Returns:
+            Status string: 'success', 'warning', 'critical'
+        """
+        # Based on documentation: Warning: >10, Critical: >50
+        if due_now >= 50:
+            return 'critical'
+        elif due_now >= 10:
+            return 'warning'
+        else:
+            return 'success'
+    
+    def _get_robots_ignored_threshold_status(self, robots_ignored: int) -> str:
+        """
+        Get threshold status for robots ignored count.
+        
+        Args:
+            robots_ignored: Number of URLs ignoring robots.txt
+            
+        Returns:
+            Status string: 'success', 'warning', 'critical'  
+        """
+        # High count indicates risk surface - warn if >5, critical if >20
+        if robots_ignored >= 20:
+            return 'critical'
+        elif robots_ignored >= 5:
+            return 'warning'
+        else:
+            return 'success'
+    
     def _empty_stats(self) -> Dict[str, Any]:
         """Return empty URL panel stats."""
         return {
@@ -233,8 +273,10 @@ class URLPanelStats:
             'sub_urls': 0,
             'crawl_on': 0,
             'robots_ignored': 0,
+            'robots_ignored_status': 'success',
             'scraped': 0,
             'due_now': 0,
+            'due_now_status': 'success',
             'pages_processed': 0,
             'snapshot_disk_usage': '0 B'
         }

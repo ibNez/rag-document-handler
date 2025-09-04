@@ -36,8 +36,6 @@ class KnowledgebasePanelStats:
             return {
                 # Collection metrics from Milvus
                 'total_documents': collection_stats.get('num_entities', 0),
-                'embedding_dim': collection_stats.get('dim', 0),
-                'indexed': 'Yes' if collection_stats.get('indexed', False) else 'No',
                 'metric_type': collection_stats.get('metric_type', 'cosine'),
                 'collection_name': collection_stats.get('collection_name', 'documents'),
                 
@@ -81,8 +79,6 @@ class KnowledgebasePanelStats:
         """Return empty knowledgebase panel stats."""
         return {
             'total_documents': 0,
-            'embedding_dim': 0,
-            'indexed': 'No',
             'metric_type': 'cosine',
             'collection_name': 'documents',
             'documents_total': 0,

@@ -24,6 +24,7 @@ from urllib.robotparser import RobotFileParser
 from .core.config import Config
 from .core.models import DocumentProcessingStatus, URLProcessingStatus, EmailProcessingStatus
 from .core.ollama_health import OllamaHealthChecker
+from .utils.logger import setup_logging
 from ingestion.document.processor import DocumentProcessor
 from .managers.milvus_manager import MilvusManager
 from .web.routes import WebRoutes
@@ -31,22 +32,8 @@ from .scheduler_manager import SchedulerManager  # Import SchedulerManager
 from urllib.parse import urlparse, urljoin
 from urllib.robotparser import RobotFileParser
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler('logs/rag_document_handler.log')
-    ]
-)
+# Logging will be set up by the application initialization
 
-# Suppress noisy external library logs that can be misleading
-logging.getLogger('unstructured').setLevel(logging.WARNING)
-logging.getLogger('pdfminer').setLevel(logging.WARNING)
-logging.getLogger('PIL').setLevel(logging.WARNING)
-logging.getLogger('urllib3').setLevel(logging.WARNING)
-logging.getLogger('requests').setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
@@ -61,6 +48,9 @@ class RAGKnowledgebaseManager:
     def __init__(self) -> None:
         """Initialize the RAG Knowledgebase Manager application."""
         self.config = Config()
+        
+        # Setup logging with configured log directory
+        setup_logging(self.config.LOG_DIR)
         
         # Get the project root directory (parent of rag_manager)
         project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -1063,141 +1053,215 @@ class RAGKnowledgebaseManager:
             status.end_time = datetime.now()
             logger.error(f"Processing failed for {filename}: {str(e)}")
 
-    def _delete_file_background(self, folder: str, filename: str) -> None:
+    def _delete_staging_file_background(self, filename: str) -> None:
         """
-        Background deletion worker with progress tracking.
+        Delete a file from staging folder with database cleanup.
+        
+        Staging file deletion policy:
+        - Removes file from staging folder (configured via UPLOAD_FOLDER)
+        - Cleans up orphaned database records with 'pending' status
+        - No vector embeddings to clean (staging files aren't processed yet)
+        """
+        # Ensure status entry exists for UI progress
+        st = self.processing_status.get(filename) or DocumentProcessingStatus(filename=filename)
+        self.processing_status[filename] = st
+        st.status = 'processing'
+        st.progress = 10
+        st.message = 'Preparing deletion from staging...'
+        st.start_time = datetime.now()
+        
+        try:
+            file_path = os.path.join(self.config.UPLOAD_FOLDER, filename)
+            
+            # Clean up orphaned database record first
+            st.message = 'Cleaning up database record...'
+            st.progress = 30
+            
+            if self.postgres_manager:
+                try:
+                    with self.postgres_manager.get_connection() as conn:
+                        with conn.cursor() as cur:
+                            cur.execute("DELETE FROM documents WHERE filename = %s AND processing_status = 'pending'", [filename])
+                            deleted_rows = cur.rowcount
+                            conn.commit()
+                            if deleted_rows > 0:
+                                logger.info(f"Cleaned up {deleted_rows} orphaned database record(s) for staging file: {filename}")
+                except Exception as db_e:
+                    logger.error(f"Failed to clean up database record for staging file {filename}: {db_e}")
+                    # Don't raise - file deletion should still proceed
+            
+            # Remove file from staging
+            st.message = 'Removing file from staging...'
+            st.progress = 70
+            
+            if os.path.exists(file_path):
+                os.remove(file_path)
+                logger.info(f"Removed staging file: {file_path}")
+            else:
+                logger.warning(f"Staging file not found: {file_path}")
+            
+            st.status = 'completed'
+            st.message = 'Staging file deleted successfully'
+            st.progress = 100
+            st.end_time = datetime.now()
+            
+            self._schedule_status_cleanup(filename, 5)  # 5 second delay for success
+            
+        except Exception as e:
+            st.status = 'error'
+            st.error_details = str(e)
+            st.message = f'Staging deletion failed: {e}'
+            st.progress = 100
+            st.end_time = datetime.now()
+            logger.error(f"Staging file deletion failed for {filename}: {e}")
+            
+            self._schedule_status_cleanup(filename, 10)  # 10 second delay for errors
 
-        Strict removal policy:
-        - Staging files: permanently removed from disk.
-        - Uploaded files: embeddings removed (Milvus), metadata row purged, file moved
-          to DELETED_FOLDER (only raw file retained for possible manual restore). No metadata
-          history is preserved.
+    def _delete_uploaded_file_background(self, filename: str) -> None:
+        """
+        Delete a processed file from uploaded folder with full cleanup.
+        
+        Uploaded file deletion policy:
+        - Removes embeddings from Milvus vector database
+        - Purges metadata and chunks from PostgreSQL
+        - Archives file to deleted folder (configured via DELETED_FOLDER)
         """
         # Ensure status entry exists for UI progress
         st = self.processing_status.get(filename) or DocumentProcessingStatus(filename=filename)
         self.processing_status[filename] = st
         st.status = 'processing'
         st.progress = 5
-        st.message = 'Preparing deletion...'
+        st.message = 'Preparing uploaded file deletion...'
         st.start_time = datetime.now()
         
         try:
-            folder_path = self.config.UPLOAD_FOLDER if folder == 'staging' else self.config.UPLOADED_FOLDER
-            file_path = os.path.join(folder_path, filename)
+            file_path = os.path.join(self.config.UPLOADED_FOLDER, filename)
             
-            if folder == 'uploaded':
-                st.message = 'Looking up document...'
-                st.progress = 15
-                
-                # Find the document ID by filename
-                document_id = None
-                try:
-                    if self.postgres_manager:
-                        with self.postgres_manager.get_connection() as conn:
-                            with conn.cursor() as cur:
-                                # Use the filename field for lookup
-                                cur.execute("SELECT id FROM documents WHERE filename = %s", [filename])
-                                result = cur.fetchone()
-                                if result:
-                                    document_id = str(result['id'])
-                                    logger.info(f"Found document ID {document_id} for filename {filename}")
-                                else:
-                                    logger.warning(f"No document found with filename {filename}")
-                    else:
-                        logger.warning("PostgreSQL manager not available for document lookup")
-                except Exception as e:
-                    logger.error(f"Failed to lookup document ID for {filename}: {e}")
-                
-                st.message = 'Removing embeddings...'
-                st.progress = 20
-                try:
-                    logger.info(f"Starting embedding deletion for filename: {filename}")
-                    if document_id:
-                        # Delete using ID for Milvus
-                        deletion_result = self.milvus_manager.delete_document(document_id=document_id)
-                        logger.info(f"Embedding deletion result for ID {document_id}: {deletion_result}")
-                    else:
-                        # Fallback to filename-based deletion for compatibility
-                        deletion_result = self.milvus_manager.delete_document(filename=filename)
-                        logger.info(f"Embedding deletion result for filename {filename}: {deletion_result}")
-                    
-                    if deletion_result.get('success'):
-                        deleted_count = deletion_result.get('deleted_count', 0)
-                        reported_count = deletion_result.get('reported_delete_count', 0)
-                        
-                        if deleted_count > 0:
-                            logger.info(f"Immediately deleted {deleted_count} embeddings for {filename}")
-                            st.message = f'Removed {deleted_count} embeddings'
-                            st.progress = 40
-                        elif reported_count > 0:
-                            logger.info(f"Milvus marked {reported_count} embeddings for deletion - cleanup in progress")
-                            st.message = f'Deletion initiated ({reported_count} embeddings marked for cleanup)'
-                            st.progress = 40
-                        else:
-                            logger.info(f"Deletion command successful for {filename}")
-                            st.message = 'Embedding deletion initiated'
-                            st.progress = 40
-                    else:
-                        error_msg = deletion_result.get('error', 'Unknown error')
-                        logger.error(f"Embedding deletion failed for {filename}: {error_msg}")
-                        raise Exception(f"Embedding deletion failed: {error_msg}")
-                        
-                except Exception as e:
-                    logger.error(f"Embedding deletion failed for {filename}: {e}", exc_info=True)
-                    raise Exception(f"Failed to delete embeddings: {str(e)}")
-                
-                # Purge document and chunks from PostgreSQL
-                try:
-                    if self.postgres_manager and document_id:
-                        # Delete document (cascades to chunks via foreign key)
-                        with self.postgres_manager.get_connection() as conn:
-                            with conn.cursor() as cur:
-                                cur.execute("DELETE FROM documents WHERE id = %s", [document_id])
-                                deleted_rows = cur.rowcount
-                                conn.commit()
-                                logger.info(f"Deleted document {document_id} and associated chunks from PostgreSQL (rows: {deleted_rows})")
-                    else:
-                        error_msg = "No PostgreSQL manager available for metadata deletion"
-                        logger.error(error_msg)
-                        raise Exception(error_msg)
-                except Exception as e:
-                    logger.error(f"Metadata deletion failed for {filename}: {e}")
+            # Find the document ID by filename
+            st.message = 'Looking up document...'
+            st.progress = 15
+            
+            document_id = None
+            try:
+                if self.postgres_manager:
+                    with self.postgres_manager.get_connection() as conn:
+                        with conn.cursor() as cur:
+                            cur.execute("SELECT id FROM documents WHERE filename = %s", [filename])
+                            result = cur.fetchone()
+                            if result:
+                                document_id = str(result['id'])
+                                logger.info(f"Found document ID {document_id} for filename {filename}")
+                            else:
+                                logger.warning(f"No document found with filename {filename}")
                 else:
-                    st.progress = max(st.progress, 55)
+                    logger.warning("PostgreSQL manager not available for document lookup")
+            except Exception as e:
+                logger.error(f"Failed to lookup document ID for {filename}: {e}")
             
-            st.message = 'Archiving file...'
-            st.progress = max(st.progress, 70)
+            # Remove embeddings from Milvus
+            st.message = 'Removing embeddings...'
+            st.progress = 30
             
             try:
-                if os.path.exists(file_path):
-                    if folder == 'uploaded':
-                        archive_path = os.path.join(self.config.DELETED_FOLDER, filename)
-                        if os.path.exists(archive_path):
-                            stem, ext = os.path.splitext(filename)
-                            archive_path = os.path.join(self.config.DELETED_FOLDER, f"{stem}_{int(time.time())}{ext}")
-                        shutil.move(file_path, archive_path)
+                logger.info(f"Starting embedding deletion for filename: {filename}")
+                if document_id:
+                    deletion_result = self.milvus_manager.delete_document(document_id=document_id)
+                    logger.info(f"Embedding deletion result for ID {document_id}: {deletion_result}")
+                else:
+                    # Fallback to filename-based deletion for compatibility
+                    deletion_result = self.milvus_manager.delete_document(filename=filename)
+                    logger.info(f"Embedding deletion result for filename {filename}: {deletion_result}")
+                
+                if deletion_result.get('success'):
+                    deleted_count = deletion_result.get('deleted_count', 0)
+                    reported_count = deletion_result.get('reported_delete_count', 0)
+                    
+                    if deleted_count > 0:
+                        logger.info(f"Immediately deleted {deleted_count} embeddings for {filename}")
+                        st.message = f'Removed {deleted_count} embeddings'
+                    elif reported_count > 0:
+                        logger.info(f"Milvus marked {reported_count} embeddings for deletion - cleanup in progress")
+                        st.message = f'Deletion initiated ({reported_count} embeddings marked for cleanup)'
                     else:
-                        os.remove(file_path)
+                        logger.info(f"Deletion command successful for {filename}")
+                        st.message = 'Embedding deletion initiated'
+                    st.progress = 50
+                else:
+                    error_msg = deletion_result.get('error', 'Unknown error')
+                    logger.error(f"Embedding deletion failed for {filename}: {error_msg}")
+                    raise Exception(f"Embedding deletion failed: {error_msg}")
+                    
             except Exception as e:
-                logger.error(f"File archive/delete failed for {filename}: {e}")
+                logger.error(f"Embedding deletion failed for {filename}: {e}", exc_info=True)
+                raise Exception(f"Failed to delete embeddings: {str(e)}")
+            
+            # Purge document and chunks from PostgreSQL
+            st.message = 'Removing metadata...'
+            st.progress = 65
+            
+            try:
+                if self.postgres_manager and document_id:
+                    with self.postgres_manager.get_connection() as conn:
+                        with conn.cursor() as cur:
+                            cur.execute("DELETE FROM documents WHERE id = %s", [document_id])
+                            deleted_rows = cur.rowcount
+                            conn.commit()
+                            logger.info(f"Deleted document {document_id} and associated chunks from PostgreSQL (rows: {deleted_rows})")
+                else:
+                    error_msg = "No PostgreSQL manager available for metadata deletion"
+                    logger.error(error_msg)
+                    raise Exception(error_msg)
+            except Exception as e:
+                logger.error(f"Metadata deletion failed for {filename}: {e}")
                 raise
             
+            # Archive file to deleted folder
+            st.message = 'Archiving file...'
+            st.progress = 80
+            
+            if os.path.exists(file_path):
+                archive_path = os.path.join(self.config.DELETED_FOLDER, filename)
+                if os.path.exists(archive_path):
+                    stem, ext = os.path.splitext(filename)
+                    archive_path = os.path.join(self.config.DELETED_FOLDER, f"{stem}_{int(time.time())}{ext}")
+                shutil.move(file_path, archive_path)
+                logger.info(f"Archived uploaded file to: {archive_path}")
+            else:
+                logger.warning(f"Uploaded file not found: {file_path}")
+            
             st.status = 'completed'
-            st.message = 'File archived - monitoring embedding cleanup'
+            st.message = 'File deleted and archived successfully'
             st.progress = 100
             st.end_time = datetime.now()
+            
+            self._schedule_status_cleanup(filename, 5)  # 5 second delay for success
             
         except Exception as e:
             st.status = 'error'
             st.error_details = str(e)
-            st.message = f'Deletion failed: {e}'
+            st.message = f'Uploaded file deletion failed: {e}'
             st.progress = 100
             st.end_time = datetime.now()
-        finally:
-            # Keep status entry for monitoring deletion cleanup progress
-            # The status endpoint will check for actual cleanup completion
-            # and update the message accordingly
-            pass
+            logger.error(f"Uploaded file deletion failed for {filename}: {e}")
+            
+            self._schedule_status_cleanup(filename, 10)  # 10 second delay for errors
+
+    def _schedule_status_cleanup(self, filename: str, delay_seconds: int) -> None:
+        """
+        Schedule cleanup of processing status after a delay.
+        
+        Args:
+            filename: The filename to clean up status for
+            delay_seconds: How long to wait before cleanup
+        """
+        def cleanup_status():
+            time.sleep(delay_seconds)
+            if filename in self.processing_status:
+                del self.processing_status[filename]
+                logger.info(f"Cleaned up processing status for file: {filename}")
+        
+        cleanup_thread = threading.Thread(target=cleanup_status, daemon=True)
+        cleanup_thread.start()
 
     def run(self) -> None:
         """

@@ -3,6 +3,15 @@
 # RAG Knowledge Base Manager - Start Script
 # This script starts the application with proper environment setup
 
+# Load LOG_DIR from .env file if it exists, default to "logs"
+LOG_DIR="logs"
+if [ -f ".env" ]; then
+    ENV_LOG_DIR=$(grep "^LOG_DIR=" .env 2>/dev/null | cut -d'=' -f2 | sed 's/"//g' | sed "s/'//g")
+    if [ -n "$ENV_LOG_DIR" ]; then
+        LOG_DIR="$ENV_LOG_DIR"
+    fi
+fi
+
 echo "🚀 Starting RAG Knowledge Base Manager"
 echo "The first application start can take some time as we configure the environment..."
 # Check if virtual environment exists
@@ -59,7 +68,7 @@ echo "📁 Data Directories:"
 echo "   📤 Uploads: ./uploaded/"
 echo "   🗂️  Staging: ./staging/"
 echo "   🗑️  Deleted: ./deleted/"
-echo "   📝 Logs: ./logs/"
+echo "   📝 Logs: ./$LOG_DIR/"
 echo ""
 echo "Press Ctrl+C to stop the server"
 echo ""

@@ -93,7 +93,14 @@
     if(indicator) indicator.className = `status-indicator status-${data.status}`;
     const stagingStatusArea = card.querySelector('.staging-status-area');
     const serverStatusArea = card.querySelector('.server-status-area');
+    const actionButton = card.querySelector('.action-button');
     const isStaging = !!stagingStatusArea;
+
+    // Hide/show action button based on processing status
+    if(actionButton) {
+      const isProcessing = ['processing', 'queued', 'chunking', 'embedding', 'storing'].includes(data.status);
+      actionButton.style.display = isProcessing ? 'none' : 'inline-block';
+    }
 
     if(isStaging){ 
       stagingStatusArea.style.display='block'; 
@@ -233,8 +240,12 @@
     const url=btn.getAttribute('data-url'); 
     const card=btn.closest('.file-card'); 
     const dropdown=card.querySelector('.dropdown'); 
+    const actionButton = card.querySelector('.action-button');
     const statusArea=card.querySelector('.staging-status-area'); 
     const serverStatusArea = card.querySelector('.server-status-area');
+    
+    // Hide action button immediately when processing starts
+    if(actionButton) actionButton.style.display = 'none';
     
     dropdown.innerHTML='<button class="btn btn-sm btn-outline-secondary" disabled><i class="fas fa-spinner fa-spin"></i></button>'; 
     statusArea.style.display='block'; 
@@ -273,5 +284,6 @@
   setInterval(()=>{ log('Interval tick: refreshKnowledgebaseStats'); refreshKnowledgebaseStats(); }, 10000);
   setInterval(()=>{ log('Interval tick: refreshStagingArea'); refreshStagingArea(); }, 10000);
   setInterval(()=>{ log('Interval tick: refreshUrlManagement'); refreshUrlManagement(); }, 10000);
+  setInterval(()=>{ log('Interval tick: refreshProcessedDocuments'); refreshProcessedDocuments(); }, 10000);
   });
 })();

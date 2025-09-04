@@ -3,6 +3,15 @@
 # RAG Knowledgebase Manager - Status Check Script
 # Shows the current state of the project installation
 
+# Load LOG_DIR from .env file if it exists, default to "logs"
+LOG_DIR="logs"
+if [ -f ".env" ]; then
+    ENV_LOG_DIR=$(grep "^LOG_DIR=" .env 2>/dev/null | cut -d'=' -f2 | sed 's/"//g' | sed "s/'//g")
+    if [ -n "$ENV_LOG_DIR" ]; then
+        LOG_DIR="$ENV_LOG_DIR"
+    fi
+fi
+
 echo "📊 RAG Knowledgebase Manager - Project Status"
 echo "========================================"
 echo ""
@@ -97,7 +106,7 @@ echo "📁 Project Directories:"
 check_directory "databases"
 check_directory "databases/postgres"
 check_directory "databases/milvus"
-check_directory "logs"
+check_directory "$LOG_DIR"
 check_directory "staging"
 check_directory "uploaded"
 check_directory "ingestion"

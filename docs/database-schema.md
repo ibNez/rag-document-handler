@@ -515,8 +515,8 @@ The current system uses a SIMPLE, deterministic duplicate prevention strategy at
 
 Content hashing roles:
 
-- `file_hash`: ACTUALLY ENFORCED NOW via a UNIQUE constraint on `documents.file_hash` at upload time. If a user uploads the exact same file contents under a different filename, the INSERT will raise a unique‑violation and the upload is rejected (the staging copy is removed in the error handler). We currently do the hash computation after saving the file, then attempt the insert; no pre-hash short‑circuit yet.
-- `chunk_hash`: Used to prevent duplicate chunk inserts (skips at storage layer / supports future integrity scans) but not surfaced to the user directly.
+- `file_hash`: A UNIQUE constraint on `documents.file_hash` at upload time. If a user uploads the exact same file contents under a different filename, the INSERT will raise a unique‑violation and the upload is rejected. We currently do the hash computation after saving the file, then attempt the insert; no pre-hash short‑circuit yet.
+- `chunk_hash`: Used to prevent duplicate chunk inserts but not surfaced to the user directly.
 
 Current duplicate scenarios:
 1. Same filename, same content: Blocked early by filesystem filename existence check (never reaches DB).
