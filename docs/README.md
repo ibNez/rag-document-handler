@@ -63,6 +63,6 @@ templates/
 | `./status.sh` | System health and connectivity check |
 | `./uninstall.sh --dry-run` | Preview removal (safe testing) |
 
-**Important**: Always `source .venv/bin/activate` before running any Python commands as specified in DEVELOPMENT_RULES.md.
+
 
 Each document reflects the current project state and highlights areas for future development.

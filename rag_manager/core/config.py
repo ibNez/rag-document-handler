@@ -26,7 +26,8 @@ class Config:
     # Milvus Database Configuration
     MILVUS_HOST: str = os.getenv("MILVUS_HOST", "localhost")
     MILVUS_PORT: int = int(os.getenv("MILVUS_PORT", "19530"))
-    COLLECTION_NAME: str = os.getenv("COLLECTION_NAME", "documents")
+    DOCUMENT_COLLECTION: str = os.getenv("DOCUMENT_COLLECTION", "documents")
+    EMAIL_COLLECTION: str = os.getenv("EMAIL_COLLECTION", "emails")
     VECTOR_DIM: int = int(os.getenv("VECTOR_DIM", "384"))
     
     # Flask Configuration
@@ -40,6 +41,7 @@ class Config:
     UPLOAD_FOLDER: str = os.getenv("UPLOAD_FOLDER", "staging")
     UPLOADED_FOLDER: str = os.getenv("UPLOADED_FOLDER", "uploaded")
     DELETED_FOLDER: str = os.getenv("DELETED_FOLDER", "deleted")
+    LOG_DIR: str = os.getenv("LOG_DIR", "logs")
     ALLOWED_EXTENSIONS: Set[str] = field(default_factory=lambda: {"txt", "pdf", "docx", "doc", "md"})
     
     # Embedding Model Configuration

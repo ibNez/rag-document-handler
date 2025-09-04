@@ -108,7 +108,7 @@ class PostgreSQLURLManager:
                     cursor.execute(
                         """INSERT INTO urls (url, title, description, status, refresh_interval_minutes, crawl_domain, ignore_robots, snapshot_retention_days, snapshot_max_snapshots, parent_url_id)
                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id""",
-                        (url, title, description, 'active', 1440, False, ignore_robots, 0, 0, parent_url_id)
+                        (url, title, description, 'active', 1440, False, ignore_robots, 1, 1, parent_url_id)
                     )
                     url_id = cursor.fetchone()['id']
                     conn.commit()
@@ -119,12 +119,7 @@ class PostgreSQLURLManager:
                 return {"success": False, "message": "URL already exists"}
             logger.error(f"Error adding URL: {str(e)}")
             return {"success": False, "message": f"Database error: {str(e)}"}
-        except Exception as e:
-            if "duplicate key" in str(e).lower():
-                return {"success": False, "message": "URL already exists"}
-            logger.error(f"Error adding URL: {str(e)}")
-            return {"success": False, "message": f"Database error: {str(e)}"}
-    
+
     def get_all_urls(self) -> List[Dict[str, Any]]:
         """Retrieve all parent URLs from the database (excludes auto-discovered child URLs)."""
         try:

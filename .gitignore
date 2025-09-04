@@ -55,6 +55,11 @@ Thumbs.db
 staging/
 uploaded/
 deleted/
+snapshots/
+snapshots/*
+snapshots/*/*
+snapshots/*/*/*
+snapshots/*/*/*/*
 
 # Backup folder (ignore completely)
 backup/

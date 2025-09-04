@@ -44,12 +44,12 @@
                         <div class="row mt-2">
                             <div class="col-md-6 mb-2">
                                 <label class="form-label">Retention (days)</label>
-                                <input type="number" class="form-control" name="snapshot_retention_days" min="0" step="1" value="{{ url.snapshot_retention_days if url.snapshot_retention_days is not none else '0' }}" placeholder="0 = Unlimited">
+                                <input type="number" class="form-control" name="snapshot_retention_days" min="0" step="1" value="{{ url.snapshot_retention_days if url.snapshot_retention_days is not none else '1' }}" placeholder="1 = Default">
                                 <div class="form-text">Set to 0 for unlimited days.</div>
                             </div>
                             <div class="col-md-6 mb-2">
                                 <label class="form-label">Max snapshots</label>
-                                <input type="number" class="form-control" name="snapshot_max_snapshots" min="0" step="1" value="{{ url.snapshot_max_snapshots if url.snapshot_max_snapshots is not none else '0' }}" placeholder="0 = Unlimited">
+                                <input type="number" class="form-control" name="snapshot_max_snapshots" min="0" step="1" value="{{ url.snapshot_max_snapshots if url.snapshot_max_snapshots is not none else '1' }}" placeholder="1 = Default">
                                 <div class="form-text">Set to 0 for unlimited copies.</div>
                             </div>
                         </div>

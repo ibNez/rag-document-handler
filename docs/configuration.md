@@ -30,7 +30,7 @@ This document provides comprehensive information about all configuration variabl
 |----------|-------------|---------|----------|---------|
 | `MILVUS_HOST` | Milvus server hostname | `localhost` | No | `milvus.example.com` |
 | `MILVUS_PORT` | Milvus server port | `19530` | No | `19531` |
-| `COLLECTION_NAME` | Milvus collection name | `documents` | No | `knowledge_base` |
+| `DOCUMENT_COLLECTION` | Milvus collection name | `documents` | No | `knowledge_base` |
 | `VECTOR_DIM` | Embedding vector dimension | `384` | No | `768` |
 
 ### Email Processing Configuration
@@ -81,7 +81,7 @@ This document provides comprehensive information about all configuration variabl
 | `EMAIL_ENABLED` | Enable email processing features | `false` | No | `true` |
 | `EMAIL_SYNC_INTERVAL_SECONDS` | Interval between email synchronizations | `300` | No | `600` (10 minutes) |
 | `EMAIL_BATCH_LIMIT` | Maximum emails to process per batch | `100` | No | `50` |
-| `EMAIL_CORRUPTION_DETECTION` | Enable enhanced corruption detection | `true` | No | `false` |
+| `EMAIL_CORRUPTION_DETECTION` | Enable corruption detection | `true` | No | `false` |
 | `EMAIL_OFFSET_TRACKING` | Enable offset-aware processing | `true` | No | `false` |
 
 **Email Configuration Details:**
@@ -92,7 +92,7 @@ This document provides comprehensive information about all configuration variabl
 
 - **EMAIL_BATCH_LIMIT**: Limits the number of emails processed in a single batch to prevent memory issues with large mailboxes. Adjust based on available memory and email sizes.
 
-- **EMAIL_CORRUPTION_DETECTION**: Enables enhanced validation of email messages including Message-ID header validation and structure checks. Recommended for production use.
+- **EMAIL_CORRUPTION_DETECTION**: Enables validation of email messages including Message-ID header validation and structure checks. Recommended for production use.
 
 - **EMAIL_OFFSET_TRACKING**: Enables smart offset tracking to resume processing from the last successful position after interruptions.
 
@@ -289,7 +289,7 @@ Solution: Check MAX_CONTENT_LENGTH and UPLOAD_FOLDER permissions
 1. **Environment Variables**: Use `.env` files for local development, proper environment management for production
 2. **Security**: Never commit sensitive values to version control
 3. **Validation**: Test configuration changes in development before production deployment
-4. **Documentation**: Keep this configuration documentation updated with any new variables
+4. **Documentation**: Keep this configuration documentation current with any variables
 5. **Backup**: Document your production configuration for disaster recovery
 
 ## Related Documentation

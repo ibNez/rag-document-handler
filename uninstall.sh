@@ -3,6 +3,15 @@
 # RAG Knowledge Base Manager - Uninstall Script
 # This script completely removes the installation and cleans up all resources
 
+# Load LOG_DIR from .env file if it exists, default to "logs"
+LOG_DIR="logs"
+if [ -f ".env" ]; then
+    ENV_LOG_DIR=$(grep "^LOG_DIR=" .env 2>/dev/null | cut -d'=' -f2 | sed 's/"//g' | sed "s/'//g")
+    if [ -n "$ENV_LOG_DIR" ]; then
+        LOG_DIR="$ENV_LOG_DIR"
+    fi
+fi
+
 # Show help
 show_help() {
     echo "🗑️  RAG Knowledge Base Manager - Uninstall Script"
@@ -242,6 +251,7 @@ echo "✅ Database files removed"
 # Step 4: Remove log files and directories
 echo ""
 echo "📋 Removing log files..."
+safe_remove_dir "$LOG_DIR"
 safe_remove_dir "logs"
 safe_remove_file "rag_document_handler.log"
 safe_remove_file "*.log"
@@ -344,6 +354,7 @@ echo "🔍 Verifying cleanup..."
 # Check for any remaining project files
 remaining_files=()
 if [ -d "databases" ]; then remaining_files+=("databases/"); fi
+if [ -d "$LOG_DIR" ]; then remaining_files+=("$LOG_DIR/"); fi
 if [ -d "logs" ]; then remaining_files+=("logs/"); fi
 if [ -d ".venv" ]; then remaining_files+=(".venv/"); fi
 if [ -d "staging" ]; then remaining_files+=("staging/"); fi

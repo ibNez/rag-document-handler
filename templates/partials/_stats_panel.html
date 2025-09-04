@@ -4,10 +4,10 @@
         <div class="card bg-primary text-white">
             <div class="card-body">
                 <!-- Metrics styles moved to static/style.css -->
-                <div class="row g-3">
-                    <div class="col-12 col-lg-6">
-                        <div class="kb-section-title">Connections</div>
-                        <div class="metric-grid">
+                
+                <!-- Connections Section -->
+                <div class="kb-section-title">Connections</div>
+                <div class="metric-grid mb-4">
                             <div class="metric-tile">
                                 <div class="metric-label">SQL</div>
                                 <div class="metric-value">
@@ -27,16 +27,6 @@
                                 {% if milvus_status and milvus_status.connected and milvus_status.version %}
                                     <div class="metric-sub">v{{ milvus_status.version }}</div>
                                 {% endif %}
-                            </div>
-                            <div class="metric-tile">
-                                <div class="metric-label">Collection</div>
-                                <div class="metric-value">{{ collection_stats.name }}</div>
-                                <div class="metric-sub">{{ collection_stats.num_entities or 0 }} entities</div>
-                            </div>
-                            <div class="metric-tile">
-                                <div class="metric-label">Collection</div>
-                                <div class="metric-value">{{ email_collection_stats.name if email_collection_stats else 'emails' }}</div>
-                                <div class="metric-sub">{{ email_collection_stats.num_entities if email_collection_stats else (email_meta.total_emails or 0) }} entities</div>
                             </div>
                             <div class="metric-tile">
                                 <div class="metric-label">Ollama Chat</div>
@@ -75,16 +65,15 @@
                                 {% endif %}
                             </div>
                         </div>
-                    </div>
-                    <div class="col-12 col-lg-6">
-                        <div class="kb-section-title">Documents</div>
-                        <div class="metric-grid">
+                        
+                <!-- Documents Section -->
+                <div class="kb-section-title">Documents</div>
+                <div class="metric-grid mb-4">
                             <div class="metric-tile"><div class="metric-label">Total Docs</div><div class="metric-value">{{ kb_meta.documents_total }}</div></div>
+                            <div class="metric-tile"><div class="metric-label">Collection</div><div class="metric-value">{{ collection_stats.name }}</div><div class="metric-sub">{{ collection_stats.num_entities or 0 }} entities</div></div>
                             <div class="metric-tile"><div class="metric-label">Avg Words/Doc</div><div class="metric-value">{{ kb_meta.avg_words_per_doc }}</div></div>
                             <div class="metric-tile"><div class="metric-label">Avg Chunks/Doc</div><div class="metric-value">{{ kb_meta.avg_chunks_per_doc }}</div></div>
                             <div class="metric-tile"><div class="metric-label">Median Chunk Chars</div><div class="metric-value">{{ kb_meta.median_chunk_chars }}</div></div>
-                            <div class="metric-tile"><div class="metric-label">Embedding Dim</div><div class="metric-value">{{ collection_stats.dim or (config.VECTOR_DIM if config else '') }}</div></div>
-                            <div class="metric-tile"><div class="metric-label">Index</div><div class="metric-value">{{ 'Yes' if collection_stats.indexed else 'No' }}</div><div class="metric-sub">Metric {{ collection_stats.metric_type or 'cosine' }}</div></div>
                         </div>
                         {% if kb_meta.top_keywords %}
                         <div class="kb-section-title mt-3">Top Keywords</div>
@@ -94,45 +83,167 @@
                             {% endfor %}
                         </div>
                         {% endif %}
-                    </div>
-                    <div class="col-12 col-lg-6">
-                        <div class="kb-section-title">URLs</div>
-                        <div class="metric-grid">
+                        
+                <!-- URLs Section -->
+                <div class="kb-section-title">URLs</div>
+                <div class="metric-grid mb-4">
                             <div class="metric-tile"><div class="metric-label">Total URLs</div><div class="metric-value">{{ url_meta.total or 0 }}</div></div>
                             <div class="metric-tile"><div class="metric-label">Sub-URLs</div><div class="metric-value">{{ url_meta.sub_urls or 0 }}</div></div>
                             <div class="metric-tile"><div class="metric-label">Crawl Domain On</div><div class="metric-value">{{ url_meta.crawl_on or 0 }}</div></div>
-                            <div class="metric-tile"><div class="metric-label">Robots Ignored</div><div class="metric-value">{{ url_meta.robots_ignored or 0 }}</div></div>
-                            <div class="metric-tile"><div class="metric-label">Scraped</div><div class="metric-value">{{ url_meta.scraped or 0 }}</div></div>
-                            <div class="metric-tile"><div class="metric-label">Due Now</div><div class="metric-value">{{ url_meta.due_now or 0 }}</div></div>
+                            <div class="metric-tile status-{{ url_meta.robots_ignored_status or 'success' }}">
+                                <div class="metric-label">Robots Ignored</div>
+                                <div class="metric-value">{{ url_meta.robots_ignored or 0 }}</div>
+                                {% if url_meta.robots_ignored_status == 'warning' or url_meta.robots_ignored_status == 'critical' %}
+                                <div class="metric-sub">High risk surface</div>
+                                {% endif %}
+                            </div>
+                            <div class="metric-tile status-{{ url_meta.due_now_status or 'success' }}">
+                                <div class="metric-label">Due Now</div>
+                                <div class="metric-value">{{ url_meta.due_now or 0 }}</div>
+                                {% if url_meta.due_now_status == 'warning' %}
+                                <div class="metric-sub">Backlog forming</div>
+                                {% elif url_meta.due_now_status == 'critical' %}
+                                <div class="metric-sub">Critical backlog</div>
+                                {% endif %}
+                            </div>
                         </div>
-                    </div>
-                    <div class="col-12 col-lg-6">
-                        <div class="kb-section-title">Emails</div>
-                        <div class="metric-grid">
-                            <div class="metric-tile"><div class="metric-label">Total Accounts</div><div class="metric-value">{{ email_meta.total_accounts or 0 }}</div></div>
-                            <div class="metric-tile"><div class="metric-label">Due Now</div><div class="metric-value">{{ email_meta.due_now or 0 }}</div></div>
-                            <div class="metric-tile"><div class="metric-label">Never Synced</div><div class="metric-value">{{ email_meta.never_synced or 0 }}</div></div>
+                        
+                <!-- Emails Section -->
+                <div class="kb-section-title">Emails</div>
+                <div class="metric-grid mb-4">
                             <div class="metric-tile"><div class="metric-label">Total Emails</div><div class="metric-value">{{ email_meta.total_emails or 0 }}</div></div>
+                            <div class="metric-tile"><div class="metric-label">Collection</div><div class="metric-value">{{ email_collection_stats.name if email_collection_stats else 'emails' }}</div><div class="metric-sub">{{ email_collection_stats.num_entities if email_collection_stats else (email_meta.total_emails or 0) }} entities</div></div>
+                            <div class="metric-tile"><div class="metric-label">Total Accounts</div><div class="metric-value">{{ email_meta.total_accounts or 0 }}</div></div>
+                            <div class="metric-tile status-{{ email_meta.due_now_status or 'success' }}">
+                                <div class="metric-label">Due Now</div>
+                                <div class="metric-value">{{ email_meta.due_now or 0 }}</div>
+                                {% if email_meta.due_now_status == 'warning' %}
+                                <div class="metric-sub">Sync backlog</div>
+                                {% elif email_meta.due_now_status == 'critical' %}
+                                <div class="metric-sub">Critical sync delay</div>
+                                {% endif %}
+                            </div>
+                            <div class="metric-tile status-{{ email_meta.never_synced_status or 'success' }}">
+                                <div class="metric-label">Never Synced</div>
+                                <div class="metric-value">{{ email_meta.never_synced or 0 }}</div>
+                                {% if email_meta.never_synced_status == 'warning' or email_meta.never_synced_status == 'critical' %}
+                                <div class="metric-sub">Check config</div>
+                                {% endif %}
+                            </div>
                             <div class="metric-tile"><div class="metric-label">With Attachments</div><div class="metric-value">{{ email_meta.emails_with_attachments or 0 }}</div></div>
-                            <div class="metric-tile"><div class="metric-label">Embedding Dim</div><div class="metric-value">{{ email_collection_stats.dim if email_collection_stats else '' }}</div></div>
-                            <div class="metric-tile"><div class="metric-label">Index</div><div class="metric-value">{{ 'Yes' if email_collection_stats and email_collection_stats.indexed else 'No' }}</div><div class="metric-sub">Metric {{ email_collection_stats.metric_type if email_collection_stats and email_collection_stats.metric_type else 'cosine' }}</div></div>
                             {% if email_meta.avg_emails_per_account > 0 %}
                             <div class="metric-tile"><div class="metric-label">Avg per Account</div><div class="metric-value">{{ email_meta.avg_emails_per_account }}</div></div>
                             {% endif %}
+                            <!-- Email Ingestion Monitoring -->
+                            <div class="metric-tile 
+                                {% if system_meta.email_backlog.status == 'has_backlog' %}
+                                    {% if system_meta.email_backlog.severe > 0 %}status-critical
+                                    {% elif system_meta.email_backlog.moderate > 0 %}status-warning
+                                    {% else %}status-info{% endif %}
+                                {% else %}status-success{% endif %}">
+                                <div class="metric-label">Accounts Backlogged</div>
+                                <div class="metric-value">{{ system_meta.email_backlog.total_backlogged or 0 }}</div>
+                                {% if system_meta.email_backlog.total_backlogged > 0 %}
+                                <div class="metric-sub">
+                                    {% if system_meta.email_backlog.severe > 0 %}{{ system_meta.email_backlog.severe }} severe{% endif %}
+                                    {% if system_meta.email_backlog.moderate > 0 %}{% if system_meta.email_backlog.severe > 0 %}, {% endif %}{{ system_meta.email_backlog.moderate }} moderate{% endif %}
+                                    {% if system_meta.email_backlog.light > 0 %}{% if system_meta.email_backlog.severe > 0 or system_meta.email_backlog.moderate > 0 %}, {% endif %}{{ system_meta.email_backlog.light }} light{% endif %}
+                                </div>
+                                {% endif %}
+                            </div>
+                            <div class="metric-tile 
+                                {% if system_meta.email_ingest_age.age_category == 'current' or system_meta.email_ingest_age.age_category == 'fresh' %}status-success
+                                {% elif system_meta.email_ingest_age.age_category == 'moderate' %}status-info
+                                {% elif system_meta.email_ingest_age.age_category == 'stale' %}status-warning
+                                {% elif system_meta.email_ingest_age.age_category == 'critical' %}status-critical
+                                {% else %}{% endif %}">
+                                <div class="metric-label">Last Ingest Age</div>
+                                <div class="metric-value">
+                                    {% if system_meta.email_ingest_age.oldest_age_days == 9999 %}Never
+                                    {% elif system_meta.email_ingest_age.oldest_age_days == 0 %}Current
+                                    {% elif system_meta.email_ingest_age.oldest_age_days < 1 %}{{ "%.1f"|format(system_meta.email_ingest_age.oldest_age_days * 24) }}h
+                                    {% else %}{{ "%.1f"|format(system_meta.email_ingest_age.oldest_age_days) }}d{% endif %}
+                                </div>
+                                {% if system_meta.email_ingest_age.oldest_account and system_meta.email_ingest_age.oldest_age_days > 0 %}
+                                <div class="metric-sub">{{ system_meta.email_ingest_age.oldest_account }}</div>
+                                {% endif %}
+                            </div>
                         </div>
-                        {% if email_meta.most_active_account %}
-                        <div class="kb-section-title mt-3">Most Active Account</div>
-                        <div class="keywords-wrap">
-                            <span class="keyword-pill">{{ email_meta.most_active_account }}</span>
-                        </div>
-                        {% endif %}
                         {% if email_meta.latest_email_date %}
                         <div class="kb-section-title mt-3">Latest Email</div>
                         <div class="metric-sub"><span class="dt-local" data-utc="{{ email_meta.latest_email_date or '' }}">{{ email_meta.latest_email_date or '—' }}</span></div>
                         {% endif %}
-                    </div>
-                </div>
+                        
+                <!-- CAPACITY Section -->
+                <div class="kb-section-title">CAPACITY</div>
+                <div class="metric-grid mb-4">
+                            <div class="metric-tile">
+                                <div class="metric-label">Total Usage</div>
+                                <div class="metric-value">{{ system_meta.total_usage.human }}</div>
+                                {% if system_meta.total_usage.bytes > 0 %}
+                                    <div class="metric-sub">{{ "{:,}".format(system_meta.total_usage.bytes) }} bytes</div>
+                                {% endif %}
+                            </div>
+                            <div class="metric-tile status-{{ system_meta.thresholds.disk_free_status or 'success' }}">
+                                <div class="metric-label">Disk Free</div>
+                                <div class="metric-value">
+                                    <span class="status-dot {{ 'dot-bad' if system_meta.thresholds.disk_free_status == 'critical' else ('dot-warning' if system_meta.thresholds.disk_free_status == 'warning' else 'dot-ok') }}"></span>
+                                    {{ system_meta.disk_usage.disk_capacity.free_human }}
+                                </div>
+                                <div class="metric-sub">{{ system_meta.thresholds.disk_free_percentage or system_meta.disk_usage.disk_capacity.free_percent }}% free</div>
+                            </div>
+                            <div class="metric-tile">
+                                <div class="metric-label">PostgreSQL DB</div>
+                                <div class="metric-value">{{ system_meta.database_size.postgres_total.human }}</div>
+                                {% if system_meta.database_size.postgres_total.bytes > 0 %}
+                                    <div class="metric-sub">{{ "{:,}".format(system_meta.database_size.postgres_total.bytes) }} bytes</div>
+                                {% endif %}
+                            </div>
+                            <div class="metric-tile">
+                                <div class="metric-label">Milvus (est.)</div>
+                                <div class="metric-value">{{ system_meta.database_size.milvus_estimate.human }}</div>
+                                {% if system_meta.database_size.milvus_estimate.bytes > 0 %}
+                                    <div class="metric-sub">{{ "{:,}".format(system_meta.database_size.milvus_estimate.bytes) }} bytes</div>
+                                {% endif %}
+                            </div>
+                            <div class="metric-tile">
+                                <div class="metric-label">Logs</div>
+                                <div class="metric-value">{{ system_meta.disk_usage.logs_size.human if system_meta.disk_usage.logs_size.exists else 'N/A' }}</div>
+                                {% if system_meta.disk_usage.logs_size.exists %}
+                                    <div class="metric-sub">{{ "{:,}".format(system_meta.disk_usage.logs_size.bytes) }} bytes</div>
+                                {% endif %}
+                            </div>
+                            <div class="metric-tile">
+                                <div class="metric-label">Staging</div>
+                                <div class="metric-value">{{ system_meta.disk_usage.staging_size.human if system_meta.disk_usage.staging_size.exists else 'N/A' }}</div>
+                                {% if system_meta.disk_usage.staging_size.exists %}
+                                    <div class="metric-sub">{{ "{:,}".format(system_meta.disk_usage.staging_size.bytes) }} bytes</div>
+                                {% endif %}
+                            </div>
+                            <div class="metric-tile">
+                                <div class="metric-label">Uploaded</div>
+                                <div class="metric-value">{{ system_meta.disk_usage.uploaded_size.human if system_meta.disk_usage.uploaded_size.exists else 'N/A' }}</div>
+                                {% if system_meta.disk_usage.uploaded_size.exists %}
+                                    <div class="metric-sub">{{ "{:,}".format(system_meta.disk_usage.uploaded_size.bytes) }} bytes</div>
+                                {% endif %}
+                            </div>
+                            <div class="metric-tile">
+                                <div class="metric-label">Deleted Archive</div>
+                                <div class="metric-value">{{ system_meta.disk_usage.deleted_size.human if system_meta.disk_usage.deleted_size.exists else 'N/A' }}</div>
+                                {% if system_meta.disk_usage.deleted_size.exists %}
+                                    <div class="metric-sub">{{ "{:,}".format(system_meta.disk_usage.deleted_size.bytes) }} bytes</div>
+                                {% endif %}
+                            </div>
+                            <div class="metric-tile">
+                                <div class="metric-label">Snapshots</div>
+                                <div class="metric-value">{{ system_meta.disk_usage.snapshots_size.human if system_meta.disk_usage.snapshots_size.exists else 'N/A' }}</div>
+                                {% if system_meta.disk_usage.snapshots_size.exists %}
+                                    <div class="metric-sub">{{ "{:,}".format(system_meta.disk_usage.snapshots_size.bytes) }} bytes</div>
+                                {% endif %}
+                            </div>
+                        </div>
             </div>
         </div>
     </div>
 </div>
+

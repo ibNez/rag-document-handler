@@ -212,7 +212,7 @@ For detailed usage instructions, workflows, and troubleshooting, see the [Usage 
 **Dual-Database Design:**
 - **PostgreSQL**: Metadata, documents, URLs, email accounts
 - **Milvus**: Vector embeddings for semantic search
-- **File System**: staging/, uploaded/, logs/
+- **File System**: staging/, uploaded/, logs/ (configurable via LOG_DIR)
 
 For complete schema details, see the [Database Schema Documentation](docs/database-schema.md).
 

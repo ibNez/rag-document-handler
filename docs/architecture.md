@@ -2,9 +2,9 @@
 
 The RAG Knowledgebase Manager uses a dual database architecture with Flask web application, PostgreSQL for metadata, and Milvus for vector embeddings. The codebase has been refactored to follow Python development best practices with proper module organization and separation of concerns.
 
-## Enhanced RAG Pipeline with Email Classification
+## RAG Pipeline with Email Classification
 
-The system now features an advanced query classification pipeline that automatically determines whether user queries are about emails or general documents/URLs, enabling specialized handling for different content types.
+The system features an advanced query classification pipeline that automatically determines whether user queries are about emails or general documents/URLs, enabling specialized handling for different content types.
 
 ### Query Classification Flow
 
@@ -19,17 +19,17 @@ The system now features an advanced query classification pipeline that automatic
 
 ### Email Classification Configuration
 
-New environment variables support the classification system:
+Environment variables support the classification system:
 
 - `CLASSIFICATION_MODEL`: LLM model used for query intent classification (e.g., "llama3.2:3b")
 - `OLLAMA_CLASSIFICATION_HOST`: Host for the classification Ollama service
 - `OLLAMA_PORT`: Port for Ollama services
 
-## Enhanced Email Processing Pipeline
+## Email Processing Pipeline
 
-The email processing system has been significantly enhanced with robust error handling, corruption detection, and real-time monitoring capabilities.
+The email processing system provides robust error handling, corruption detection, and real-time monitoring capabilities.
 
-### Enhanced Architecture Components
+### Architecture Components
 
 #### Corruption Detection & Validation
 - **Message-ID Validation**: All emails must have valid Message-ID headers (no fallback generation)
@@ -37,10 +37,10 @@ The email processing system has been significantly enhanced with robust error ha
 - **Offset-Aware Logging**: Reports exact positions where corrupted emails are found
 - **Fail-Fast Approach**: Stops processing corrupted emails without hidden fallbacks
 
-#### Enhanced Error Handling
+#### Error Handling
 ```python
 def _parse_email_with_offset(self, msg_data, offset):
-    """Enhanced email parsing with corruption detection and offset logging."""
+    """Email parsing with corruption detection and offset logging."""
     try:
         email_msg = email.message_from_bytes(msg_data)
         
@@ -60,11 +60,11 @@ def _parse_email_with_offset(self, msg_data, offset):
 #### Real-Time Dashboard Monitoring
 - **Auto-Refresh System**: All dashboard panels refresh every 10 seconds
 - **Fresh Data API**: Edit modals fetch current database values via AJAX
-- **Live Statistics**: Email counts and processing status updated in real-time
+- **Real-Time Statistics**: Email counts and processing status updated in real-time
 - **Error Visibility**: Processing errors immediately visible in dashboard
 - **Offset Management**: Manual offset reset capability through web interface
 
-### Enhanced UI Architecture
+### UI Architecture
 
 #### JavaScript Auto-Refresh System
 ```javascript
@@ -87,7 +87,7 @@ function initializeAutoRefresh() {
 
 ## Code Structure
 
-The application has been reorganized into logical modules following Python best practices with enhanced template organization:
+The application is organized into logical modules following Python best practices with modular template organization:
 
 ```
 rag_manager/
@@ -139,7 +139,7 @@ ingestion/
 │   ├── processor.py               # Email content processing and embedding
 │   ├── orchestrator.py            # Email processing coordination with offset tracking
 │   └── connectors/                # Protocol-specific email retrieval
-│       ├── imap_connector.py      # Enhanced IMAP with corruption detection
+│       ├── imap_connector.py      # IMAP with corruption detection
 │       ├── gmail_connector.py     # Gmail API integration
 │       └── exchange_connector.py  # Exchange server integration
 ├── url/                           # URL crawling and content processing
@@ -147,7 +147,7 @@ ingestion/
 └── utils/                         # Shared utilities (crypto, scheduling)
 ```
 
-## Enhanced Email Processing Architecture
+## Email Processing Architecture
 
 ### Email Component Responsibilities
 
@@ -155,7 +155,7 @@ ingestion/
 |-----------|---------|--------------|
 | `manager.py` | Account credentials and configuration management | Fresh data fetching for UI, encrypted storage |
 | `email_manager_postgresql.py` | Email message metadata storage | Accurate statistics with DISTINCT counts |
-| `processor.py` | Content extraction, chunking, and embedding | Enhanced validation and error handling |
+| `processor.py` | Content extraction, chunking, and embedding | Validation and error handling |
 | `orchestrator.py` | Coordinates processing pipeline | Offset-aware batch processing |
 | `connectors/` | Protocol-specific email retrieval | Corrupted email detection and validation |
 
@@ -169,12 +169,12 @@ ingestion/
 - **Real-time Updates**: Fresh data fetching for edit operations via `/email_accounts` API
 
 #### 2. Protocol-Specific Connectors (`connectors/`)
-- **IMAP Support**: Enhanced IMAP with SSL/TLS, corruption detection, batch processing
+- **IMAP Support**: IMAP with SSL/TLS, corruption detection, batch processing
 - **Gmail API**: OAuth-based authentication, readonly scope, token management
 - **Exchange Integration**: EWS-based connector with modern authentication support
 - **Error Handling**: Fail-fast approach with detailed logging and offset tracking
 
-#### 3. Enhanced Content Processing (`processor.py`)
+#### 3. Content Processing (`processor.py`)
 - **Message Validation**: Validates Message-ID headers and email structure
 - **Content Extraction**: HTML and plain text processing with attachment handling
 - **Chunking Strategy**: Intelligent text chunking optimized for email content
@@ -189,14 +189,14 @@ The system features an advanced hybrid retrieval approach integrated into the ma
 - **Hybrid Retrievers**: Combines vector similarity and PostgreSQL full-text search
 - **RRF Fusion**: Uses Reciprocal Rank Fusion to combine search results
 - **Smart Fallback**: Graceful degradation to vector-only search if needed
-- **Rich Metadata**: Enhanced search results with retrieval method information
+- **Rich Metadata**: Search results with retrieval method information
 
 #### Search Method Priority
 1. **Hybrid Retrieval**: Vector + PostgreSQL FTS with RRF fusion (primary)
 2. **Vector-Only Fallback**: Pure similarity search (backup)
 3. **Error Handling**: Comprehensive logging and graceful degradation
 
-#### Enhanced Search Results
+#### Search Results
 ```python
 {
     "retrieval_method": "hybrid",
@@ -232,9 +232,9 @@ snapshots/
 - **Variant Tokens**: Render settings (format, viewport, locale)
 - **Content Hash**: 8-character hash for deduplication
 
-## Enhanced Statistics Architecture
+## Statistics Architecture
 
-The application now features a panel-specific statistics architecture that provides better organization and maintainability:
+The application features a panel-specific statistics architecture with **threshold-based monitoring** that provides better organization and maintainability:
 
 ### Statistics Coordinator (`web/stats.py`)
 The main `StatsProvider` class acts as a coordinator that delegates to individual panel providers:
@@ -245,19 +245,37 @@ The main `StatsProvider` class acts as a coordinator that delegates to individua
 
 ### Individual Panel Statistics Providers
 
+**System Panel Statistics (`web/panels/system_panel.py`):**
+- Connection status monitoring (SQL, Milvus, Ollama)
+- Processing queue tracking with threshold alerts
+- Email ingestion monitoring (accounts backlogged, last ingest age)
+- Comprehensive capacity monitoring with disk usage thresholds
+- Automatic color coding based on operational thresholds
+
 **Email Panel Statistics (`web/panels/email_panel.py`):**
 - Email account metrics and sync status
 - Attachment counts and processing statistics
-- Most active account identification
-- Due-for-sync calculations with proper interval handling
+- Due-for-sync calculations with threshold-based alerts
+- Never-synced account warnings
 
 **URL Panel Statistics (`web/panels/url_panel.py`):**
 - URL scraping counts and status tracking
-- Due date calculations with refresh intervals
-- Robots.txt compliance and crawl settings
+- Due date calculations with backlog severity alerts
+- Robots.txt compliance monitoring with risk assessment
 - Snapshot management statistics
 
-## Enhanced URL Management System
+### Threshold-Based Color Coding
+All panels implement consistent threshold monitoring:
+- **Success (Green)**: Normal operation within acceptable ranges
+- **Warning (Yellow)**: Approaching threshold limits requiring attention
+- **Critical (Red)**: Threshold exceeded, immediate action required
+
+Common thresholds include:
+- Disk free space: Warning <25%, Critical <15%
+- URL due backlog: Warning >10, Critical >50
+- Email account delays: Warning >2, Critical >5
+
+## URL Management System
 
 ### Parent-Child URL Relationships and Progress Tracking
 
@@ -273,7 +291,7 @@ The URL management system now features sophisticated parent-child relationship t
 **Scheduling Protection:**
 - Parent URLs cannot be re-scheduled while children are still processing
 - `is_refreshing` flag prevents overlapping crawl sessions
-- SQL query enhanced with child processing status check:
+- SQL query with child processing status check:
   ```sql
   AND NOT EXISTS (
       SELECT 1 FROM urls child_urls 
@@ -282,7 +300,7 @@ The URL management system now features sophisticated parent-child relationship t
   )
   ```
 
-**Enhanced Progress Visualization:**
+**Progress Visualization:**
 - **Child Statistics**: Real-time tracking of total, processing, completed, and failed child URLs
 - **Progress Bars**: Visual indicators showing completion percentage for parent URLs
 - **Status Badges**: Dynamic status display based on child processing state
@@ -343,7 +361,7 @@ def get_child_url_stats(self, parent_url_id: str) -> Dict[str, Any]:
 
 **Core Layout Partials:**
 - `_head.html`: Document metadata, stylesheets, and external resources
-- `_navbar.html`: Main navigation bar with responsive design
+- `_navbar.html`: Navigation bar that remains visible during scrolling with responsive design
 - `_scripts.html`: JavaScript libraries and application scripts
 
 **Content Partials:**
@@ -1076,7 +1094,7 @@ Email content is mapped to the unified Milvus document schema as follows:
 - **`EMAIL_ENCRYPTION_KEY`**: Fernet key for encrypting stored email passwords
 - **`MILVUS_HOST/PORT`**: Vector database connection settings
 - **`POSTGRES_HOST/PORT/DB/USER/PASSWORD`**: Relational database connection
-- **`COLLECTION_NAME`**: Milvus collection name (default: "documents")
+- **`DOCUMENT_COLLECTION`**: Milvus collection name (default: "documents")
 - **`VECTOR_DIM`**: Embedding dimension (384 for mxbai-embed-large)
 
 ## Development Architecture
@@ -1160,7 +1178,7 @@ Email content is mapped to the unified Milvus document schema as follows:
 ## Future Enhancements
 
 ### Performance and Scaling
-- [ ] Add Milvus clustering support for large datasets
+- [ ] Add Milvus clustering support for large datasets (Branch, Milvus not ARM friendly)
 - [ ] Optimize PostgreSQL queries with proper indexing
 - [ ] Add connection pooling for database connections
 
@@ -1177,11 +1195,8 @@ Email content is mapped to the unified Milvus document schema as follows:
 - [ ] Add Milvus authentication and authorization
 - [ ] Implement audit logging for sensitive operations
 - [ ] Add role-based access control for web interface
-- [ ] Rotate encryption keys automatically
 
 ### Feature Additions
 - [ ] Support for additional email providers (Exchange, Office365)
 - [ ] Document versioning and change tracking
-- [ ] Advanced search filters and faceted search
 - [ ] Email attachment processing and indexing
-- [ ] Automated content classification and tagging

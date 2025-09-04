@@ -2,8 +2,9 @@
 <div class="row mb-4">
     <div class="col-md-12">
         <div class="card">
-            <div class="card-header">
+            <div class="card-header d-flex justify-content-between align-items-center">
                 <h5 class="mb-0"><i class="fas fa-clock me-2"></i>Document Upload & Staging</h5>
+                <span class="badge bg-secondary">{{ all_staging_files|length }} files</span>
             </div>
             <div class="card-body">
                 <!-- Upload Form - Static, not refreshed -->
@@ -29,10 +30,7 @@
                 
                 <!-- Staging Files Area - Dynamic, gets refreshed -->
                 <div id="staging-files-area">
-                    <div class="d-flex justify-content-between align-items-center mb-3">
-                        <h6 class="mb-0"><i class="fas fa-file-alt me-2"></i>Files in Staging</h6>
-                        <span class="badge bg-secondary">{{ staging_files|length }} files</span>
-                    </div>
+                    <h6 class="mb-3"><i class="fas fa-file-alt me-2"></i>Files in Staging</h6>
                     {% if staging_files %}
                         <div class="row">
                         {% for file in staging_files %}
@@ -47,8 +45,11 @@
                                                 {{ file.name }}
                                             </h6>
                                             <div class="dropdown">
-                                                <button class="btn btn-sm btn-outline-secondary dropdown-toggle" 
-                                                        type="button" data-bs-toggle="dropdown">
+                                                <!-- Hide action button when file is being processed -->
+                                                <button class="btn btn-sm btn-outline-secondary dropdown-toggle action-button" 
+                                                        type="button" data-bs-toggle="dropdown"
+                                                        data-filename="{{ file.name }}"
+                                                        {% if file.status and file.status.status in ['processing', 'queued', 'chunking', 'embedding', 'storing'] %}style="display: none;"{% endif %}>
                                                     <i class="fas fa-ellipsis-v"></i>
                                                 </button>
                                                 <ul class="dropdown-menu">
