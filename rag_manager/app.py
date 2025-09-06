@@ -199,17 +199,17 @@ class RAGKnowledgebaseManager:
 
     def _initialize_url_manager(self) -> None:
         """Initialize URL manager based on feature flags."""
-        logger.info("Initializing PostgreSQL URL Manager")
+        logger.info("Initializing URL Source Manager")
         try:
-            from ingestion.url.manager import PostgreSQLURLManager
+            from ingestion.url.source_manager import URLSourceManager
             if self.postgres_manager:
-                self.url_manager = PostgreSQLURLManager(self.postgres_manager)
-                logger.info("PostgreSQL URL Manager initialized successfully")
+                self.url_manager = URLSourceManager(self.postgres_manager, self.milvus_manager)
+                logger.info("URL Source Manager initialized successfully")
             else:
                 logger.error("Cannot initialize URL manager: PostgreSQL manager not available")
                 self.url_manager = None
         except ImportError as e:
-            logger.error(f"Failed to import PostgreSQL URL Manager: {e}")
+            logger.error(f"Failed to import URL Source Manager: {e}")
             self.url_manager = None
 
     def _initialize_url_orchestrator(self) -> None:

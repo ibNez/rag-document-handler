@@ -4,17 +4,17 @@ This document provides comprehensive documentation of all database schemas used 
 
 ## Overview
 
-The system uses a dual-database architecture with refactored data access:
-- **PostgreSQL**: Relational metadata storage managed through `ingestion/core/postgres_manager.py`
+The system uses a dual-database architecture with clean data access:
+- **PostgreSQL**: Relational metadata storage managed through `rag_manager/data/postgres_connection.py`
 - **Milvus**: Vector embeddings storage accessed via `rag_manager/managers/milvus_manager.py`
 
 ## Data Access Architecture
 
-The refactored system provides clean separation of database concerns:
-- **Core Layer**: `ingestion/core/database_manager.py` provides unified database abstraction
-- **PostgreSQL Layer**: `ingestion/core/postgres_manager.py` handles connection pooling and operations
-- **Vector Layer**: `rag_manager/managers/milvus_manager.py` manages embeddings and RAG search
-- **Domain Layers**: Email, URL, and document managers use core abstractions
+The system provides clean separation of database concerns:
+- **Core Layer**: `rag_manager/core/` provides configuration and models
+- **PostgreSQL Layer**: `rag_manager/data/postgres_connection.py` handles connection management
+- **Vector Layer**: `rag_manager/managers/milvus_manager.py` manages embeddings and search
+- **Data Access**: Modular data managers use core abstractions for each domain
 
 ## Schema Design Principles
 

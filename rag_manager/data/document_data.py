@@ -159,8 +159,8 @@ class DocumentDataManager(BaseDataManager):
         try:
             with self.get_connection() as conn:
                 with conn.cursor() as cursor:
-                    # Get document count first - only count completed/processed documents
-                    cursor.execute("SELECT COUNT(*) as count FROM documents WHERE processing_status = 'completed'")
+                    # Get document count first - only count completed/processed file documents (not URLs)
+                    cursor.execute("SELECT COUNT(*) as count FROM documents WHERE processing_status = 'completed' AND document_type = 'file'")
                     result = cursor.fetchone()
                     if result:
                         kb_meta['documents_total'] = int(result['count'] or 0)
@@ -168,14 +168,14 @@ class DocumentDataManager(BaseDataManager):
                     # Only try more complex queries if we have documents
                     if kb_meta['documents_total'] > 0:
                         try:
-                            # Get averages from explicit columns
+                            # Get averages from explicit columns - only for file documents
                             cursor.execute("""
                                 SELECT 
                                     AVG(COALESCE(word_count, 0)) as avg_words,
                                     AVG(COALESCE(chunk_count, 0)) as avg_chunks,
                                     AVG(COALESCE(median_chunk_chars, 0)) as avg_median_chars
                                 FROM documents
-                                WHERE word_count IS NOT NULL AND chunk_count IS NOT NULL
+                                WHERE word_count IS NOT NULL AND chunk_count IS NOT NULL AND document_type = 'file'
                             """)
                             row = cursor.fetchone()
                             if row:

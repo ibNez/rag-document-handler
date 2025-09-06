@@ -211,20 +211,21 @@ class URLPanelStats:
             Number of URLs that have a parent_url_id (i.e., child URLs discovered via domain crawling)
         """
         try:
-            if not self.rag_manager.url_manager or not self.rag_manager.url_manager.postgres:
+            if not self.rag_manager.url_manager:
                 return 0
                 
-            with self.rag_manager.url_manager.postgres.get_connection() as conn:
-                with conn.cursor() as cursor:
-                    cursor.execute(
-                        """
-                        SELECT COUNT(*) as count 
-                        FROM urls 
-                        WHERE status = 'active' AND parent_url_id IS NOT NULL
-                        """
-                    )
-                    result = cursor.fetchone()
-                    return int(result['count'] or 0) if result else 0
+            # Use URLSourceManager's url_data (URLDataManager) to access database
+            url_data_manager = self.rag_manager.url_manager.url_data
+            if not url_data_manager:
+                return 0
+                
+            query = """
+                SELECT COUNT(*) as count 
+                FROM urls 
+                WHERE status = 'active' AND parent_url_id IS NOT NULL
+            """
+            result = url_data_manager.execute_query(query, fetch_one=True)
+            return int(result['count'] or 0) if result else 0
                     
         except Exception as e:
             logger.error(f"Failed to get sub-URLs count: {e}")

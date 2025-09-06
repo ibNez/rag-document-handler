@@ -14,7 +14,7 @@ The project adheres to strict development rules documented in [`DEVELOPMENT_RULE
 - Add tests for features using `pytest`
 - Implement comprehensive logging per DEVELOPMENT_RULES.md
 
-## Refactored Architecture
+## Current Architecture
 
 Understanding the structure is essential for contributions:
 
@@ -26,11 +26,17 @@ ingestion/           # Data ingestion modules
 ├── document/       # Document extraction and chunking
 └── utils/          # Shared utilities
 
+retrieval/          # Data retrieval modules
+├── document/       # Document search and retrieval
+├── email/          # Email-specific search and retrieval
+└── url/            # URL-specific search and retrieval
+
 rag_manager/        # RAG functionality
-├── managers/       # Vector operations and search
-└── web/           # Web interface, routes, and statistics
-    ├── panels/     # Panel-specific statistics providers
-    └── stats.py    # Statistics coordinator
+├── core/           # Core configuration and models
+├── data/           # Data access layer (PostgreSQL, Milvus)
+├── managers/       # Business logic managers
+├── web/            # Web interface and routes
+└── utils/          # RAG-specific utilities
 
 templates/          # Web interface templates
 ├── partials/       # Modular template components
