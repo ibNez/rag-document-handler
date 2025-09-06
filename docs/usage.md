@@ -24,17 +24,21 @@ The application uses:
 - **Modular Retrieval**: Dedicated retrieval modules for different content types
 - **Template Partials**: Well-organized, maintainable template structure
 
-## Dashboard Interface
+## Web Interface Structure
 
-The main dashboard provides a comprehensive view of system status and content management capabilities.
+The application provides a modern three-page interface for comprehensive knowledge base management.
 
 **Navigation Bar:**
-- The "RAG Knowledgebase Manager" title bar remains visible at the top during scrolling
-- Always-visible navigation with Home and Ask AI links
-- Consistent access to core functionality regardless of page position
+- **Knowledge Base Manager** - Main application title and home link
+- **Dashboard** - System status monitoring and metrics overview
+- **Manager** - Document, URL, and email content management
+- **Ask AI** - RAG-powered search and question answering interface
 
-### Statistics Panel
-The main dashboard features a comprehensive statistics panel with **threshold-based color coding** that displays real-time information across five key areas:
+### Dashboard Page
+Dedicated system monitoring and metrics visualization page featuring comprehensive statistics across all components.
+
+**Statistics Panel**
+The Dashboard displays real-time information with **threshold-based color coding** across five key areas:
 
 **Connections Status:**
 - SQL database connectivity and version information
@@ -77,9 +81,11 @@ All tiles use **automatic color coding** based on operational thresholds:
 - 🟡 **Yellow**: Warning threshold reached  
 - 🔴 **Red**: Critical threshold requiring attention
 
-### Modular Section Organization
+### Manager Page
 
-The interface is organized into distinct, well-labeled sections:
+The Manager page provides dedicated content management functionality across all supported data types.
+
+**Modular Section Organization:**
 
 **File Management:**
 - **Upload Section**: Clean file upload interface with format validation

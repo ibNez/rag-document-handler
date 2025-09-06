@@ -172,6 +172,78 @@ class WebRoutes:
                 config=self.config,
             )
         
+        @self.app.route('/dashboard')
+        def dashboard():
+            """System dashboard with status panels and metrics."""
+            # Gather stats and diagnostic data for the dashboard using StatsProvider
+            try:
+                all_stats = self.stats_provider.get_all_stats() or {}
+                kb_meta = all_stats.get('knowledgebase', {})
+                email_meta = all_stats.get('email', {})
+                url_meta = all_stats.get('url', {})
+                system_meta = all_stats.get('system', {})
+            except Exception as e:
+                logger.warning(f"Failed to collect dashboard stats: {e}")
+                kb_meta = {}
+                email_meta = {}
+                url_meta = {}
+                system_meta = {}
+
+            # Collection stats for primary KB and email collections (Milvus)
+            collection_stats = None
+            email_collection_stats = None
+            try:
+                mm = getattr(self.rag_manager, 'milvus_manager', None)
+                if mm:
+                    try:
+                        collection_stats = mm.get_collection_stats() if hasattr(mm, 'get_collection_stats') else getattr(mm, 'collection_info', None)
+                    except Exception:
+                        collection_stats = None
+                    try:
+                        email_collection_stats = mm.get_email_collection_stats() if hasattr(mm, 'get_email_collection_stats') else None
+                    except Exception:
+                        email_collection_stats = None
+            except Exception:
+                collection_stats = None
+                email_collection_stats = None
+
+            # SQL and Milvus/OLLAMA status
+            try:
+                sql_status = self._get_database_status()
+            except Exception:
+                sql_status = {"connected": False}
+
+            try:
+                ollama_status = self.rag_manager.ollama_health.get_overall_status() if hasattr(self.rag_manager, 'ollama_health') else {"connected": False}
+            except Exception:
+                ollama_status = {"connected": False}
+
+            try:
+                milvus_status = None
+                mm = getattr(self.rag_manager, 'milvus_manager', None)
+                if mm and hasattr(mm, 'get_status'):
+                    milvus_status = mm.get_status()
+                elif mm and hasattr(mm, 'connection_args'):
+                    milvus_status = {"connected": True, "connection": getattr(mm, 'connection_args', None)}
+                else:
+                    milvus_status = {"connected": False}
+            except Exception:
+                milvus_status = {"connected": False}
+
+            return render_template(
+                'dashboard.html',
+                collection_stats=collection_stats,
+                email_collection_stats=email_collection_stats,
+                sql_status=sql_status,
+                milvus_status=milvus_status,
+                ollama_status=ollama_status,
+                kb_meta=kb_meta,
+                url_meta=url_meta,
+                email_meta=email_meta,
+                system_meta=system_meta,
+                config=self.config,
+            )
+        
         @self.app.route('/upload', methods=['POST'])
         def upload_file():
             """Handle file upload to staging area with duplicate detection."""

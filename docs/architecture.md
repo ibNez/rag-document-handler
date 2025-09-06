@@ -114,13 +114,14 @@ rag_manager/
 └── scheduler_manager.py           # Background task scheduling
 
 templates/
-├── index.html                     # Main dashboard (now uses partials)
-├── search.html                    # Search interface
+├── index.html                     # Manager page for content administration
+├── dashboard.html                 # System dashboard with metrics and monitoring
+├── search.html                    # Ask AI interface for semantic search
 └── partials/                      # Modular template components
     ├── _head.html                 # Document head and meta tags
-    ├── _navbar.html               # Main navigation bar
+    ├── _navbar.html               # Main navigation bar (Dashboard, Manager, Ask AI)
     ├── _flash_messages.html       # Flash message display
-    ├── _stats_panel.html          # Statistics dashboard panel
+    ├── _stats_panel.html          # Statistics dashboard panel (Dashboard page only)
     ├── _file_upload.html          # File upload section
     ├── _staging_area.html         # Staging area for processing
     ├── _url_management.html       # URL management interface
