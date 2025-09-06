@@ -270,24 +270,98 @@ else
     echo "   Removed Python packaging artifacts"
 fi
 
-# Step 5: Remove uploaded and staging files
+# Step 5: Preserve uploaded and snapshot files to deleted folder
 echo ""
-echo "📂 Removing uploaded and staging files..."
+echo "📂 Preserving uploaded and snapshot files..."
+
+# Load snapshot directory from .env file
+SNAPSHOT_DIR="./snapshots"  # Default
+UPLOADED_FOLDER="uploaded"  # Default from .env
+if [ -f ".env" ]; then
+    # Source snapshot directory from .env
+    SNAPSHOT_DIR_FROM_ENV=$(grep "^SNAPSHOT_DIR=" .env 2>/dev/null | cut -d'=' -f2- | tr -d '"' || echo "./snapshots")
+    UPLOADED_FOLDER_FROM_ENV=$(grep "^UPLOADED_FOLDER=" .env 2>/dev/null | cut -d'=' -f2- | tr -d '"' || echo "uploaded")
+    
+    if [ -n "$SNAPSHOT_DIR_FROM_ENV" ]; then
+        SNAPSHOT_DIR="$SNAPSHOT_DIR_FROM_ENV"
+    fi
+    if [ -n "$UPLOADED_FOLDER_FROM_ENV" ]; then
+        UPLOADED_FOLDER="$UPLOADED_FOLDER_FROM_ENV"
+    fi
+fi
+
+# Ensure deleted directory exists
+if ! $DRY_RUN; then
+    mkdir -p "deleted" 2>/dev/null || true
+fi
+
+# Move uploaded files to deleted folder before removal
+if [ -d "$UPLOADED_FOLDER" ] && [ "$(ls -A "$UPLOADED_FOLDER" 2>/dev/null)" ]; then
+    if $DRY_RUN; then
+        echo "   [DRY RUN] Would move files from $UPLOADED_FOLDER/ to deleted/uploaded_backup_$(date +%Y%m%d_%H%M%S)/"
+        echo "   [DRY RUN] Found $(find "$UPLOADED_FOLDER" -type f 2>/dev/null | wc -l) files to preserve"
+    else
+        backup_dir="deleted/uploaded_backup_$(date +%Y%m%d_%H%M%S)"
+        mkdir -p "$backup_dir"
+        echo "   Moving uploaded files to $backup_dir..."
+        mv "$UPLOADED_FOLDER"/* "$backup_dir/" 2>/dev/null || true
+        echo "   ✅ Uploaded files preserved in $backup_dir"
+    fi
+else
+    if $DRY_RUN; then
+        echo "   [DRY RUN] No uploaded files found to preserve"
+    else
+        echo "   ℹ️  No uploaded files found to preserve"
+    fi
+fi
+
+# Move snapshot files to deleted folder before removal
+if [ -d "$SNAPSHOT_DIR" ] && [ "$(ls -A "$SNAPSHOT_DIR" 2>/dev/null)" ]; then
+    if $DRY_RUN; then
+        echo "   [DRY RUN] Would move files from $SNAPSHOT_DIR/ to deleted/snapshots_backup_$(date +%Y%m%d_%H%M%S)/"
+        echo "   [DRY RUN] Found $(find "$SNAPSHOT_DIR" -type f 2>/dev/null | wc -l) files to preserve"
+    else
+        backup_dir="deleted/snapshots_backup_$(date +%Y%m%d_%H%M%S)"
+        mkdir -p "$backup_dir"
+        echo "   Moving snapshot files to $backup_dir..."
+        mv "$SNAPSHOT_DIR"/* "$backup_dir/" 2>/dev/null || true
+        echo "   ✅ Snapshot files preserved in $backup_dir"
+    fi
+else
+    if $DRY_RUN; then
+        echo "   [DRY RUN] No snapshot files found to preserve"
+    else
+        echo "   ℹ️  No snapshot files found to preserve"
+    fi
+fi
+
+echo ""
+echo "📂 Removing now-empty uploaded and staging directories..."
 safe_remove_dir "staging"
-safe_remove_dir "uploaded"
+safe_remove_dir "$UPLOADED_FOLDER"
+safe_remove_dir "$SNAPSHOT_DIR"
 
 # Ask about removing the deleted folder (backup files)
 if [ -d "deleted" ]; then
+    echo ""
+    echo "🔴 ⚠️  RED WARNING ⚠️  🔴"
+    echo "🔴 The 'deleted' folder contains backup files from previous operations!"
+    echo "🔴 Once deleted, these files CANNOT be recovered!"
+    echo "🔴 This includes:"
+    echo "🔴   - Previously uploaded documents"
+    echo "🔴   - URL snapshots and cached content"
+    echo "🔴   - Any other preserved data files"
+    echo "🔴 ⚠️  PERMANENT DELETION WARNING ⚠️  🔴"
     echo ""
     if $DRY_RUN; then
         echo "   [DRY RUN] Would ask about removing 'deleted' folder and backup files"
         safe_remove_dir "deleted"
         echo "✅ [DRY RUN] Deleted folder and backup files would be handled based on user choice"
     else
-        read -r -p "Do you want to remove the 'deleted' folder and its backup files? (y/N): " remove_deleted
+        read -r -p "❗ Do you want to PERMANENTLY DELETE the 'deleted' folder and ALL backup files? (y/N): " remove_deleted
         if [[ $remove_deleted =~ ^[Yy]$ ]]; then
             safe_remove_dir "deleted"
-            echo "✅ Deleted folder and backup files removed"
+            echo "✅ Deleted folder and backup files permanently removed"
         else
             echo "ℹ️  Deleted folder preserved (contains backup files)"
         fi
@@ -358,7 +432,8 @@ if [ -d "$LOG_DIR" ]; then remaining_files+=("$LOG_DIR/"); fi
 if [ -d "logs" ]; then remaining_files+=("logs/"); fi
 if [ -d ".venv" ]; then remaining_files+=(".venv/"); fi
 if [ -d "staging" ]; then remaining_files+=("staging/"); fi
-if [ -d "uploaded" ]; then remaining_files+=("uploaded/"); fi
+if [ -d "$UPLOADED_FOLDER" ]; then remaining_files+=("$UPLOADED_FOLDER/"); fi
+if [ -d "$SNAPSHOT_DIR" ]; then remaining_files+=("$SNAPSHOT_DIR/"); fi
 if [ -d "deleted" ]; then remaining_files+=("deleted/ (preserved backup files)"); fi
 
 if [ ${#remaining_files[@]} -eq 0 ]; then
@@ -398,7 +473,8 @@ echo "   ✅ Docker volumes (handled individually based on user choices)"
 echo "   ✅ Virtual environment removed"
 echo "   ✅ Database files removed"
 echo "   ✅ Log files removed"
-echo "   ✅ Uploaded/staging files removed"
+echo "   ✅ Uploaded/snapshot files preserved in deleted/ folder before removal"
+echo "   ✅ Empty upload/snapshot directories removed"
 echo "   ✅ Temporary files cleaned"
 echo "   ✅ Test files removed"
 echo ""
