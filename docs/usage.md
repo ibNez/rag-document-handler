@@ -257,16 +257,16 @@ snapshots/
 
 ## Hybrid Search System
 
-The system uses an advanced hybrid retrieval approach that combines vector similarity search with PostgreSQL full-text search for optimal results.
+The system uses an advanced retrieval approach that combines vector similarity search with PostgreSQL full-text search for optimal results.
 
 ### Search Methods
 1. **Hybrid Retrieval**: Combines vector similarity and PostgreSQL FTS using Reciprocal Rank Fusion (RRF)
-2. **Vector-Only Fallback**: Pure vector similarity search if hybrid fails
+2. **Vector-Only Fallback**: Pure vector similarity search if fails
 3. **Smart Routing**: Automatic fallback with comprehensive error handling
 
 ### Search Results
 Documents return rich metadata including:
-- **Retrieval Method**: Indicates if hybrid or vector-only was used
+- **Retrieval Method**: Indicates if or vector-only was used
 - **Ranking Information**: Both vector and FTS rank scores
 - **Page References**: Precise page-level citations
 - **Content Context**: Element types and section information

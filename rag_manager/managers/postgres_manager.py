@@ -133,9 +133,9 @@ class PostgreSQLManager:
             indexed_at TIMESTAMP WITH TIME ZONE
         );
         
-        -- Email documents table (migrated from SQLite)
+        -- Email documents table
         CREATE TABLE IF NOT EXISTS emails (
-            id SERIAL PRIMARY KEY,
+            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
             message_id TEXT UNIQUE NOT NULL,
             from_addr TEXT,
             to_addrs JSONB,
@@ -151,9 +151,9 @@ class PostgreSQLManager:
         );
         
                 
-        -- Email chunks table for hybrid retrieval
+        -- Email chunks table for retrieval
         CREATE TABLE IF NOT EXISTS email_chunks (
-            chunk_id VARCHAR(255) PRIMARY KEY,
+            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
             email_id TEXT NOT NULL,
             chunk_text TEXT NOT NULL,
             chunk_index INTEGER NOT NULL,
@@ -164,7 +164,7 @@ class PostgreSQLManager:
             CONSTRAINT uk_email_chunks_position UNIQUE(email_id, chunk_index)
         );
 
-        -- Document chunks table for hybrid retrieval (similar to email_chunks)
+    -- Document chunks table for retrieval
         CREATE TABLE IF NOT EXISTS document_chunks (
             id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
             document_id UUID NOT NULL,
@@ -176,13 +176,14 @@ class PostgreSQLManager:
             element_types TEXT[] NULL,
             token_count INTEGER,
             chunk_hash VARCHAR(64),
+            topics TEXT NULL,
             embedding_version VARCHAR(50) DEFAULT 'mxbai-embed-large',
             created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
             CONSTRAINT fk_document_chunks_document FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE,
             CONSTRAINT uk_document_chunks_position UNIQUE(document_id, chunk_ordinal)
         );
         
-                -- URLs table (migrated from SQLite)
+        -- URLs table: used to store URL Parent information
         CREATE TABLE IF NOT EXISTS urls (
             id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
             url TEXT UNIQUE NOT NULL,
@@ -207,10 +208,29 @@ class PostgreSQLManager:
             created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
             updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
         );
+
+        -- URL snapshots table for point-in-time captures of crawled pages
+        CREATE TABLE IF NOT EXISTS url_snapshots (
+            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+            document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+            url_id UUID REFERENCES urls(id) ON DELETE CASCADE,
+            snapshot_ts TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+            pdf_document_id UUID, -- optional link to documents table for stored PDF artifact
+            mhtml_document_id UUID, -- optional link to documents table for stored MHTML artifact
+            sha256 TEXT,
+            notes TEXT,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        );
+
+        -- Indexes for snapshots
+        CREATE INDEX IF NOT EXISTS idx_url_snapshots_document_id ON url_snapshots(document_id);
+        CREATE INDEX IF NOT EXISTS idx_url_snapshots_url_id ON url_snapshots(url_id);
+        CREATE INDEX IF NOT EXISTS idx_url_snapshots_snapshot_ts ON url_snapshots(snapshot_ts);
         
-        -- Email accounts table (compatible with EmailAccountManager interface)
+        -- Email accounts table 
         CREATE TABLE IF NOT EXISTS email_accounts (
-            id SERIAL PRIMARY KEY,
+            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
             account_name TEXT UNIQUE NOT NULL,
             server_type TEXT NOT NULL,
             server TEXT NOT NULL,
@@ -226,9 +246,6 @@ class PostgreSQLManager:
             last_synced_offset INTEGER DEFAULT 0,
             total_emails_in_mailbox INTEGER DEFAULT 0
         );
-        
-        -- Add total_emails_in_mailbox column if it doesn't exist (migration)
-        ALTER TABLE email_accounts ADD COLUMN IF NOT EXISTS total_emails_in_mailbox INTEGER DEFAULT 0;
         
         -- Create indexes for performance
         CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(processing_status);
@@ -253,6 +270,7 @@ class PostgreSQLManager:
         CREATE INDEX IF NOT EXISTS idx_document_chunks_position ON document_chunks(document_id, chunk_ordinal);
         CREATE INDEX IF NOT EXISTS idx_document_chunks_page ON document_chunks(page_start, page_end);
         CREATE INDEX IF NOT EXISTS idx_document_chunks_element_types ON document_chunks USING GIN(element_types);
+        CREATE INDEX IF NOT EXISTS idx_document_chunks_topics_gin ON document_chunks USING gin(to_tsvector('english', topics)) WHERE topics IS NOT NULL;
         
         -- Email accounts indexes
         CREATE INDEX IF NOT EXISTS idx_email_accounts_offset ON email_accounts(last_synced_offset);
@@ -291,76 +309,9 @@ class PostgreSQLManager:
                     conn.rollback()
                     logger.error(f"Failed to initialize schema: {e}")
                     raise
-    
-    def store_document(self, file_path: str, filename: str, 
-                      title: Optional[str] = None, content_preview: Optional[str] = None,
-                      content_type: Optional[str] = None, file_size: Optional[int] = None,
-                      word_count: Optional[int] = None, document_type: str = 'file', **kwargs) -> str:
-        """
-        Store document metadata and return the UUID.
-        
-        Args:
-            title: Document title (optional)
-            content_preview: Preview of document content (optional)
-            file_path: REQUIRED - Full path to file for files, URL for URLs
-            filename: REQUIRED - Filename for files, descriptive name for URLs
-            content_type: MIME type (optional)
-            file_size: File size in bytes (optional)
-            word_count: Number of words in document (optional)
-            document_type: Type of document ('file' or 'url')
-            **kwargs: Additional metadata (ignored)
-            
-        Returns:
-            The UUID of the stored document
-            
-        Raises:
-            ValueError: If required fields are missing or invalid
-        """
-        # Validate required fields according to DEVELOPMENT_RULES
-        if not file_path or not file_path.strip():
-            logger.error(f"Missing required field: file_path")
-            raise ValueError("file_path is required and cannot be empty")
-        
-        if not filename or not filename.strip():
-            logger.error(f"Missing required field: filename")
-            raise ValueError("filename is required and cannot be empty")
-        
-        logger.info(f"Storing document: file_path='{file_path}', filename='{filename}', type='{document_type}'")
-        
-        query = """
-            INSERT INTO documents (title, content_preview, file_path, filename,
-                                 content_type, file_size, word_count, document_type, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
-            RETURNING id
-        """
-        
-        with self.get_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(query, [
-                    title, content_preview, file_path, filename,
-                    content_type, file_size, word_count, document_type
-                ])
-                result = cur.fetchone()
-                conn.commit()
-                document_id = str(result['id'])
-                logger.info(f"Stored document metadata: {document_id}")
-                return document_id
-    
-    def update_processing_status(self, document_id: str, status: str) -> None:
-        """Update document processing status by ID."""
-        query = """
-            UPDATE documents 
-            SET processing_status = %s, 
-                indexed_at = CASE WHEN %s = 'completed' THEN NOW() ELSE indexed_at END,
-                updated_at = NOW()
-            WHERE id = %s
-        """
-        
-        with self.get_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(query, [status, status, document_id])
-                conn.commit()
-                logger.debug(f"Updated document {document_id} status to {status}")
+
+    # Document storage and management - MOVED TO ingestion/document/manager.py
+    # Methods moved: store_document, update_processing_status, store_document_chunk, delete_document_chunks
     
     def search_documents(self, query: str, limit: int = 50) -> List[Dict[str, Any]]:
         """Full-text search across documents."""
@@ -455,60 +406,10 @@ class PostgreSQLManager:
                 "connected": False,
                 "error": str(e)
             }
-    
-    def store_document_chunk(self, document_id: str, chunk_text: str, 
-                           chunk_ordinal: int, page_start: Optional[int] = None, 
-                           page_end: Optional[int] = None, section_path: Optional[str] = None,
-                           element_types: Optional[List[str]] = None, token_count: Optional[int] = None,
-                           chunk_hash: Optional[str] = None, embedding_version: str = 'mxbai-embed-large') -> str:
-        """
-        Store document chunk for hybrid retrieval.
-        
-        Args:
-            document_id: Parent document identifier
-            chunk_text: Text content of the chunk
-            chunk_ordinal: Sequential chunk number within document
-            page_start: Starting page number (optional)
-            page_end: Ending page number (optional)
-            section_path: Hierarchical section path (e.g., "H1 > H2 > List")
-            element_types: List of element types from Unstructured
-            token_count: Number of tokens in chunk
-            chunk_hash: Content hash for deduplication
-            embedding_version: Version/model used for embeddings
-            
-        Returns:
-            The UUID of the created chunk
-        """
-        query = """
-            INSERT INTO document_chunks (
-                document_id, chunk_text, chunk_ordinal, page_start, page_end,
-                section_path, element_types, token_count, chunk_hash, embedding_version
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (document_id, chunk_ordinal) 
-            DO UPDATE SET 
-                chunk_text = EXCLUDED.chunk_text,
-                page_start = EXCLUDED.page_start,
-                page_end = EXCLUDED.page_end,
-                section_path = EXCLUDED.section_path,
-                element_types = EXCLUDED.element_types,
-                token_count = EXCLUDED.token_count,
-                chunk_hash = EXCLUDED.chunk_hash,
-                embedding_version = EXCLUDED.embedding_version
-            RETURNING id
-        """
-        
-        with self.get_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(query, [
-                    document_id, chunk_text, chunk_ordinal, page_start, page_end,
-                    section_path, element_types, token_count, chunk_hash, embedding_version
-                ])
-                result = cur.fetchone()
-                conn.commit()
-                chunk_id = str(result['id'])
-                logger.debug(f"Stored document chunk: {chunk_id}")
-                return chunk_id
-    
+
+    # Document chunk methods - MOVED TO ingestion/document/manager.py
+    # Methods moved: store_document_chunk, delete_document_chunks
+
     def get_document_chunks(self, document_id: str) -> List[Dict[str, Any]]:
         """
         Get all chunks for a document.
@@ -550,7 +451,7 @@ class PostgreSQLManager:
         """
         base_query = """
             SELECT 
-                dc.id,
+                dc.id AS document_chunk_id,
                 dc.document_id,
                 dc.chunk_text,
                 dc.chunk_ordinal,
@@ -586,30 +487,16 @@ class PostgreSQLManager:
         with self.get_connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(base_query, params)
-                return [dict(row) for row in cur.fetchall()]
-    
-    def delete_document_chunks(self, document_id: str) -> int:
-        """
-        Delete all chunks for a document.
-        
-        Args:
-            document_id: Document identifier
-            
-        Returns:
-            Number of deleted chunks
-        """
-        query = "DELETE FROM document_chunks WHERE document_id = %s"
-        
-        with self.get_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(query, [document_id])
-                deleted_count = cur.rowcount
-                conn.commit()
-                logger.info(f"Deleted {deleted_count} chunks for document: {document_id}")
-                return deleted_count
-    
+                rows = [dict(row) for row in cur.fetchall()]
+                return rows
+
+    # Document chunk methods - MOVED TO ingestion/document/manager.py
+    # Methods moved: store_document_chunk, delete_document_chunks
+
     def close(self) -> None:
         """Close connection pool."""
         if self.pool:
             self.pool.closeall()
             logger.info("PostgreSQL connection pool closed")
+
+__all__ = ["PostgreSQLManager", "PostgreSQLConfig"]

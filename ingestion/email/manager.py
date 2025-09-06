@@ -5,7 +5,7 @@ Following DEVELOPMENT_RULES.md for all development requirements
 
 This module provides PostgreSQL-based email account management functionality
 to replace SQLite-based email operations when using PostgreSQL backend.
-Also handles hybrid email search combining vector and FTS retrieval.
+Also handles email search combining vector and FTS retrieval.
 """
 
 import json
@@ -13,14 +13,14 @@ import logging
 from datetime import datetime, UTC
 from typing import Any, Dict, List, Optional
 
-from ingestion.core.postgres_manager import PostgreSQLManager
+from rag_manager.managers.postgres_manager import PostgreSQLManager
 from ingestion.utils.crypto import encrypt, decrypt
 
 logger = logging.getLogger(__name__)
 
 
 class PostgreSQLEmailManager:
-    """PostgreSQL-based email account manager with hybrid search capabilities."""
+    """PostgreSQL-based email account manager with search capabilities."""
 
     def __init__(self, postgres_manager: Any) -> None:
         """Initialize with PostgreSQL manager for pure PostgreSQL-based email account management."""
@@ -35,7 +35,7 @@ class PostgreSQLEmailManager:
         
         logger.info("PostgreSQL EmailManager initialized with PostgreSQL-based email statistics")
 
-    def create_account(self, record: Dict[str, Any]) -> int:
+    def create_account(self, record: Dict[str, Any]) -> str:
         """Create a new email account (PostgreSQL implementation)."""
         required = {
             "account_name",
@@ -86,6 +86,7 @@ class PostgreSQLEmailManager:
                     ))
                     account_id = cur.fetchone()['id']
                 conn.commit()
+                account_id = str(account_id)
                 logger.info("Created email account %s (%s)", account_id, record.get("account_name"))
                 return account_id
         except Exception as e:
@@ -98,7 +99,7 @@ class PostgreSQLEmailManager:
             with conn.cursor() as cur:
                 if include_password:
                     accounts_query = """
-                        SELECT ea.id, ea.account_name, ea.server_type, ea.server, ea.port, ea.email_address, ea.password,
+                        SELECT ea.id AS email_account_id, ea.account_name, ea.server_type, ea.server, ea.port, ea.email_address, ea.password,
                                ea.mailbox, ea.batch_limit, ea.use_ssl, ea.refresh_interval_minutes, 
                                ea.last_synced::text as last_synced, ea.last_update_status,
                                COALESCE(ea.last_synced_offset, 0) as last_synced_offset,
@@ -123,7 +124,7 @@ class PostgreSQLEmailManager:
                     """
                 else:
                     accounts_query = """
-                        SELECT ea.id, ea.account_name, ea.server_type, ea.server, ea.port, ea.email_address,
+                        SELECT ea.id AS email_account_id, ea.account_name, ea.server_type, ea.server, ea.port, ea.email_address,
                                ea.mailbox, ea.batch_limit, ea.use_ssl, ea.refresh_interval_minutes, 
                                ea.last_synced::text as last_synced, ea.last_update_status,
                                COALESCE(ea.last_synced_offset, 0) as last_synced_offset,
@@ -159,7 +160,7 @@ class PostgreSQLEmailManager:
                 logger.info("Retrieved %d email accounts with PostgreSQL-based statistics", len(accounts))
                 return accounts
 
-    def update_account(self, account_id: int, updates: Dict[str, Any]) -> None:
+    def update_account(self, account_id: str, updates: Dict[str, Any]) -> None:
         """Update an email account (PostgreSQL implementation)."""
         if not updates:
             return
@@ -183,7 +184,7 @@ class PostgreSQLEmailManager:
             logger.error(f"Failed to update email account {account_id}: {e}")
             raise
 
-    def delete_account(self, account_id: int) -> None:
+    def delete_account(self, account_id: str) -> None:
         """Delete an email account (PostgreSQL implementation)."""
         try:
             with self.db_manager.get_connection() as conn:
@@ -288,7 +289,7 @@ class PostgreSQLEmailManager:
 
     def initialize_hybrid_retrieval(self, email_vector_store: Any) -> None:
         """
-        Initialize hybrid retrieval system combining vector search and PostgreSQL FTS.
+        Initialize retrieval system combining vector search and PostgreSQL FTS.
         
         Args:
             email_vector_store: Milvus email vector store from MilvusManager
@@ -296,22 +297,22 @@ class PostgreSQLEmailManager:
         try:
             # Import here to avoid circular dependencies
             from retrieval.email.postgres_fts_retriever import PostgresFTSRetriever
-            from retrieval.email.hybrid_retriever import HybridRetriever
+            from retrieval.email.manager import EmailRetriever
             
             # Initialize PostgreSQL FTS retriever
             self.postgres_fts_retriever = PostgresFTSRetriever(self.postgres_pool)
             
-            # Initialize hybrid retriever combining vector + FTS
-            self.hybrid_retriever = HybridRetriever(
+            # Initialize retriever combining vector + FTS
+            self.hybrid_retriever = EmailRetriever(
                 vector_retriever=email_vector_store.as_retriever(),
                 fts_retriever=self.postgres_fts_retriever
             )
             
-            logger.info("Email hybrid retrieval system initialized successfully")
+            logger.info("Email retrieval system initialized successfully")
             
         except Exception as e:
-            logger.error(f"Failed to initialize email hybrid retrieval: {e}")
-            raise RuntimeError(f"Email hybrid retrieval initialization failed: {e}")
+            logger.error(f"Failed to initialize email retrieval: {e}")
+            raise RuntimeError(f"Email retrieval initialization failed: {e}")
 
     def search_emails_hybrid(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
         """
@@ -328,7 +329,7 @@ class PostgreSQLEmailManager:
             raise RuntimeError("Hybrid retriever not initialized. Call initialize_hybrid_retrieval() first.")
         
         try:
-            # Perform hybrid search using RRF fusion
+            # Perform search using RRF fusion
             results = self.hybrid_retriever.search(query, k=top_k)
             
             # Convert to consistent format
@@ -348,7 +349,7 @@ class PostgreSQLEmailManager:
             raise RuntimeError(f"Email search failed: {e}")
 
     def format_email_context(self, results: List[Dict[str, Any]]) -> tuple:
-        """Format hybrid search results for LLM context."""
+        """Format search results for LLM context."""
         unique_emails = {}
         sources = []
         

@@ -30,7 +30,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_ollama import OllamaEmbeddings
 
 from ingestion.utils.chunker import TextChunker
-from ingestion.core.postgres_manager import PostgreSQLManager
+from rag_manager.managers.postgres_manager import PostgreSQLManager
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +104,7 @@ class EmailProcessor:
 
     # ------------------------------------------------------------------
     def _store_chunks(self, record: Dict[str, Any]) -> int:
-        """Store email chunks in PostgreSQL for hybrid retrieval."""
+        """Store email chunks in PostgreSQL for retrieval."""
         message_id = record.get("message_id")
         body_text = record.get("body_text", "")
         
@@ -126,29 +126,34 @@ class EmailProcessor:
                 with conn.cursor() as cur:
                     for chunk in chunks:
                         try:
+                            # Insert and return the generated UUID id for the chunk.
                             cur.execute("""
                                 INSERT INTO email_chunks (
-                                    chunk_id, email_id, chunk_text, chunk_index, 
+                                    email_id, chunk_text, chunk_index, 
                                     token_count, chunk_hash
                                 )
-                                VALUES (%s, %s, %s, %s, %s, %s)
-                                ON CONFLICT (chunk_id) DO UPDATE SET
+                                VALUES (%s, %s, %s, %s, %s)
+                                ON CONFLICT (email_id, chunk_index) DO UPDATE SET
                                     chunk_text = EXCLUDED.chunk_text,
                                     token_count = EXCLUDED.token_count,
                                     chunk_hash = EXCLUDED.chunk_hash,
                                     created_at = CURRENT_TIMESTAMP
+                                RETURNING id
                             """, (
-                                chunk['chunk_id'],
                                 chunk['email_id'],
                                 chunk['chunk_text'],
                                 chunk['chunk_index'],
                                 chunk['token_count'],
                                 chunk['chunk_hash']
                             ))
+                            fetched = cur.fetchone()
+                            if fetched:
+                                chunk_id = str(fetched.get('id') or '')
+                                chunk['email_chunk_id'] = chunk_id
                             stored_count += 1
                             
                         except Exception as e:
-                            logger.error(f"Failed to store chunk {chunk.get('chunk_id')}: {e}")
+                            logger.error(f"Failed to store chunk {chunk.get('email_chunk_id')}: {e}")
                             continue
                 
                 conn.commit()
@@ -261,7 +266,7 @@ class EmailProcessor:
         # persist metadata regardless of body content
         self._store_metadata(record)
         
-        # Store chunks in PostgreSQL for hybrid retrieval
+        # Store chunks in PostgreSQL for retrieval
         chunk_count = self._store_chunks(record)
 
         if not body_text.strip():

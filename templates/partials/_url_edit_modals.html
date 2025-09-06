@@ -1,14 +1,14 @@
 <!-- Edit URL Modals - One for each URL -->
 {% for url in urls %}
 <!-- Edit URL Modal -->
-<div class="modal fade" id="editUrlModal-{{ url.id }}" tabindex="-1" aria-labelledby="editUrlLabel-{{ url.id }}" aria-hidden="true">
+<div class="modal fade" id="editUrlModal-{{ url.url_id }}" tabindex="-1" aria-labelledby="editUrlLabel-{{ url.url_id }}" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title" id="editUrlLabel-{{ url.id }}">Edit URL Metadata</h5>
+        <h5 class="modal-title" id="editUrlLabel-{{ url.url_id }}">Edit URL Metadata</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
-            <form method="POST" action="{{ url_for('update_url', url_id=url.id) }}">
+            <form method="POST" action="{{ url_for('update_url', url_id=url.url_id) }}">
                 <div class="modal-body">
                     <div class="mb-3">
                         <label class="form-label">Title</label>
@@ -24,15 +24,15 @@
                         <div class="form-text">Set 0 to disable auto-refresh. Default is 1440 (24 hours).</div>
                     </div>
                     <div class="form-check mt-2">
-                        <input class="form-check-input" type="checkbox" name="crawl_domain" id="crawlDomain-{{ url.id }}" {% if url.crawl_domain %}checked{% endif %}>
-                        <label class="form-check-label" for="crawlDomain-{{ url.id }}">
+                        <input class="form-check-input" type="checkbox" name="crawl_domain" id="crawlDomain-{{ url.url_id }}" {% if url.crawl_domain %}checked{% endif %}>
+            <label class="form-check-label" for="crawlDomain-{{ url.url_id }}">
                             Crawl entire domain
                         </label>
                         <div class="form-text">If enabled, we will discover and index pages within the same domain, storing each page with its own source URL.</div>
                     </div>
                     <div class="form-check mt-2">
-                        <input class="form-check-input" type="checkbox" name="ignore_robots" id="ignoreRobots-{{ url.id }}" {% if url.ignore_robots %}checked{% endif %}>
-                        <label class="form-check-label" for="ignoreRobots-{{ url.id }}">
+                        <input class="form-check-input" type="checkbox" name="ignore_robots" id="ignoreRobots-{{ url.url_id }}" {% if url.ignore_robots %}checked{% endif %}>
+            <label class="form-check-label" for="ignoreRobots-{{ url.url_id }}">
                             Ignore robots.txt for this URL
                         </label>
                         <div class="form-text text-warning">Use with caution. This may violate site policies; ensure you have permission to crawl.</div>

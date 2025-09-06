@@ -1,663 +1,507 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Ask AI - RAG Knowledgebase Manager</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Ask AI — RAG Search Showcase</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <link href="{{ url_for('static', filename='style.css') }}" rel="stylesheet">
-    <link rel="manifest" href="{{ url_for('static', filename='site.webmanifest') }}">
-    <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon-32x32.png') }}">
-    <link rel="icon" type="image/png" sizes="16x16" href="{{ url_for('static', filename='favicon-16x16.png') }}">
-    <link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
-    <meta name="theme-color" content="#0d6efd">
+    <style>
+        /* Hero + tiles */
+        .hero { background: linear-gradient(135deg,#0d6efd22,#6f42c122); border-radius:12px; padding:22px }
+        .tile { transition: transform .28s ease, box-shadow .28s ease; border-radius:10px }
+        .tile:hover{ transform: translateY(-6px); box-shadow:0 10px 30px rgba(13,110,253,.12)}
+        .pulse { animation: pulse 1.6s infinite; }
+        @keyframes pulse { 0%{ transform:scale(1)}50%{ transform:scale(1.02)}100%{ transform:scale(1)} }
+
+        /* Flow SVG */
+        .flow { width:100%; height:160px }
+        .node { fill:#ffffff; stroke:#e9ecef; stroke-width:1; rx:12 }
+
+        /* Comparison table bars */
+        .bar { height:10px; border-radius:6px; background:linear-gradient(90deg,#20c997,#0dcaf0) }
+
+        /* Movers badges */
+        .mover { transform-origin:center; transition:transform .3s ease }
+        .mover.up { background:#198754; color:white }
+        .mover.down { background:#dc3545; color:white }
+
+        /* Small sparkle animation */
+        .sparkle { position:relative }
+        .sparkle:after{ content:""; position:absolute; width:8px; height:8px; background:rgba(255,255,255,.7); border-radius:50%; right:-6px; top:-6px; transform:scale(0); animation: pop .9s infinite linear }
+        @keyframes pop { 0% { transform:scale(0); opacity:1 } 80%{ transform:scale(1.4); opacity:.4 } 100%{ transform:scale(0); opacity:0 } }
+
+        /* Responsive tweaks */
+        @media(max-width:800px){ .flow{ height:220px } }
+    </style>
+    <style>
+        /* stage active visuals */
+        .tile.active { box-shadow: 0 12px 30px rgba(13,110,253,.18); transform: translateY(-6px); border: 1px solid rgba(13,110,253,.12); }
+        .tile.stage-play { animation: stagePulse .9s ease-in-out; }
+        @keyframes stagePulse { 0%{ transform:translateY(0) }50%{ transform:translateY(-8px) scale(1.01) }100%{ transform:translateY(0) } }
+        .tile .small { opacity:.85 }
+    </style>
 </head>
 <body class="bg-light">
     <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
         <div class="container">
-            <a class="navbar-brand" href="{{ url_for('index') }}">
-                <i class="fas fa-database me-2"></i>RAG Knowledgebase Manager
-            </a>
-            <div class="navbar-nav ms-auto">
-                <a class="nav-link" href="{{ url_for('index') }}">
-                    <i class="fas fa-home me-1"></i>Home
-                </a>
-                <a class="nav-link active" href="{{ url_for('search') }}">
-                    <i class="fas fa-robot me-1"></i>Ask AI
-                </a>
+            <a class="navbar-brand" href="{{ url_for('index') }}"><i class="fas fa-robot me-2"></i>RAG Search</a>
+            <div class="d-flex align-items-center">
+                <a class="btn btn-outline-light btn-sm me-2" href="{{ url_for('index') }}"><i class="fas fa-home"></i></a>
             </div>
         </div>
     </nav>
 
-    <div class="container mt-4">
-        <!-- Flash Messages -->
-        {% with messages = get_flashed_messages(with_categories=true) %}
-            {% if messages %}
-                {% for category, message in messages %}
-                    <div class="alert alert-{{ 'danger' if category == 'error' else category }} alert-dismissible fade show" role="alert">
-                        {{ message }}
-                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-                    </div>
-                {% endfor %}
-            {% endif %}
-        {% endwith %}
+    <div class="container my-4" data-has-results="{{ '1' if rag_results and (rag_results.analysis_info or rag_results.num_sources) else '0' }}">
+        <!-- Hero + Search -->
+        <div class="hero p-4 mb-4">
+            <div class="row align-items-center g-3">
+                <div class="col-lg-8">
+                    <h1 class="h3 mb-1">Ask AI — Instant, explainable search</h1>
+                    <p class="text-muted mb-2">Type a question and watch the pipeline: retrieval → fusion → (optional) rerank → answer. Animated, transparent, and fast.</p>
 
-        <!-- Search Form -->
-        <div class="row mb-4">
-            <div class="col-md-12">
-                <div class="card">
-                    <div class="card-header">
-                        <h5 class="mb-0"><i class="fas fa-comments me-2"></i>Ask Questions About Your Documents</h5>
-                    </div>
-                    <div class="card-body">
-                        <form method="POST">
-                            <div class="row">
-                                <div class="col-md-10">
-                                    <input type="text" class="form-control form-control-lg" 
-                                           name="query" value="{{ query }}" 
-                                           placeholder="Ask a question about your documents (e.g., 'What are the main concepts in machine learning?', 'Explain the methodology used')"
-                                           required>
-                                    <div class="form-text">
-                                        Ask natural language questions and get AI-powered answers based on your document content.
-                                    </div>
-                                </div>
-                                <div class="col-md-2">
-                                    <button type="submit" class="btn btn-primary btn-lg w-100">
-                                        <i class="fas fa-robot me-1"></i>Ask AI
-                                    </button>
-                                </div>
-                            </div>
-                        </form>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        {% if query and conversation_classification %}
-        <!-- Conversation Classification Panel -->
-        <div class="row mb-4">
-            <div class="col-md-12">
-                <div class="card border-info">
-                    <div class="card-header py-2 d-flex justify-content-between align-items-center">
-                        <span class="fw-semibold text-info"><i class="fas fa-tag me-2"></i>Conversation Type</span>
-                        <span class="badge bg-info text-dark">LLM Classifier</span>
-                    </div>
-                    <div class="card-body py-3">
-                        <div class="d-flex align-items-center">
-                            <div class="me-3" style="font-size:1.4rem;">
-                                {% if conversation_classification.type == 'email' %}
-                                   <i class="fas fa-envelope-open-text text-info"></i>
-                                {% else %}
-                                   <i class="fas fa-file-alt text-secondary"></i>
-                                {% endif %}
-                            </div>
-                            <div class="flex-grow-1">
-                                <div class="mb-1">
-                                    <strong class="me-2">Type:</strong>
-                                    <span class="badge {% if conversation_classification.type == 'email' %}bg-info text-dark{% else %}bg-secondary{% endif %}">
-                                        {{ conversation_classification.type|capitalize }}
-                                    </span>
-                                    <span class="ms-2 small text-muted">Confidence {{ conversation_classification.confidence }}</span>
-                                </div>
-                                {% if conversation_classification.reason %}
-                                <div class="small text-muted">{{ conversation_classification.reason }}</div>
-                                {% endif %}
-                                {% if conversation_classification.error %}
-                                <div class="small text-danger">{{ conversation_classification.error }}</div>
-                                {% endif %}
-                            </div>
+                    <form method="POST" class="row g-2">
+                        <div class="col-md-9">
+                            <input name="query" class="form-control form-control-lg" placeholder="Ask something — e.g. 'What are key findings on X?'" value="{{ query or '' }}" required>
                         </div>
-                    </div>
+                        <div class="col-md-3 d-grid">
+                            <button class="btn btn-primary btn-lg"> <i class="fas fa-magnifying-glass me-2"></i> Ask AI</button>
+                        </div>
+                    </form>
                 </div>
-            </div>
-        </div>
-        {% endif %}
 
-        <!-- RAG Answer -->
-        {% if query %}
-            <div class="row">
-                <div class="col-md-12">
-                    <!-- Answer Card -->
-                    <div class="card mb-4">
-                        <div class="card-header d-flex justify-content-between align-items-center">
-                            <h5 class="mb-0">
-                                <i class="fas fa-robot me-2 text-primary"></i>AI Response
-                            </h5>
-                            {% if rag_results and rag_results.context_used %}
-                                <span class="badge bg-success">{{ rag_results.num_sources }} sources used</span>
+                <div class="col-lg-4 text-lg-end mt-3 mt-lg-0">
+                    <div class="d-inline-block text-start tile p-3 bg-white">
+                        <div class="small text-muted">Conversation type</div>
+                        <div class="fw-bold">
+                            {% if conversation_classification and conversation_classification.type %}
+                                {{ conversation_classification.type|capitalize }}
                             {% else %}
-                                <span class="badge bg-warning">No context available</span>
+                                General
                             {% endif %}
                         </div>
-                        <div class="card-body">
-                            <div class="d-flex mb-3">
-                                <div class="flex-shrink-0">
-                                    <div class="rounded-circle bg-light p-2" style="width: 40px; height: 40px;">
-                                        <i class="fas fa-user text-primary"></i>
-                                    </div>
-                                </div>
-                                <div class="flex-grow-1 ms-3">
-                                    <div class="bg-light p-3 rounded">
-                                        <strong>You asked:</strong> {{ query }}
-                                    </div>
-                                </div>
-                            </div>
-                            
-                            <div class="d-flex">
-                                <div class="flex-shrink-0">
-                                    <div class="rounded-circle bg-primary p-2" style="width: 40px; height: 40px;">
-                                        <i class="fas fa-robot text-white"></i>
-                                    </div>
-                                </div>
-                                <div class="flex-grow-1 ms-3">
-                                    <div class="bg-primary bg-opacity-10 p-3 rounded">
-                                        {% if rag_results %}
-                                            {{ rag_results.answer|safe }}
-                                        {% else %}
-                                            I encountered an error processing your question. Please try again.
-                                        {% endif %}
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
+                        <div class="small text-muted">Confidence: {{ conversation_classification.confidence if conversation_classification and conversation_classification.confidence else '—' }}</div>
                     </div>
-
-                    <!-- References Section -->
-                    {% if rag_results and rag_results.unique_sources %}
-                        <div class="card mb-4">
-                            <div class="card-header">
-                                <h6 class="mb-0">
-                                    <i class="fas fa-list-ol me-2"></i>References
-                                </h6>
-                            </div>
-                            <div class="card-body">
-                                {% for ref_source in rag_results.unique_sources %}
-                                    <div class="mb-2">
-                                        <strong>[{{ ref_source.ref_num }}]</strong>
-                                        {% if ref_source.category_type == 'document' %}
-                                            <a href="{{ url_for('download_file', filename=ref_source.filename) }}" 
-                                               class="text-decoration-none text-primary ms-2"
-                                               title="Download {{ ref_source.filename }}">
-                                                {{ ref_source.filename }}
-                                                <i class="fas fa-download ms-1" style="font-size: 0.8em;"></i>
-                                            </a>
-                                        {% else %}
-                                            <span class="ms-2">{{ ref_source.filename }}</span>
-                                        {% endif %}
-                                        
-                                        {% if ref_source.title and ref_source.title != ref_source.filename %}
-                                            <span class="text-muted ms-2">- {{ ref_source.title }}</span>
-                                        {% endif %}
-                                        
-                                        {% if ref_source.page and ref_source.page != 'unknown' %}
-                                            <span class="text-muted">, Page {{ ref_source.page }}</span>
-                                        {% endif %}
-                                        
-                                        {% if ref_source.keywords and ref_source.keywords|length > 0 %}
-                                            <br><span class="text-muted ms-4">Keywords: 
-                                            {% for keyword in ref_source.keywords %}
-                                                <span class="badge bg-light text-dark me-1">{{ keyword }}</span>
-                                            {% endfor %}
-                                            </span>
-                                        {% endif %}
-                                    </div>
-                                {% endfor %}
-                            </div>
-                        </div>
-                    {% endif %}
-
-                    <!-- Analysis Sections (Prompt and Results) -->
-                    {% if rag_results and rag_results.analysis_info %}
-                        <!-- Prompt -->
-                        <div class="card mb-4">
-                            <div class="card-header">
-                                <h6 class="mb-0">
-                                    <i class="fas fa-search me-2"></i>Prompt
-                                    <button class="btn btn-sm btn-outline-secondary float-end" type="button" data-bs-toggle="collapse" data-bs-target="#promptAnalysis" aria-expanded="false" aria-controls="promptAnalysis">
-                                        View Details
-                                    </button>
-                                </h6>
-                            </div>
-                            <div class="collapse" id="promptAnalysis">
-                                <div class="card-body">
-                                    <h6 class="text-primary">System Instructions:</h6>
-                                    <pre class="bg-light p-3 rounded small text-wrap" style="white-space: pre-wrap;">{{ rag_results.analysis_info.system_prompt }}</pre>
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- Vector Search Analysis -->
-                        <div class="card mb-4">
-                            <div class="card-header">
-                                <h6 class="mb-0">
-                                    <i class="fas fa-vector-square me-2"></i>Vector Search Analysis
-                                    <button class="btn btn-sm btn-outline-secondary float-end" type="button" data-bs-toggle="collapse" data-bs-target="#vectorAnalysis" aria-expanded="false" aria-controls="vectorAnalysis">
-                                        View Results
-                                    </button>
-                                </h6>
-                            </div>
-                            <div class="collapse" id="vectorAnalysis">
-                                <div class="card-body">
-                                    {% if rag_results.analysis_info.milvus_results %}
-                                        <p class="text-muted small">Similarity scores show relevance to your query (lower = more similar)</p>
-                                        <div class="table-responsive">
-                                            <table class="table table-sm">
-                                                <thead>
-                                                    <tr>
-                                                        <th>Rank</th>
-                                                        <th>Similarity</th>
-                                                        <th>Source</th>
-                                                        <th>Page</th>
-                                                        <th>Category</th>
-                                                        <th>Topic</th>
-                                                        <th>Content Preview</th>
-                                                    </tr>
-                                                </thead>
-                                                <tbody>
-                                                    {% for result in rag_results.analysis_info.milvus_results %}
-                                                        <tr>
-                                                            <td>{{ result.rank }}</td>
-                                                            <td>{{ "%.4f"|format(result.similarity_score) }}</td>
-                                                            <td class="small">{{ result.source }}</td>
-                                                            <td>{{ result.page }}</td>
-                                                            <td><span class="badge bg-secondary">{{ result.category_type if result.category_type else result.category }}</span></td>
-                                                            <td class="small">{{ result.topic }}</td>
-                                                            <td class="small" style="max-width: 300px;">{{ result.content_preview }}</td>
-                                                        </tr>
-                                                    {% endfor %}
-                                                </tbody>
-                                            </table>
-                                        </div>
-                                    {% else %}
-                                        <p class="text-muted">No vector search results available</p>
-                                    {% endif %}
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- Document Metadata Analysis -->
-                        <div class="card mb-4">
-                            <div class="card-header">
-                                <h6 class="mb-0">
-                                    <i class="fas fa-database me-2"></i>Document Metadata Analysis
-                                    <button class="btn btn-sm btn-outline-secondary float-end" type="button" data-bs-toggle="collapse" data-bs-target="#metadataAnalysis" aria-expanded="false" aria-controls="metadataAnalysis">
-                                        View Metadata
-                                    </button>
-                                </h6>
-                            </div>
-                            <div class="collapse" id="metadataAnalysis">
-                                <div class="card-body">
-                                    {% if rag_results.analysis_info.postgres_metadata %}
-                                        <p class="text-muted small">Document processing and storage information</p>
-                                        <div class="table-responsive">
-                                            <table class="table table-sm">
-                                                <thead>
-                                                    <tr>
-                                                        <th>Document</th>
-                                                        <th>Source URL</th>
-                                                        <th>Category</th>
-                                                        <th>Type</th>
-                                                        <th>Processed</th>
-                                                        <th>Chunks</th>
-                                                        <th>Size</th>
-                                                        <th>Status</th>
-                                                    </tr>
-                                                </thead>
-                                                <tbody>
-                                                    {% for meta in rag_results.analysis_info.postgres_metadata %}
-                                                        <tr>
-                                                            <td class="small">{{ meta.filename }}</td>
-                                                            <td class="small">{{ meta.url or 'Local File' }}</td>
-                                                            <td><span class="badge bg-info">{{ meta.category }}</span></td>
-                                                            <td><span class="badge bg-secondary">{{ meta.category_type }}</span></td>
-                                                            <td class="small">{{ meta.created_at }}</td>
-                                                            <td>{{ meta.chunk_count }}</td>
-                                                            <td>{{ meta.total_size }}</td>
-                                                            <td><span class="badge bg-success">{{ meta.processing_status }}</span></td>
-                                                        </tr>
-                                                    {% endfor %}
-                                                </tbody>
-                                            </table>
-                                        </div>
-                                    {% else %}
-                                        <p class="text-muted">No metadata information available for analysis</p>
-                                    {% endif %}
-                                </div>
-                            </div>
-                        </div>
-                    {% endif %}
-
-                    <!-- Sources Card -->
-                    {% if rag_results and rag_results.sources %}
-                        <div class="card">
-                            <div class="card-header">
-                                <h6 class="mb-0">
-                                    <i class="fas fa-book-open me-2"></i>Sources Used
-                                </h6>
-                            </div>
-                            <div class="card-body">
-                                {% for source in rag_results.sources %}
-                                    <div class="card mb-2">
-                                        <div class="card-body py-2">
-                                            <div class="d-flex justify-content-between align-items-start">
-                                                <div>
-                                                    <h6 class="card-title mb-1">
-                                                        <i class="fas fa-file-alt me-1 text-primary"></i>
-                                                        {% if source.category_type == 'document' %}
-                                                            <a href="{{ url_for('download_file', filename=source.filename) }}" 
-                                                               class="text-decoration-none text-primary" 
-                                                               title="Download {{ source.filename }}">
-                                                                {{ source.filename }}
-                                                                <i class="fas fa-download ms-1" style="font-size: 0.8em;"></i>
-                                                            </a>
-                                                        {% else %}
-                                                            {{ source.filename }}
-                                                        {% endif %}
-                                                    </h6>
-                                                    <small class="text-muted">
-                                                        Page {{ source.page }}
-                                                        {% if source.category_type != 'unknown' %}
-                                                            • Type: {{ source.category_type|title }}
-                                                        {% endif %}
-                                                    </small>
-                                                </div>
-                                                <span class="badge bg-info">
-                                                    {{ "%.3f"|format(source.similarity_score) }}
-                                                </span>
-                                            </div>
-                                            <div class="mt-2">
-                                                <small class="text-muted fst-italic">
-                                                    "{{ source.content_preview }}"
-                                                </small>
-                                            </div>
-                                        </div>
-                                    </div>
-                                {% endfor %}
-                            </div>
-                        </div>
-                    {% endif %}
-                </div>
-            </div>
-        {% else %}
-            <!-- Search Instructions -->
-            <div class="row">
-                <div class="col-md-12">
-                    <div class="card border-info">
-                        <div class="card-body text-center py-5">
-                            <i class="fas fa-robot fa-3x text-info mb-3"></i>
-                            <h5>Ask Questions About Your Documents</h5>
-                            <p class="text-muted">Use AI-powered conversational search to get answers from your document collection</p>
-                            
-                            <div class="row mt-4">
-                                <div class="col-md-4">
-                                    <div class="d-flex flex-column align-items-center">
-                                        <i class="fas fa-comments fa-2x text-primary mb-2"></i>
-                                        <h6>Ask Questions</h6>
-                                        <p class="text-muted small">
-                                            Ask natural questions like "What is the main methodology?" or "Explain the key findings"
-                                        </p>
-                                    </div>
-                                </div>
-                                <div class="col-md-4">
-                                    <div class="d-flex flex-column align-items-center">
-                                        <i class="fas fa-brain fa-2x text-success mb-2"></i>
-                                        <h6>AI-Powered Answers</h6>
-                                        <p class="text-muted small">
-                                            Get comprehensive answers synthesized from relevant document sections
-                                        </p>
-                                    </div>
-                                </div>
-                                <div class="col-md-4">
-                                    <div class="d-flex flex-column align-items-center">
-                                        <i class="fas fa-book-open fa-2x text-warning mb-2"></i>
-                                        <h6>Source Citations</h6>
-                                        <p class="text-muted small">
-                                            See exactly which documents and sections were used to generate the answer
-                                        </p>
-                                    </div>
-                                </div>
-                            </div>
-                            
-                            <div class="mt-4">
-                                <h6>Example Questions:</h6>
-                                <div class="d-flex flex-wrap justify-content-center gap-2 mt-2">
-                                    <span class="badge bg-light text-dark">What are the main concepts?</span>
-                                    <span class="badge bg-light text-dark">How does this methodology work?</span>
-                                    <span class="badge bg-light text-dark">What are the key findings?</span>
-                                    <span class="badge bg-light text-dark">Explain the results</span>
-                                    <span class="badge bg-light text-dark">What tools are mentioned?</span>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        {% endif %}
-    </div>
-
-    <!-- Email Display Modal -->
-    <div class="modal fade" id="emailModal" tabindex="-1" aria-labelledby="emailModalLabel" aria-hidden="true">
-        <div class="modal-dialog modal-lg modal-dialog-scrollable">
-            <div class="modal-content">
-                <div class="modal-header bg-primary text-white">
-                    <h5 class="modal-title" id="emailModalLabel">
-                        <i class="fas fa-envelope me-2"></i>Email Details
-                    </h5>
-                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
-                </div>
-                <div class="modal-body">
-                    <div id="emailContent">
-                        <div class="text-center">
-                            <div class="spinner-border text-primary" role="status">
-                                <span class="visually-hidden">Loading...</span>
-                            </div>
-                            <p class="mt-2">Loading email...</p>
-                        </div>
-                    </div>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">
-                        <i class="fas fa-times me-1"></i>Close
-                    </button>
                 </div>
             </div>
         </div>
-    </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
-    
-    <script>
-        // Email display functionality
-        function displayEmail(emailId) {
-            console.log('Displaying email:', emailId);
-            
-            // Reset modal content
-            document.getElementById('emailContent').innerHTML = `
-                <div class="text-center">
-                    <div class="spinner-border text-primary" role="status">
-                        <span class="visually-hidden">Loading...</span>
+        <!-- Animated pipeline overview -->
+        <div class="card mb-4">
+            <div class="card-body">
+                <svg class="flow" viewBox="0 0 1200 160" preserveAspectRatio="none">
+                    <!-- nodes -->
+                    <rect class="node" x="20" y="28" width="180" height="104" rx="10" fill="#fff" stroke="#e9ecef"></rect>
+                    <rect class="node" x="230" y="28" width="180" height="104" rx="10"></rect>
+                    <rect class="node" x="440" y="28" width="180" height="104" rx="10"></rect>
+                    <rect class="node" x="650" y="28" width="180" height="104" rx="10"></rect>
+                    <rect class="node" x="860" y="28" width="300" height="104" rx="10"></rect>
+
+                    <!-- labels -->
+                    <text x="110" y="62" text-anchor="middle" fill="#111" font-size="14" font-weight="600">Query</text>
+                    <text x="320" y="62" text-anchor="middle" fill="#111" font-size="14" font-weight="600">Retrieval</text>
+                    <text x="530" y="62" text-anchor="middle" fill="#111" font-size="14" font-weight="600">Fusion (RRF)</text>
+                    <text x="740" y="62" text-anchor="middle" fill="#111" font-size="14" font-weight="600">Rerank</text>
+                    <text x="1010" y="62" text-anchor="middle" fill="#111" font-size="14" font-weight="600">Answer</text>
+
+                    <!-- animated connectors -->
+                    <line x1="200" y1="80" x2="230" y2="80" stroke="#6c757d" stroke-width="2" stroke-linecap="round"></line>
+                    <line x1="410" y1="80" x2="440" y2="80" stroke="#6c757d" stroke-width="2" stroke-linecap="round"></line>
+                    <line x1="620" y1="80" x2="650" y2="80" stroke="#6c757d" stroke-width="2" stroke-linecap="round"></line>
+                    <line x1="830" y1="80" x2="860" y2="80" stroke="#6c757d" stroke-width="2" stroke-linecap="round"></line>
+                </svg>
+
+                    <div class="row mt-3 g-3">
+                    <div class="col-md-3">
+                        <div id="stage-query" class="tile p-3 bg-white" data-stage="query">
+                            <div class="d-flex align-items-center">
+                                <div class="me-3 display-6 text-primary"><i class="fas fa-user"></i></div>
+                                <div>
+                                    <div class="small text-muted">You asked</div>
+                                    <div class="fw-bold">{{ query or '—' }}</div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
-                    <p class="mt-2">Loading email...</p>
+                    <div class="col-md-3">
+                        <div id="stage-retrieval" class="tile p-3 bg-white" data-stage="retrieval">
+                            <div class="d-flex align-items-center">
+                                <div class="me-3 display-6 text-success"><i class="fas fa-search"></i></div>
+                                <div>
+                                    <div class="small text-muted">Retrieved</div>
+                                    <div class="fw-bold">{{ rag_results.num_sources if rag_results and rag_results.num_sources else 0 }} chunks</div>
+                                    <div class="small text-muted">{{ rag_results.analysis_info.get('fusion_stats').overlap_count if rag_results and rag_results.analysis_info and rag_results.analysis_info.get('fusion_stats') else '' }}</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div id="stage-fusion" class="tile p-3 bg-white" data-stage="fusion">
+                            <div class="d-flex align-items-center">
+                                <div class="me-3 display-6 text-warning"><i class="fas fa-layer-group"></i></div>
+                                <div>
+                                    <div class="small text-muted">Fusion</div>
+                                    <div class="fw-bold">RRF</div>
+                                    <div class="small text-muted">Constant: {{ rag_results.analysis_info.rrf_constant if rag_results and rag_results.analysis_info and rag_results.analysis_info.rrf_constant is not none else '60' }}</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div id="stage-rerank" class="tile p-3 bg-white" data-stage="rerank">
+                            <div class="d-flex align-items-center">
+                                <div class="me-3 display-6 text-danger"><i class="fas fa-filter"></i></div>
+                                <div>
+                                    <div class="small text-muted">Rerank</div>
+                                    <div class="fw-bold">{{ 'Enabled' if rag_results and rag_results.analysis_info and rag_results.analysis_info.reranking_enabled else 'Disabled' }}</div>
+                                    <div class="small text-muted">Top movers highlighted below</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
-            `;
-            
-            // Show modal
-            const emailModal = new bootstrap.Modal(document.getElementById('emailModal'));
-            emailModal.show();
-            
-            // Fetch email data
-            fetch(`/email/${emailId}`)
-                .then(response => {
-                    if (!response.ok) {
-                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-                    }
-                    return response.json();
-                })
-                .then(emailData => {
-                    console.log('Email data received:', emailData);
-                    displayEmailContent(emailData);
-                })
-                .catch(error => {
-                    console.error('Error fetching email:', error);
-                    document.getElementById('emailContent').innerHTML = `
-                        <div class="alert alert-danger">
-                            <i class="fas fa-exclamation-triangle me-2"></i>
-                            Failed to load email: ${error.message}
-                        </div>
-                    `;
-                });
-        }
-        
-        function displayEmailContent(emailData) {
-            const formatDate = (dateStr) => {
-                if (!dateStr || dateStr === 'Unknown Date') return 'Unknown Date';
-                try {
-                    return new Date(dateStr).toLocaleString();
-                } catch (e) {
-                    return dateStr;
-                }
-            };
-            
-            const formatSize = (bytes) => {
-                if (!bytes) return 'Unknown';
-                const units = ['B', 'KB', 'MB', 'GB'];
-                let size = bytes;
-                let unitIndex = 0;
-                while (size >= 1024 && unitIndex < units.length - 1) {
-                    size /= 1024;
-                    unitIndex++;
-                }
-                return `${size.toFixed(1)} ${units[unitIndex]}`;
-            };
-            
-            let attachmentsHtml = '';
-            if (emailData.attachments && emailData.attachments.length > 0) {
-                attachmentsHtml = `
-                    <div class="mt-3">
-                        <h6><i class="fas fa-paperclip me-2"></i>Attachments (${emailData.attachments.length})</h6>
-                        <div class="list-group">
-                            ${emailData.attachments.map(att => `
-                                <div class="list-group-item d-flex justify-content-between align-items-center">
-                                    <div>
-                                        <i class="fas fa-file me-2"></i>
-                                        <strong>${att.filename}</strong>
-                                        <small class="text-muted d-block">${att.content_type}</small>
-                                    </div>
-                                    <span class="badge bg-secondary">${formatSize(att.size)}</span>
-                                </div>
-                            `).join('')}
+            </div>
+        </div>
+
+        <div class="row">
+            <div class="col-lg-7">
+                <div class="card mb-3">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0">Before / After — Comparison</h5>
+                        <div class="btn-group" role="group">
+                            <button id="showScore" class="btn btn-sm btn-outline-primary active">Score Δ</button>
+                            <button id="showRank" class="btn btn-sm btn-outline-secondary">Rank Δ</button>
                         </div>
                     </div>
-                `;
-            }
-            
-            const html = `
-                <div class="email-details">
-                    <!-- Email Header -->
-                    <div class="card border-0 bg-light mb-3">
+                    <div class="card-body p-0">
+                        {% set analysis = rag_results.analysis_info if rag_results and rag_results.analysis_info else {} %}
+                        {% set table = analysis.get('comparison_table', []) if analysis else [] %}
+                        <div class="table-responsive">
+                            <table class="table table-sm mb-0">
+                                <thead>
+                                    <tr>
+                                        <th style="width:36px">#</th>
+                                        <th>ID / Title</th>
+                                        <th style="width:110px;text-align:right">Pre-score</th>
+                                        <th style="width:110px;text-align:right">Post-score</th>
+                                        <th style="width:140px;text-align:right">Delta</th>
+                                        <th style="width:80px;text-align:right">New Rank</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {% for row in table %}
+                                    <tr class="align-middle" data-chunk="{{ row.document_chunk_id or row.email_chunk_id }}">
+                                        <td>{{ loop.index }}</td>
+                                        <td class="small">{{ row.title or (((row.document_chunk_id or row.email_chunk_id)|string)[-8:]) }}</td>
+                                        <td class="text-end">{{ '%.4f'|format(row.pre_score) }}</td>
+                                        <td class="text-end">{{ '%.4f'|format(row.post_score) }}</td>
+                                        <td class="text-end">
+                                            {% set sd = row.score_delta %}
+                                            <div class="d-flex align-items-center justify-content-end">
+                                                {% if sd is not none %}
+                                                    {% set width_px = (sd|abs) * 500 %}
+                                                    {% set color = '#198754' if sd >= 0 else '#dc3545' %}
+                                                {% else %}
+                                                    {% set width_px = 0 %}
+                                                    {% set color = '#6c757d' %}
+                                                {% endif %}
+                                                <div class="me-2" style="width:90px">
+                                                    <div class="bar" data-width="{{ width_px }}" data-color="{{ color }}"></div>
+                                                </div>
+                                                <div style="min-width:60px">{% if sd is not none %}{% if sd >= 0 %}▲ {{ '%.4f'|format(sd) }}{% else %}▼ {{ '%.4f'|format(sd|abs) }}{% endif %}{% else %}-{% endif %}</div>
+                                            </div>
+                                        </td>
+                                        <td class="text-end">{{ row.post_rank }}</td>
+                                    </tr>
+                                    {% else %}
+                                    <tr><td colspan="6" class="text-muted p-4">No comparison data available</td></tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                    <!-- Ranker Proof & Trace -->
+                    <div class="card mb-3">
+                        <div class="card-header d-flex justify-content-between align-items-center">
+                            <h6 class="mb-0">Ranker Proof & Trace</h6>
+                            <div>
+                                <button id="play-rank" class="btn btn-sm btn-primary me-2">Play ranking</button>
+                                <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#rankTrace" aria-expanded="false">Details</button>
+                            </div>
+                        </div>
                         <div class="card-body">
-                            <div class="row g-3">
-                                <div class="col-12">
-                                    <h5 class="mb-1">${emailData.subject}</h5>
-                                    <small class="text-muted">Email ID: ${emailData.email_id}</small>
+                            <div class="row g-2">
+                                <div class="col-md-6">
+                                    <div class="small text-muted">Before (pre-rerank)</div>
+                                    <ul id="pre-list" class="list-group mb-2">
+                                        {% set pre_list = analysis.get('pre_rerank') if analysis and analysis.get('pre_rerank') else [] %}
+                                        {% for item in pre_list %}
+                                            <li class="list-group-item d-flex justify-content-between align-items-center" data-chunk="{{ item.document_chunk_id or item.email_chunk_id }}">
+                                                <div class="small"><strong>{{ item.title or (((item.document_chunk_id or item.email_chunk_id)|string)[-8:]) }}</strong><div class="small text-muted">rank {{ item.rank }} • {{ '%.4f'|format(item.combined_score) }}</div></div>
+                                                <div class="badge bg-light text-dark">{{ item.rank }}</div>
+                                            </li>
+                                        {% else %}
+                                            <li class="list-group-item text-muted">No pre-rerank data</li>
+                                        {% endfor %}
+                                    </ul>
                                 </div>
                                 <div class="col-md-6">
-                                    <strong>From:</strong><br>
-                                    <span class="text-muted">${emailData.sender}</span>
+                                    <div class="small text-muted">After (post-rerank)</div>
+                                    <ul id="post-list" class="list-group mb-2">
+                                        {% set post_list = analysis.get('post_rerank') if analysis and analysis.get('post_rerank') else [] %}
+                                        {% for item in post_list %}
+                                            <li class="list-group-item d-flex justify-content-between align-items-center" data-chunk="{{ item.document_chunk_id or item.email_chunk_id }}">
+                                                <div class="small"><strong>{{ item.title or (((item.document_chunk_id or item.email_chunk_id)|string)[-8:]) }}</strong><div class="small text-muted">rank {{ item.final_rank if item.final_rank is defined else item.rank }} • {{ '%.4f'|format(item.rerank_score if item.rerank_score is defined else (item.post_score if item.post_score is defined else 0)) }}</div></div>
+                                                <div class="badge bg-light text-dark">{{ item.final_rank if item.final_rank is defined else item.rank }}</div>
+                                            </li>
+                                        {% else %}
+                                            <li class="list-group-item text-muted">No post-rerank data</li>
+                                        {% endfor %}
+                                    </ul>
                                 </div>
-                                <div class="col-md-6">
-                                    <strong>Date:</strong><br>
-                                    <span class="text-muted">${formatDate(emailData.email_date)}</span>
+                            </div>
+
+                            <div class="collapse mt-3" id="rankTrace">
+                                <div class="card card-body">
+                                    <div class="mb-2"><strong>What was given to the ranker (payload)</strong></div>
+                                    <pre class="small bg-light p-2" style="max-height:200px; overflow:auto;">{% set payload = analysis.get('ranker_payload') if analysis and analysis.get('ranker_payload') else (pre_list) %}{{ payload|tojson(indent=2) }}</pre>
+
+                                    <div class="mt-3 mb-2"><strong>What the ranker returned (response)</strong></div>
+                                    <pre class="small bg-light p-2" style="max-height:260px; overflow:auto;">{% set response = analysis.get('ranker_response') if analysis and analysis.get('ranker_response') else (post_list) %}{{ response|tojson(indent=2) }}</pre>
                                 </div>
-                                <div class="col-md-6">
-                                    <strong>To:</strong><br>
-                                    <span class="text-muted">${emailData.recipients || 'Not specified'}</span>
-                                </div>
-                                <div class="col-md-6">
-                                    <strong>Account:</strong><br>
-                                    <span class="text-muted">${emailData.account_name || 'Unknown'} (${emailData.account_email || 'Unknown'})</span>
-                                </div>
-                                ${emailData.folder ? `
-                                <div class="col-md-6">
-                                    <strong>Folder:</strong><br>
-                                    <span class="text-muted">${emailData.folder}</span>
-                                </div>
-                                ` : ''}
-                                ${emailData.thread_id ? `
-                                <div class="col-md-6">
-                                    <strong>Thread:</strong><br>
-                                    <span class="text-muted">${emailData.thread_id}</span>
-                                </div>
-                                ` : ''}
                             </div>
                         </div>
                     </div>
-                    
-                    <!-- Email Content -->
-                    <div class="card">
-                        <div class="card-header">
-                            <h6 class="mb-0">
-                                <i class="fas fa-file-text me-2"></i>Content
-                                <span class="badge bg-info ms-2">${emailData.content_type}</span>
-                            </h6>
-                        </div>
-                        <div class="card-body">
-                            <div class="email-content" style="max-height: 400px; overflow-y: auto; border: 1px solid #dee2e6; padding: 15px; border-radius: 5px; background-color: #f8f9fa;">
-                                ${emailData.content_display || 'No content available'}
-                            </div>
-                        </div>
+
+                    <!-- Detailed sources / vector results -->
+                <div class="card">
+                    <div class="card-header">
+                        <h6 class="mb-0">Sources & Vector Results</h6>
                     </div>
-                    
-                    ${attachmentsHtml}
-                    
-                    <!-- Technical Details -->
-                    <div class="mt-3">
-                        <div class="accordion" id="technicalDetails">
-                            <div class="accordion-item">
-                                <h2 class="accordion-header" id="headingTechnical">
-                                    <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" 
-                                            data-bs-target="#collapseTechnical" aria-expanded="false" 
-                                            aria-controls="collapseTechnical">
-                                        <i class="fas fa-cog me-2"></i>Technical Details
-                                    </button>
-                                </h2>
-                                <div id="collapseTechnical" class="accordion-collapse collapse" 
-                                     aria-labelledby="headingTechnical" data-bs-parent="#technicalDetails">
-                                    <div class="accordion-body">
-                                        <div class="row g-2">
-                                            <div class="col-md-6">
-                                                <strong>Message ID:</strong><br>
-                                                <small class="text-muted font-monospace">${emailData.message_id || 'Not available'}</small>
-                                            </div>
-                                            <div class="col-md-6">
-                                                <strong>In Reply To:</strong><br>
-                                                <small class="text-muted font-monospace">${emailData.in_reply_to || 'Not a reply'}</small>
-                                            </div>
-                                            <div class="col-md-6">
-                                                <strong>Has Attachments:</strong><br>
-                                                <span class="badge ${emailData.has_attachments ? 'bg-success' : 'bg-secondary'}">
-                                                    ${emailData.has_attachments ? 'Yes' : 'No'}
-                                                </span>
-                                            </div>
-                                            <div class="col-md-6">
-                                                <strong>Account ID:</strong><br>
-                                                <span class="text-muted">${emailData.account_id}</span>
-                                            </div>
+                    <div class="card-body">
+                        {% set mil = analysis.get('milvus_results', []) if analysis else [] %}
+                        {% if mil %}
+                            <div class="list-group">
+                                {% for r in mil %}
+                                    <div class="list-group-item d-flex justify-content-between align-items-start">
+                                        <div class="me-3">
+                                            <div class="small text-muted">#{{ r.rank }} • {{ r.category_type or r.category }}</div>
+                                            <div class="fw-semibold">{{ r.title or r.topic or (r.document_id|string)[-8:] if r.document_id else 'Unknown' }}</div>
+                                            <div class="small text-muted">{{ r.content_preview }}</div>
+                                        </div>
+                                        <div class="text-end">
+                                            <div class="badge bg-light text-dark">{{ '%.3f'|format(r.similarity_score) }}</div>
                                         </div>
                                     </div>
-                                </div>
+                                {% endfor %}
                             </div>
+                        {% else %}
+                            {% set debug = analysis.get('retriever_debug') if analysis else {} %}
+                            {% if debug %}
+                                <div class="small text-muted">No vector results. Retriever debug:</div>
+                                <pre class="small bg-light p-2" style="max-height:240px; overflow:auto;">{{ debug|tojson(indent=2) }}</pre>
+                            {% else %}
+                                <div class="text-muted">No vector results to display</div>
+                            {% endif %}
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-lg-5">
+                <div class="card mb-3">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0">Top Movers</h5>
+                        <small class="text-muted">Highlighting biggest changes</small>
+                    </div>
+                    <div class="card-body">
+                        {% set movers = analysis.get('top_movers_score', []) if analysis else [] %}
+                        {% set cmp = analysis.get('comparison_table', []) if analysis else [] %}
+                        <div class="d-flex flex-column gap-2">
+                            {# Filter out zero-delta movers and render using canonical ids only (document_chunk_id / email_chunk_id) #}
+                            {% set ns = namespace(count=0) %}
+                            {% for m in movers %}
+                                {% if m.score_delta is defined and (m.score_delta|float) != 0 %}
+                                    {% set mid = m.document_chunk_id or m.email_chunk_id %}
+                                    {% set title_lookup = (cmp|selectattr('document_chunk_id','equalto', m.document_chunk_id)|map(attribute='title')|list|first) or (cmp|selectattr('email_chunk_id','equalto', m.email_chunk_id)|map(attribute='title')|list|first) %}
+                                    <div class="p-2 bg-white rounded d-flex justify-content-between align-items-center mover {{ 'up' if (m.score_delta|float) >= 0 else 'down' }}" data-chunk="{{ mid }}">
+                                        <div class="small text-muted">{{ m.category_type or title_lookup or (mid[-8:] if mid) }}</div>
+                                        <div style="max-width:160px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">
+                                            {{ (m.title if m.title) or title_lookup or (mid if mid) }}
+                                        </div>
+                                        <div class="fw-bold">Δ {{ '%.3f'|format(m.score_delta|float) }}</div>
+                                    </div>
+                                    {% set ns.count = ns.count + 1 %}
+                                {% endif %}
+                            {% endfor %}
+
+                            {% if ns.count == 0 %}
+                                {% if cmp | length > 0 %}
+                                    {# Use comparison table top entries when no explicit movers present; use canonical ids only #}
+                                    {% set fallback_sorted = cmp | sort(attribute='score_delta', reverse=True) %}
+                                    {% for m in fallback_sorted %}
+                                        {% if loop.index0 < 8 %}
+                                            {% set mid = m.document_chunk_id or m.email_chunk_id %}
+                                            <div class="p-2 bg-white rounded d-flex justify-content-between align-items-center mover {{ 'up' if (m.score_delta|float) >= 0 else 'down' }}" data-chunk="{{ mid }}">
+                                                <div class="small text-muted">{{ m.category_type or (mid[-8:] if mid) }}</div>
+                                                <div style="max-width:160px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ m.title or (mid if mid) }}</div>
+                                                <div class="fw-bold">Δ {{ '%.3f'|format(m.score_delta|float) }}</div>
+                                            </div>
+                                        {% endif %}
+                                    {% endfor %}
+                                {% else %}
+                                    <div class="text-muted">No movers to show</div>
+                                {% endif %}
+                            {% endif %}
                         </div>
                     </div>
                 </div>
-            `;
-            
-            document.getElementById('emailContent').innerHTML = html;
-        }
+
+                <div class="card">
+                    <div class="card-header">
+                        <h6 class="mb-0">AI Response (short)</h6>
+                    </div>
+                    <div class="card-body small text-muted">
+                        {% if rag_results and rag_results.answer %}
+                            {{ rag_results.answer|striptags|truncate(800) }}
+                        {% else %}
+                            No answer available
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <footer class="mt-4 text-muted small">Built for demos — interactive, animated, and ready for presentations.</footer>
+    </div>
+
+    <script>
+        // Lightweight interactivity: toggle score/rank view and animate flows
+        document.getElementById('showScore')?.addEventListener('click', function(){ this.classList.add('active'); document.getElementById('showRank')?.classList.remove('active'); });
+        document.getElementById('showRank')?.addEventListener('click', function(){ this.classList.add('active'); document.getElementById('showScore')?.classList.remove('active'); });
+
+        // SVG stroke animation for connectors
+        (function(){
+            document.querySelectorAll('.flow line').forEach(function(l, i){
+                l.style.strokeDasharray = l.getTotalLength ? l.getTotalLength() : '200';
+                l.style.strokeDashoffset = l.getTotalLength ? l.getTotalLength() : '200';
+                l.style.transition = 'stroke-dashoffset .9s ease ' + (i*0.12) + 's';
+                setTimeout(function(){ l.style.strokeDashoffset = '0'; }, 100 + i*120);
+            });
+        })();
         
-        // Make displayEmail function globally available
-        window.displayEmail = displayEmail;
+        // Apply data-driven bar widths and colors
+        (function(){
+            document.querySelectorAll('.bar').forEach(function(b){
+                const w = Number(b.getAttribute('data-width') || 0);
+                const c = b.getAttribute('data-color') || '#6c757d';
+                // Cap width to 90px visual container
+                const max = 90; // pixels
+                const px = Math.min(max, Math.round(w));
+                b.style.width = px + 'px';
+                b.style.background = c;
+            });
+        })();
+
+        // Ranker play animation
+        (function(){
+            const btn = document.getElementById('play-rank');
+            if (!btn) return;
+            btn.addEventListener('click', function(){
+                const pre = Array.from(document.querySelectorAll('#pre-list [data-chunk]'));
+                const post = Array.from(document.querySelectorAll('#post-list [data-chunk]'));
+                if (!pre.length || !post.length) {
+                    btn.classList.add('disabled');
+                    setTimeout(()=>btn.classList.remove('disabled'), 900);
+                    return;
+                }
+
+                // iterate through pre list and animate mapping
+                pre.forEach((li, idx) => {
+                    setTimeout(()=>{
+                        li.classList.add('active');
+                        li.classList.add('stage-play');
+                        setTimeout(()=> li.classList.remove('stage-play'), 700);
+
+                        // find matching post item
+                        const id = li.dataset.chunk;
+                        const postItem = post.find(p => p.dataset.chunk === id);
+                        if (postItem) {
+                            // pulse the post item and show delta badge
+                            setTimeout(()=>{
+                                postItem.classList.add('active');
+                                postItem.classList.add('stage-play');
+                                setTimeout(()=> postItem.classList.remove('stage-play'), 700);
+                                // add temporary mover badge if rank changed
+                                const preRank = Number(li.querySelector('.badge')?.textContent || 0);
+                                const postRank = Number(postItem.querySelector('.badge')?.textContent || 0);
+                                const delta = preRank - postRank;
+                                if (!Number.isNaN(delta) && delta !== 0) {
+                                    const badge = document.createElement('span');
+                                    badge.className = 'badge mover ' + (delta>0 ? 'up' : 'down');
+                                    badge.textContent = (delta>0? '↑':'↓') + Math.abs(delta);
+                                    postItem.appendChild(badge);
+                                    setTimeout(()=> badge.remove(), 2000);
+                                }
+                            }, 350);
+                        }
+
+                        // clear highlight after animation
+                        setTimeout(()=> li.classList.remove('active'), 1200);
+                    }, idx * 600);
+                });
+            });
+        })();
+
+            // Stage animation: highlight pipeline stages in order when results are present
+        (function(){
+            const container = document.querySelector('.container.my-4');
+            const hasResults = container?.dataset?.hasResults === '1';
+            if (!hasResults) return;
+
+            const stages = ['stage-query','stage-retrieval','stage-fusion','stage-rerank'];
+            let delay = 120;
+            stages.forEach((id, i) => {
+                const el = document.getElementById(id);
+                if (!el) return;
+                setTimeout(()=>{
+                    el.classList.add('stage-play');
+                    el.classList.add('active');
+                    setTimeout(()=>{ el.classList.remove('stage-play'); }, 700);
+                }, delay * (i+1));
+            });
+
+            // settle answer tile highlighted after pipeline
+            setTimeout(()=>{
+                // find the 'Answer' card (last node) and pulse it
+                const nodes = document.querySelectorAll('.flow .node');
+                if (nodes && nodes.length) nodes[nodes.length-1].style.filter = 'drop-shadow(0 8px 24px rgba(13,110,253,.12))';
+            }, delay * (stages.length + 1));
+        })();
     </script>
+
+    <script>
+        // Make Top Movers clickable: scroll to comparison table row
+        (function(){
+            document.querySelectorAll('.card .mover[data-chunk]').forEach(function(el){
+                el.style.cursor = 'pointer';
+                el.addEventListener('click', function(){
+                    const chunk = el.getAttribute('data-chunk');
+                    if (!chunk) return;
+                    const target = document.querySelector('table tbody tr[data-chunk="'+chunk+'"]');
+                    if (target) {
+                        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        target.classList.add('table-warning');
+                        setTimeout(()=> target.classList.remove('table-warning'), 1800);
+                    }
+                });
+            });
+        })();
+    </script>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>

@@ -137,7 +137,7 @@ class EmailPanelStats:
                         due_count += 1
                         
                 except Exception as e:
-                    logger.debug(f"Error checking if account {account.get('id')} is due: {e}")
+                    logger.debug(f"Error checking if account {account.get('email_account_id')} is due: {e}")
                     
             return due_count
             

@@ -21,8 +21,8 @@ def main():
     
     # Default collection names (can be overridden by command line)
     collections_to_drop = [
-        'rag_knowledgebase',
-        'rag_knowledgebase_emails'
+        'emails',
+        'documents'
     ]
     
     # Check command line arguments

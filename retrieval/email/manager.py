@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-Hybrid Retriever with Reciprocal Rank Fusion (RRF)
+Retriever with Reciprocal Rank Fusion (RRF)
 Following DEVELOPMENT_RULES.md for all development requirements
 
 This module combines vector similarity search with PostgreSQL FTS
@@ -15,7 +15,7 @@ from langchain_core.retrievers import BaseRetriever
 logger = logging.getLogger(__name__)
 
 
-class HybridRetriever:
+class EmailRetriever:
     """
     Hybrid retriever combining vector similarity and PostgreSQL FTS.
     
@@ -30,7 +30,7 @@ class HybridRetriever:
         rrf_constant: int = 60
     ) -> None:
         """
-        Initialize hybrid retriever.
+        Initialize retriever.
         
         Args:
             vector_retriever: LangChain vector store retriever
@@ -44,7 +44,7 @@ class HybridRetriever:
     
     def search(self, query: str, k: int = 10) -> List[Document]:
         """
-        Perform hybrid search with RRF fusion.
+        Perform search with RRF fusion.
         
         Args:
             query: Search query
@@ -54,7 +54,7 @@ class HybridRetriever:
             List of fused and ranked documents
         """
         try:
-            logger.info(f"Starting hybrid search for: '{query[:50]}...' (k={k})")
+            logger.info(f"Starting search for: '{query[:50]}...' (k={k})")
             
             # Get results from both retrievers
             # Retrieve more from each to improve fusion quality
@@ -115,8 +115,8 @@ class HybridRetriever:
         
         # Process vector search results
         for rank, doc in enumerate(vector_docs):
-            # Use chunk_id or content hash as unique identifier
-            doc_id = doc.metadata.get('chunk_id', f"vector_{rank}")
+            # Use email_chunk_id as unique identifier
+            doc_id = doc.metadata.get('email_chunk_id') or doc.metadata.get('chunk_id') or f"vector_{rank}"
             
             # RRF score: 1 / (rank + constant)
             rrf_score = 1.0 / (rank + 1 + self.rrf_constant)
@@ -136,7 +136,7 @@ class HybridRetriever:
         
         # Process FTS search results
         for rank, doc in enumerate(fts_docs):
-            doc_id = doc.metadata.get('chunk_id', f"fts_{rank}")
+            doc_id = doc.metadata.get('email_chunk_id') or doc.metadata.get('chunk_id') or f"fts_{rank}"
             
             # RRF score for FTS
             rrf_score = 1.0 / (rank + 1 + self.rrf_constant)
@@ -205,9 +205,9 @@ class HybridRetriever:
             vector_docs = self.vector_retriever.get_relevant_documents(query)[:10]
             fts_docs = self.fts_retriever.search(query, k=10)
             
-            # Calculate overlap
-            vector_ids = {doc.metadata.get('chunk_id', f"v_{i}") for i, doc in enumerate(vector_docs)}
-            fts_ids = {doc.metadata.get('chunk_id', f"f_{i}") for i, doc in enumerate(fts_docs)}
+            # Calculate overlap using canonical email_chunk_id
+            vector_ids = {doc.metadata.get('email_chunk_id') or doc.metadata.get('chunk_id', f"v_{i}") for i, doc in enumerate(vector_docs)}
+            fts_ids = {doc.metadata.get('email_chunk_id') or doc.metadata.get('chunk_id', f"f_{i}") for i, doc in enumerate(fts_docs)}
             
             overlap = vector_ids.intersection(fts_ids)
             

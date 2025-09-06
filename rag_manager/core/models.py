@@ -7,7 +7,26 @@ following the development rules for proper type annotations and documentation.
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional, Union
+from typing import Optional, Union, Dict, Any
+
+
+@dataclass
+class DocumentMetadata:
+    """Document metadata structure."""
+    document_id: str
+    filename: str  # Required: just the filename (e.g., "document.pdf")
+    file_path: str  # Required: full path to file (e.g., "/path/to/document.pdf")
+    title: Optional[str] = None
+    content_preview: Optional[str] = None
+    content_type: Optional[str] = None
+    file_size: Optional[int] = None
+    word_count: Optional[int] = None
+    processing_status: str = 'pending'
+    metadata: Optional[Dict[str, Any]] = None
+    
+    def __post_init__(self):
+        if self.metadata is None:
+            self.metadata = {}
 
 
 @dataclass

@@ -7,6 +7,7 @@ application logic following development rules for better organization.
 
 import os
 import logging
+import psycopg2.extras
 import hashlib
 from typing import Any, Dict
 from datetime import datetime, timedelta
@@ -76,83 +77,76 @@ class WebRoutes:
                     logger.info(f"Added {file_info['name']} to uploaded_files")
             
             logger.info(f"Total uploaded files found: {len(uploaded_files)} (out of {len(all_uploaded_files)} physical files)")
-            
-            # Get collection statistics
-            collection_stats = self.rag_manager.milvus_manager.get_collection_stats()
-            # Get email collection stats (if available)
+
+            # Gather stats and diagnostic data for the dashboard. Use StatsProvider
+            # and helper methods where available and fall back to safe defaults.
             try:
-                email_collection_stats = None
-                if hasattr(self.rag_manager.milvus_manager, 'email_collection_name'):
-                    # Use Milvus client utility directly if method similar to get_collection_stats not provided
-                    # Reuse logic from get_collection_stats for primary collection when possible
-                    from pymilvus import utility, Collection  # type: ignore
-                    email_collection_name = self.rag_manager.milvus_manager.email_collection_name
-                    if utility.has_collection(email_collection_name):
-                        try:
-                            col = Collection(email_collection_name)
-                            try:
-                                col.load()
-                            except Exception:
-                                pass
-                            # Attempt to infer dim & index info
-                            dim = None
-                            metric_type = None
-                            indexed = False
-                            try:
-                                schema = getattr(col, 'schema', None)
-                                if schema and hasattr(schema, 'fields'):
-                                    for f in schema.fields:
-                                        params = getattr(f, 'params', {}) or {}
-                                        if 'dim' in params:
-                                            dim_val = params.get('dim')
-                                            if dim_val is not None:
-                                                dim = int(dim_val)
-                                                break
-                            except Exception:
-                                pass
-                            try:
-                                idxs = getattr(col, 'indexes', []) or []
-                                indexed = len(idxs) > 0
-                                if indexed:
-                                    first = idxs[0]
-                                    p = getattr(first, 'params', {}) or {}
-                                    metric_type = p.get('metric_type') or p.get('METRIC_TYPE')
-                            except Exception:
-                                pass
-                            email_collection_stats = {
-                                'name': email_collection_name,
-                                'exists': True,
-                                'num_entities': getattr(col, 'num_entities', 0),
-                                'indexed': indexed,
-                                'metric_type': metric_type,
-                                'dim': dim,
-                            }
-                        except Exception:
-                            email_collection_stats = {'name': email_collection_name, 'exists': True, 'num_entities': 0, 'indexed': False, 'metric_type': None, 'dim': None, 'error': 'failed_to_load'}
-                    else:
-                        email_collection_stats = {'name': email_collection_name, 'exists': False, 'num_entities': 0, 'indexed': False, 'metric_type': None, 'dim': None}
-                else:
-                    email_collection_stats = None
+                all_stats = self.stats_provider.get_all_stats() or {}
+                kb_meta = all_stats.get('knowledgebase', {})
+                email_meta = all_stats.get('email', {})
+                url_meta = all_stats.get('url', {})
+                system_meta = all_stats.get('system', {})
+            except Exception as e:
+                logger.warning(f"Failed to collect panel stats: {e}")
+                kb_meta = {}
+                email_meta = {}
+                url_meta = {}
+                system_meta = {}
+
+            # Collection stats for primary KB and email collections (Milvus)
+            collection_stats = None
+            email_collection_stats = None
+            try:
+                mm = getattr(self.rag_manager, 'milvus_manager', None)
+                if mm:
+                    try:
+                        collection_stats = mm.get_collection_stats() if hasattr(mm, 'get_collection_stats') else getattr(mm, 'collection_info', None)
+                    except Exception:
+                        collection_stats = None
+                    try:
+                        email_collection_stats = mm.get_email_collection_stats() if hasattr(mm, 'get_email_collection_stats') else None
+                    except Exception:
+                        email_collection_stats = None
             except Exception:
+                collection_stats = None
                 email_collection_stats = None
 
-            # Connection health statuses
-            sql_status = self._get_database_status()
-            milvus_status = self.rag_manager.milvus_manager.check_connection()
-            ollama_status = self.rag_manager.ollama_health.get_overall_status()
+            # SQL and Milvus/OLLAMA status
+            try:
+                sql_status = self._get_database_status()
+            except Exception:
+                sql_status = {"connected": False}
 
-            # Get all stats from centralized provider
-            all_stats = self.stats_provider.get_all_stats()
-            
-            # Extract specific stats for template compatibility
-            kb_meta = all_stats['knowledgebase']
-            url_meta = all_stats['url']
-            email_meta = all_stats['email']
-            system_meta = all_stats['system']
+            try:
+                ollama_status = self.rag_manager.ollama_health.get_overall_status() if hasattr(self.rag_manager, 'ollama_health') else {"connected": False}
+            except Exception:
+                ollama_status = {"connected": False}
 
-            # Get URLs and email accounts for display
-            urls = self._get_enriched_urls()
-            email_accounts = self._get_email_accounts()
+            try:
+                milvus_status = None
+                mm = getattr(self.rag_manager, 'milvus_manager', None)
+                if mm and hasattr(mm, 'get_status'):
+                    milvus_status = mm.get_status()
+                elif mm and hasattr(mm, 'connection_args'):
+                    milvus_status = {"connected": True, "connection": getattr(mm, 'connection_args', None)}
+                else:
+                    milvus_status = {"connected": False}
+            except Exception:
+                milvus_status = {"connected": False}
+
+            # Enriched URL list for UI
+            try:
+                urls = self._get_enriched_urls()
+            except Exception:
+                urls = []
+
+            # Email accounts for UI
+            try:
+                email_accounts = []
+                if hasattr(self.rag_manager, 'email_account_manager') and self.rag_manager.email_account_manager:
+                    email_accounts = self.rag_manager.email_account_manager.list_accounts(include_password=False)
+            except Exception:
+                email_accounts = []
 
             return render_template(
                 'index.html',
@@ -209,50 +203,37 @@ class WebRoutes:
                     
                     # === CREATE DATABASE RECORD ===
                     try:
-                        import psycopg2
-                        
-                        conn = psycopg2.connect(
-                            host=os.getenv('POSTGRES_HOST', 'localhost'),
-                            port=os.getenv('POSTGRES_PORT', '5432'),
-                            database=os.getenv('POSTGRES_DB', 'rag_metadata'),
-                            user=os.getenv('POSTGRES_USER', 'rag_user'),
-                            password=os.getenv('POSTGRES_PASSWORD', 'rag_password')
-                        )
-                        
-                        with conn.cursor() as cursor:
-                            # === FILENAME COLLISION CHECK ===
-                            # Check if this exact file path already exists to prevent filename collisions
-                            # This is different from content duplication - this checks for same filename
-                            cursor.execute(
-                                "SELECT processing_status FROM documents WHERE file_path = %s",
-                                (file_path,)
-                            )
-                            existing_record = cursor.fetchone()
-                            
-                            if existing_record:
-                                # Filename collision with different content - this shouldn't happen
-                                # but if it does, we need to handle it gracefully
-                                logger.warning(f"Filename collision detected for {filename} - existing status: {existing_record[0]}")
-                                os.remove(file_path)
-                                flash(
-                                    f'A file named "{filename}" already exists in the system. '
-                                    f'Please delete the existing one before adding it again.',
-                                    'error'
+                        # Use centralized PostgreSQLManager to ensure RealDict rows
+                        from rag_manager.managers.postgres_manager import PostgreSQLManager
+                        mgr = PostgreSQLManager()
+                        with mgr.get_connection() as conn:
+                            with conn.cursor() as cursor:
+                                # === FILENAME COLLISION CHECK ===
+                                cursor.execute(
+                                    "SELECT processing_status FROM documents WHERE file_path = %s",
+                                    (file_path,)
                                 )
-                                return redirect(url_for('index'))
-                            
-                            # === CREATE DOCUMENT RECORD ===
-                            # Insert new document record with 'pending' status to start processing pipeline
-                            # This creates the database entry that will be picked up by document processors
-                            cursor.execute("""
-                                INSERT INTO documents (title, filename, file_path, processing_status, file_hash, created_at, updated_at)
-                                VALUES (%s, %s, %s, %s, %s, NOW(), NOW())
-                            """, (self._fallback_title_from_filename(filename), filename, file_path, 'pending', file_hash))
-                            conn.commit()
-                        
-                        conn.close()
+                                existing_record = cursor.fetchone()
+
+                                if existing_record:
+                                    # Filename collision with different content - handle gracefully
+                                    existing_status = existing_record.get('processing_status') if isinstance(existing_record, dict) else None
+                                    logger.warning(f"Filename collision detected for {filename} - existing status: {existing_status}")
+                                    os.remove(file_path)
+                                    flash(
+                                        f'A file named "{filename}" already exists in the system. '
+                                        f'Please delete the existing one before adding it again.',
+                                        'error'
+                                    )
+                                    return redirect(url_for('index'))
+
+                                # === CREATE DOCUMENT RECORD ===
+                                cursor.execute("""
+                                    INSERT INTO documents (title, filename, file_path, processing_status, file_hash, created_at, updated_at)
+                                    VALUES (%s, %s, %s, %s, %s, NOW(), NOW())
+                                """, (self.rag_manager._fallback_title_from_filename(filename), filename, file_path, 'pending', file_hash))
+                                conn.commit()
                         logger.info(f"Stored new file record for {filename} in database")
-                        
                     except Exception as e:
                         # Log the full technical error details for debugging
                         logger.error(f"Could not store file record for {filename}: {e}")
@@ -337,8 +318,8 @@ class WebRoutes:
                             
                             # Route based on classification
                             if classification == 'email' and hasattr(self.rag_manager, 'email_account_manager') and self.rag_manager.email_account_manager:
-                                # Email-specific search using hybrid retrieval
-                                logger.debug("Routing to email hybrid search")
+                                # Email-specific search using retrieval
+                                logger.debug("Routing to email search")
                                 try:
                                     email_results = self.rag_manager.email_account_manager.search_emails_hybrid(query, top_k)
                                     context_text, email_sources = self.rag_manager.email_account_manager.format_email_context(email_results)
@@ -499,73 +480,62 @@ class WebRoutes:
             
             # No in-memory status, check database for processing status
             try:
-                # Use direct database connection
-                import psycopg2
-                import os
-                
-                conn = psycopg2.connect(
-                    host=os.getenv('POSTGRES_HOST', 'localhost'),
-                    port=os.getenv('POSTGRES_PORT', '5432'),
-                    database=os.getenv('POSTGRES_DB', 'rag_metadata'),
-                    user=os.getenv('POSTGRES_USER', 'rag_user'),
-                    password=os.getenv('POSTGRES_PASSWORD', 'rag_password')
-                )
-                
-                with conn.cursor() as cursor:
-                    cursor.execute(
-                        "SELECT processing_status, title, word_count FROM documents WHERE title = %s OR file_path LIKE %s",
-                        (filename, f'%{filename}%')
-                    )
-                    result = cursor.fetchone()
-                    
-                    if result:
-                        db_status, title, word_count, metadata = result
-                        
-                        # Get chunk count from metadata if available
-                        chunk_count = 0
-                        if metadata and isinstance(metadata, dict):
-                            chunk_count = metadata.get('chunk_count', 0)
-                        
-                        # Convert database status to response format
-                        if db_status == 'completed':
-                            response_data = {
-                                'status': 'completed',
-                                'progress': 100,
-                                'message': f'Successfully processed {chunk_count} chunks' if chunk_count > 0 else 'Processing completed',
-                                'chunks_count': chunk_count,
-                                'error_details': None,
-                                'title': title,
-                                'deletion_status': None
-                            }
-                            conn.close()
-                            return jsonify(response_data)
-                        elif db_status == 'failed':
-                            response_data = {
-                                'status': 'error',
-                                'progress': 0,
-                                'message': 'Processing failed',
-                                'chunks_count': 0,
-                                'error_details': 'Processing failed',
-                                'title': title,
-                                'deletion_status': None
-                            }
-                            conn.close()
-                            return jsonify(response_data)
-                        elif db_status == 'pending':
-                            response_data = {
-                                'status': 'pending',
-                                'progress': 0,
-                                'message': 'Waiting to be processed',
-                                'chunks_count': 0,
-                                'error_details': None,
-                                'title': title,
-                                'deletion_status': None
-                            }
-                            conn.close()
-                            return jsonify(response_data)
-                
-                conn.close()
-                        
+                # Use centralized PostgreSQLManager for consistent dict rows
+                from rag_manager.managers.postgres_manager import PostgreSQLManager
+                mgr = PostgreSQLManager()
+                with mgr.get_connection() as conn:
+                    with conn.cursor() as cursor:
+                        cursor.execute(
+                            "SELECT processing_status, title, word_count, metadata FROM documents WHERE title = %s OR file_path LIKE %s",
+                            (filename, f'%{filename}%')
+                        )
+                        result = cursor.fetchone()
+                        if result:
+                            # dict-style row expected
+                            db_status = result.get('processing_status')
+                            title = result.get('title')
+                            word_count = result.get('word_count')
+                            metadata = result.get('metadata')
+
+                            # Get chunk count from metadata if available
+                            chunk_count = 0
+                            if metadata and isinstance(metadata, dict):
+                                chunk_count = metadata.get('chunk_count', 0)
+
+                            # Convert database status to response format
+                            if db_status == 'completed':
+                                response_data = {
+                                    'status': 'completed',
+                                    'progress': 100,
+                                    'message': f'Successfully processed {chunk_count} chunks' if chunk_count > 0 else 'Processing completed',
+                                    'chunks_count': chunk_count,
+                                    'error_details': None,
+                                    'title': title,
+                                    'deletion_status': None
+                                }
+                                return jsonify(response_data)
+                            elif db_status == 'failed':
+                                response_data = {
+                                    'status': 'error',
+                                    'progress': 0,
+                                    'message': 'Processing failed',
+                                    'chunks_count': 0,
+                                    'error_details': 'Processing failed',
+                                    'title': title,
+                                    'deletion_status': None
+                                }
+                                return jsonify(response_data)
+                            elif db_status == 'pending':
+                                response_data = {
+                                    'status': 'pending',
+                                    'progress': 0,
+                                    'message': 'Waiting to be processed',
+                                    'chunks_count': 0,
+                                    'error_details': None,
+                                    'title': title,
+                                    'deletion_status': None
+                                }
+                                return jsonify(response_data)
             except Exception as e:
                 logger.warning(f"Error checking database status for {filename}: {e}")
             
@@ -580,6 +550,46 @@ class WebRoutes:
         def ollama_status():
             """Diagnostic endpoint for Ollama services status."""
             return jsonify(self.rag_manager.ollama_health.get_overall_status())
+
+        @self.app.route('/admin/milvus_stats')
+        def milvus_stats():
+            """Return basic Milvus collection stats and retriever debug info."""
+            try:
+                mm = self.rag_manager.milvus_manager
+                # Ensure vector store is initialized
+                try:
+                    mm._ensure_vector_store()
+                except Exception:
+                    pass
+
+                from pymilvus import Collection
+                collection_name = getattr(mm, 'collection_name', None)
+                if not collection_name:
+                    return jsonify({'error': 'No collection configured'}), 400
+
+                try:
+                    coll = Collection(collection_name)
+                    num_entities = coll.num_entities
+                except Exception as e:
+                    num_entities = None
+
+                retriever_debug = {}
+                try:
+                    retr = getattr(mm, 'document_retriever', None)
+                    if retr and hasattr(retr, 'last_analysis'):
+                        retriever_debug = retr.last_analysis or {}
+                except Exception:
+                    retriever_debug = {}
+
+                return jsonify({
+                    'collection': collection_name,
+                    'num_entities': num_entities,
+                    'connection': mm.connection_args,
+                    'retriever_debug': retriever_debug
+                })
+            except Exception as e:
+                logger.error(f"Failed to get Milvus stats: {e}", exc_info=True)
+                return jsonify({'error': str(e)}), 500
         
         @self.app.route('/document/<path:filename>/update', methods=['POST'])
         def update_document_metadata(filename):
@@ -720,10 +730,10 @@ class WebRoutes:
             logger.debug(f"Returning default 'not_found' status for URL ID: '{url_id_str}'")
             return jsonify({'status': 'not_found'})
 
-        @self.app.route('/email_status/<int:account_id>')
-        def get_email_status(account_id: int):
+        @self.app.route('/email_status/<account_id>')
+        def get_email_status(account_id: str):
             """Get processing status for an email account refresh."""
-            status = self.rag_manager.email_processing_status.get(account_id)
+            status = self.rag_manager.email_processing_status.get(str(account_id))
             if status:
                 return jsonify({
                     'status': status.status,
@@ -734,7 +744,11 @@ class WebRoutes:
             try:
                 if hasattr(self.rag_manager, 'email_account_manager') and self.rag_manager.email_account_manager:
                     for acct in self.rag_manager.email_account_manager.list_accounts(include_password=False):
-                        if acct.get('id') == account_id:
+                        email_acct_id = acct.get('email_account_id')
+                        if not email_acct_id:
+                            logger.warning(f"Email account missing 'email_account_id' canonical key: {acct}")
+                            email_acct_id = acct.get('id')
+                        if str(email_acct_id) == str(account_id):
                             return jsonify({
                                 'status': 'not_found',
                                 'last_update_status': acct.get('last_update_status'),
@@ -803,7 +817,11 @@ class WebRoutes:
             result = self.rag_manager.url_manager.add_url(url)
             if result['success']:
                 extracted_title = result.get('title', 'Unknown')
-                url_id = result.get('id')
+                url_id = result.get('url_id')
+                if not url_id:
+                    logger.error("URL manager returned success but no canonical 'url_id': %s", result)
+                    flash('Internal error: URL added but missing identifier; check logs', 'error')
+                    return redirect(url_for('index'))
                 
                 # Automatically trigger initial processing with snapshot creation
                 if url_id and not url_id in self.rag_manager.url_processing_status:
@@ -1131,8 +1149,8 @@ class WebRoutes:
 
             return redirect(url_for('index'))
 
-        @self.app.route('/email_accounts/<int:account_id>', methods=['POST'])
-        def update_email_account(account_id: int):
+        @self.app.route('/email_accounts/<account_id>', methods=['POST'])
+        def update_email_account(account_id: str):
             """Update an existing email account configuration."""
             account_name = request.form.get('account_name', '').strip()
             server = request.form.get('server', '').strip()
@@ -1200,8 +1218,8 @@ class WebRoutes:
 
             return redirect(url_for('index'))
 
-        @self.app.route('/email_accounts/<int:account_id>/delete', methods=['POST'])
-        def delete_email_account(account_id: int):
+        @self.app.route('/email_accounts/<account_id>/delete', methods=['POST'])
+        def delete_email_account(account_id: str):
             """Remove an email account configuration."""
             try:
                 if hasattr(self.rag_manager, 'email_account_manager') and self.rag_manager.email_account_manager:
@@ -1214,13 +1232,13 @@ class WebRoutes:
 
             return redirect(url_for('index'))
 
-        @self.app.route('/email_accounts/<int:account_id>/refresh', methods=['POST'])
-        def refresh_email_account(account_id: int):
+        @self.app.route('/email_accounts/<account_id>/refresh', methods=['POST'])
+        def refresh_email_account(account_id: str):
             """Trigger immediate sync for an email account."""
             if not hasattr(self.rag_manager, 'email_account_manager') or not self.rag_manager.email_account_manager:
                 flash('Email ingestion not configured', 'error')
                 return redirect(url_for('index'))
-                
+
             import threading
             th = threading.Thread(target=self.rag_manager._refresh_email_account_background, args=(account_id,))
             th.daemon = True
@@ -1240,83 +1258,87 @@ class WebRoutes:
                     logger.error("Email account manager not available")
                     return jsonify({"error": "Email system not available"}), 500
                 
-                # Get database connection
-                import psycopg2
-                conn = psycopg2.connect(
-                    host=os.getenv('POSTGRES_HOST', 'localhost'),
-                    port=os.getenv('POSTGRES_PORT', '5432'),
-                    database=os.getenv('POSTGRES_DB', 'rag_metadata'),
-                    user=os.getenv('POSTGRES_USER', 'rag_user'),
-                    password=os.getenv('POSTGRES_PASSWORD', 'rag_password')
-                )
+                # Get database connection via central PostgreSQLManager
+                from rag_manager.managers.postgres_manager import PostgreSQLManager
+                pg_mgr = None
+                if hasattr(self.rag_manager, 'database_manager') and hasattr(self.rag_manager.database_manager, 'postgresql_manager'):
+                    pg_mgr = self.rag_manager.database_manager.postgresql_manager
+                else:
+                    pg_mgr = PostgreSQLManager()
+
+                with pg_mgr.get_connection() as conn:
+                    with conn.cursor() as cursor:
+                            # Query email by email_id
+                            cursor.execute("""
+                                SELECT email_id, account_id, subject, sender, recipients, 
+                                       email_date, content, content_type, message_id, 
+                                       has_attachments, thread_id, in_reply_to, folder
+                                FROM emails 
+                                WHERE email_id = %s
+                                LIMIT 1
+                            """, (email_id,))
+
+                            email_row = cursor.fetchone()
+
+                            if not email_row:
+                                logger.warning(f"Email not found: {email_id}")
+                                return jsonify({"error": "Email not found"}), 404
+
+                            # Extract email data (dict-style row expected)
+                            email_data = {
+                                'email_id': email_row.get('email_id'),
+                                'account_id': email_row.get('account_id'),
+                                'subject': email_row.get('subject') or "No Subject",
+                                'sender': email_row.get('sender') or "Unknown Sender",
+                                'recipients': email_row.get('recipients') or "",
+                                'email_date': str(email_row.get('email_date')) if email_row.get('email_date') else "Unknown Date",
+                                'content': email_row.get('content') or "",
+                                'content_type': email_row.get('content_type') or "text/plain",
+                                'message_id': email_row.get('message_id') or "",
+                                'has_attachments': bool(email_row.get('has_attachments')),
+                                'thread_id': email_row.get('thread_id') or "",
+                                'in_reply_to': email_row.get('in_reply_to') or "",
+                                'folder': email_row.get('folder') or "inbox"
+                            }
+
+                            # Get account info for context
+                            cursor.execute("""
+                                SELECT account_name, email_address 
+                                FROM email_accounts 
+                                WHERE account_id = %s
+                            """, (email_data['account_id'],))
+
+                            account_row = cursor.fetchone()
+                            if account_row:
+                                email_data['account_name'] = account_row.get('account_name') or account_row.get('name')
+                                email_data['account_email'] = account_row.get('email_address') or account_row.get('email')
+
+                            # Get attachments if any
+                            if email_data['has_attachments']:
+                                cursor.execute("""
+                                    SELECT attachment_id, filename, content_type, size
+                                    FROM email_attachments 
+                                    WHERE email_id = %s
+                                """, (email_id,))
+
+                                attachments = []
+                                for att_row in cursor.fetchall():
+                                    attachments.append({
+                                        'attachment_id': att_row.get('attachment_id') if isinstance(att_row, dict) else att_row[0],
+                                        'filename': att_row.get('filename') if isinstance(att_row, dict) else att_row[1],
+                                        'content_type': att_row.get('content_type') if isinstance(att_row, dict) else att_row[2],
+                                        'size': att_row.get('size') if isinstance(att_row, dict) else att_row[3]
+                                    })
+                                email_data['attachments'] = attachments
+                            else:
+                                email_data['attachments'] = []
                 
-                with conn.cursor() as cursor:
-                    # Query email by email_id
-                    cursor.execute("""
-                        SELECT email_id, account_id, subject, sender, recipients, 
-                               email_date, content, content_type, message_id, 
-                               has_attachments, thread_id, in_reply_to, folder
-                        FROM emails 
-                        WHERE email_id = %s
-                        LIMIT 1
-                    """, (email_id,))
-                    
-                    email_row = cursor.fetchone()
-                    
-                    if not email_row:
-                        logger.warning(f"Email not found: {email_id}")
-                        return jsonify({"error": "Email not found"}), 404
-                    
-                    # Extract email data
-                    email_data = {
-                        'email_id': email_row[0],
-                        'account_id': email_row[1], 
-                        'subject': email_row[2] or "No Subject",
-                        'sender': email_row[3] or "Unknown Sender",
-                        'recipients': email_row[4] or "",
-                        'email_date': str(email_row[5]) if email_row[5] else "Unknown Date",
-                        'content': email_row[6] or "",
-                        'content_type': email_row[7] or "text/plain",
-                        'message_id': email_row[8] or "",
-                        'has_attachments': bool(email_row[9]),
-                        'thread_id': email_row[10] or "",
-                        'in_reply_to': email_row[11] or "",
-                        'folder': email_row[12] or "inbox"
-                    }
-                    
-                    # Get account info for context
-                    cursor.execute("""
-                        SELECT account_name, email_address 
-                        FROM email_accounts 
-                        WHERE account_id = %s
-                    """, (email_data['account_id'],))
-                    
-                    account_row = cursor.fetchone()
-                    if account_row:
-                        email_data['account_name'] = account_row[0]
-                        email_data['account_email'] = account_row[1]
-                    
-                    # Get attachments if any
-                    if email_data['has_attachments']:
-                        cursor.execute("""
-                            SELECT attachment_id, filename, content_type, size
-                            FROM email_attachments 
-                            WHERE email_id = %s
-                        """, (email_id,))
-                        
-                        attachments = []
-                        for att_row in cursor.fetchall():
-                            attachments.append({
-                                'attachment_id': att_row[0],
-                                'filename': att_row[1],
-                                'content_type': att_row[2],
-                                'size': att_row[3]
-                            })
-                        email_data['attachments'] = attachments
-                    else:
-                        email_data['attachments'] = []
-                
-                conn.close()
+                # If we created a temporary manager above, close its pool
+                try:
+                    if pg_mgr and getattr(pg_mgr, 'config', None) is not None:
+                        pg_mgr.close()
+                except Exception:
+                    pass
                 
                 # Format content for display
                 if email_data['content_type'] == 'text/html':
@@ -1372,7 +1394,7 @@ class WebRoutes:
                 if directory == self.config.UPLOADED_FOLDER:
                     try:
                         meta = self.rag_manager.document_manager.get_document_metadata(filename) or {} if self.rag_manager.document_manager else {}
-                        entry['title'] = meta.get('title') or self._fallback_title_from_filename(filename)
+                        entry['title'] = meta.get('title') or self.rag_manager._fallback_title_from_filename(filename)
                         
                         # Debug logging to see what metadata we have
                         logger.info(f"Metadata for {filename}: {meta}")
@@ -1424,7 +1446,7 @@ class WebRoutes:
                             continue
                     except Exception as e:
                         logger.warning(f"Failed to get metadata for {filename}: {e}")
-                        entry['title'] = self._fallback_title_from_filename(filename)
+                        entry['title'] = self.rag_manager._fallback_title_from_filename(filename)
                         entry['top_keywords'] = []
                         
                 files.append(entry)
@@ -1437,48 +1459,33 @@ class WebRoutes:
     def _get_file_database_status(self, filename: str) -> str | None:
         """Get the processing status for a file from the database."""
         try:
-            # Use a more direct database connection approach
-            import psycopg2
-            import os
-            
-            # Get connection details from environment
-            conn = psycopg2.connect(
-                host=os.getenv('POSTGRES_HOST', 'localhost'),
-                port=os.getenv('POSTGRES_PORT', '5432'),
-                database=os.getenv('POSTGRES_DB', 'rag_metadata'),
-                user=os.getenv('POSTGRES_USER', 'rag_user'),
-                password=os.getenv('POSTGRES_PASSWORD', 'rag_password')
-            )
-            
-            with conn.cursor() as cursor:
-                # Use improved search logic and prioritize 'completed' status
-                # This handles the case where multiple records exist for the same file
-                cursor.execute("""
-                    SELECT processing_status FROM documents 
-                    WHERE title = %s 
-                       OR (document_type = 'file' AND file_path LIKE %s)
-                       OR (document_type = 'url' AND file_path = %s)
-                       OR (filename IS NOT NULL AND filename = %s)
-                    ORDER BY 
-                        CASE processing_status 
-                            WHEN 'completed' THEN 1 
-                            WHEN 'pending' THEN 2 
-                            ELSE 3 
-                        END
-                    LIMIT 1
-                """, (filename, f'%/{filename}', filename, filename))
-                result = cursor.fetchone()
-                logger.debug(f"Direct DB query for {filename}: result = {result}")
-                if result and len(result) > 0:
-                    status = result[0]
-                    logger.debug(f"Found status for {filename}: {status}")
-                    conn.close()
-                    return status
-                else:
-                    logger.debug(f"No database record found for {filename}")
-                    conn.close()
-                    return None
-                    
+            from rag_manager.managers.postgres_manager import PostgreSQLManager
+            mgr = PostgreSQLManager()
+            with mgr.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        SELECT processing_status FROM documents 
+                        WHERE title = %s 
+                           OR (document_type = 'file' AND file_path LIKE %s)
+                           OR (document_type = 'url' AND file_path = %s)
+                           OR (filename IS NOT NULL AND filename = %s)
+                        ORDER BY 
+                            CASE processing_status 
+                                WHEN 'completed' THEN 1 
+                                WHEN 'pending' THEN 2 
+                                ELSE 3 
+                            END
+                        LIMIT 1
+                    """, (filename, f'%/{filename}', filename, filename))
+                    result = cursor.fetchone()
+                    logger.debug(f"Direct DB query for {filename}: result = {result}")
+                    if result:
+                        status = result.get('processing_status') if isinstance(result, dict) else None
+                        logger.debug(f"Found status for {filename}: {status}")
+                        return status
+                    else:
+                        logger.debug(f"No database record found for {filename}")
+                        return None
         except Exception as e:
             logger.warning(f"Error checking database status for {filename}: {e}")
             logger.debug(f"Exception details: {type(e)} {e.args}")
@@ -1504,7 +1511,7 @@ class WebRoutes:
                 return self.rag_manager.database_manager.postgresql_manager.get_version_info()
             else:
                 # Fallback - create a temporary PostgreSQL manager to get version
-                from ingestion.core.postgres_manager import PostgreSQLManager
+                from rag_manager.managers.postgres_manager import PostgreSQLManager
                 temp_pg_manager = PostgreSQLManager()
                 status = temp_pg_manager.get_version_info()
                 temp_pg_manager.close()
@@ -1538,7 +1545,7 @@ class WebRoutes:
                 # Add vector DB metrics: chunk count per URL (by source + document_id with legacy fallback)
                 try:
                     src = u.get('url')
-                    url_id = u.get('id')
+                    url_id = u.get('url_id')
                     u['chunk_count'] = self.rag_manager.milvus_manager.get_chunk_count_for_url(src, url_id) if src else 0
                 except Exception:
                     u['chunk_count'] = 0
@@ -1550,107 +1557,36 @@ class WebRoutes:
                 except Exception:
                     u['pages'] = 1
                     
-                # Add child URL statistics for parent URLs
-                try:
-                    url_id = u.get('id')
-                    if url_id:
-                        child_stats = self.rag_manager.url_manager.get_child_url_stats(url_id)
-                        u['child_stats'] = child_stats
-                        # Check if this URL has any children
-                        u['has_children'] = child_stats['total_children'] > 0
-                        # Calculate progress for parent URLs with children
-                        if u['has_children']:
-                            total = child_stats['total_children']
-                            completed = child_stats['completed_children']
-                            processing = child_stats['processing_children']
-                            u['child_progress_percent'] = (completed / total * 100) if total > 0 else 0
-                            u['is_parent_with_active_children'] = processing > 0
-                except Exception as e:
-                    logger.debug(f"Error getting child stats for URL {u.get('id')}: {e}")
-                    u['child_stats'] = {'total_children': 0, 'processing_children': 0, 'completed_children': 0, 'failed_children': 0}
-                    u['has_children'] = False
-                    u['child_progress_percent'] = 0
-                    u['is_parent_with_active_children'] = False
-                # Snapshot metrics via filesystem convention: SNAPSHOT_DIR/<domain>/<path>/...
-                try:
-                    from urllib.parse import urlparse
-                    
-                    base_dir = getattr(self.config, 'SNAPSHOT_DIR', os.path.join('uploaded', 'snapshots'))
-                    count = 0
-                    total_bytes = 0
-                    
-                    # Extract domain from URL for snapshot directory lookup
-                    if u.get('url'):
-                        parsed_url = urlparse(u['url'])
-                        domain = parsed_url.netloc
-                        if domain:
-                            # Check if domain directory exists (snapshots are stored by domain)
-                            domain_dir = os.path.join(base_dir, domain)
-                            if os.path.isdir(domain_dir):
-                                # Count all files under this domain's snapshot directory
-                                for root, _, files in os.walk(domain_dir):
-                                    for f in files:
-                                        fpath = os.path.join(root, f)
-                                        try:
-                                            total_bytes += os.path.getsize(fpath)
-                                            count += 1
-                                        except Exception:
-                                            continue
-                    
-                    u['snapshot_count'] = count if count > 0 else None
-                    # Human readable size
-                    if total_bytes > 0:
-                        units = ['B', 'KB', 'MB', 'GB', 'TB']
-                        size = float(total_bytes)
-                        unit_idx = 0
-                        while size >= 1024 and unit_idx < len(units) - 1:
-                            size /= 1024.0
-                            unit_idx += 1
-                        u['snapshot_total_size'] = f"{size:.1f} {units[unit_idx]}"
-                    else:
-                        u['snapshot_total_size'] = None
-                except Exception:
-                    u.setdefault('snapshot_count', None)
-                    u.setdefault('snapshot_total_size', None)
+                    # Add child URL statistics for parent URLs
+                    try:
+                        url_id = u.get('url_id')
+                        if url_id:
+                            child_stats = self.rag_manager.url_manager.get_child_url_stats(url_id)
+                            u['child_stats'] = child_stats
+                            # Check if this URL has any children
+                            u['has_children'] = child_stats['total_children'] > 0
+                            # Calculate progress for parent URLs with children
+                            if u['has_children']:
+                                total = child_stats['total_children']
+                                completed = child_stats['completed_children']
+                                processing = child_stats['processing_children']
+                                u['child_progress_percent'] = (completed / total * 100) if total > 0 else 0
+                                u['is_parent_with_active_children'] = processing > 0
+                    except Exception as e:
+                        uid = u.get('url_id')
+                        if not uid:
+                            logger.warning(f"Missing canonical 'url_id' for URL record while fetching child stats: {u}")
+                        logger.debug(f"Error getting child stats for URL {uid}: {e}")
+                        u['child_stats'] = {'total_children': 0, 'processing_children': 0, 'completed_children': 0, 'failed_children': 0}
+                        u['has_children'] = False
+                        u['child_progress_percent'] = 0
+                        u['is_parent_with_active_children'] = False
+                # Append the enriched URL to the result list
                 enriched_urls.append(u)
             return enriched_urls
         except Exception as e:
-            logger.warning(f"Failed to get enriched URLs: {e}")
+            logger.warning(f"Error building enriched URLs: {e}")
             return []
-
-    def _get_email_accounts(self) -> list:
-        """Get configured email accounts."""
-        try:
-            if hasattr(self.rag_manager, 'email_account_manager') and self.rag_manager.email_account_manager:
-                return self.rag_manager.email_account_manager.list_accounts(include_password=False)
-            else:
-                logger.info("PostgreSQL email manager not available")
-                return []
-        except Exception as e:
-            logger.warning(f"Failed to load email accounts: {e}")
-            return []
-
-    def _fallback_title_from_filename(self, filename: str) -> str:
-        """
-        Generate a fallback title from filename when no metadata is available.
-        
-        Args:
-            filename: The filename to convert to a title
-            
-        Returns:
-            A human-readable title derived from the filename
-        """
-        base = os.path.splitext(filename)[0]
-        base = base.replace('_', ' ').replace('-', ' ').strip()
-        if not base:
-            return filename
-        words = []
-        for w in base.split():
-            if len(w) > 3 and w.isupper():
-                words.append(w)
-            else:
-                words.append(w.capitalize())
-        return ' '.join(words)
     
     def _compute_file_hash(self, file_path: str) -> str:
         """

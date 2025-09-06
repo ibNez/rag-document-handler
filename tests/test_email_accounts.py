@@ -32,17 +32,18 @@ class MockPostgreSQLEmailManager:
     def __init__(self, *args, **kwargs):
         self.accounts = []
         self.next_id = 1
-    
+
     def create_account(self, record: Dict[str, Any]) -> int:
         account = dict(record)
-        account['id'] = self.next_id
+        # Use canonical key for account id
+        account['email_account_id'] = self.next_id
         # Add expected fields
         account['last_update_status'] = None
         account['last_processed_date'] = None
         self.next_id += 1
         self.accounts.append(account)
-        return account['id']
-    
+        return account['email_account_id']
+
     def list_accounts(self, include_password: bool = False) -> list:
         result = []
         for acc in self.accounts:
@@ -51,16 +52,16 @@ class MockPostgreSQLEmailManager:
                 del account_copy['password']
             result.append(account_copy)
         return result
-    
+
     def update_account(self, account_id: int, updates: Dict[str, Any]) -> None:
         for acc in self.accounts:
-            if acc['id'] == account_id:
+            if acc.get('email_account_id') == account_id:
                 acc.update(updates)
                 break
-    
+
     def delete_account(self, account_id: int) -> None:
-        self.accounts = [acc for acc in self.accounts if acc['id'] != account_id]
-    
+        self.accounts = [acc for acc in self.accounts if acc.get('email_account_id') != account_id]
+
     def get_account_count(self) -> int:
         return len(self.accounts)
 
@@ -140,7 +141,7 @@ def test_email_account_manager_crud(manager: MockPostgreSQLEmailManager) -> None
     assert accounts_with_pw[0]["password"] == "pass"
 
     # Mock manager stores passwords directly for testing
-    stored_account = next(acc for acc in manager.accounts if acc['id'] == account_id)
+    stored_account = next(acc for acc in manager.accounts if acc.get('email_account_id') == account_id)
     assert stored_account["password"] == "pass"  # Mock doesn't encrypt
 
     manager.update_account(account_id, {"email_address": "new"})

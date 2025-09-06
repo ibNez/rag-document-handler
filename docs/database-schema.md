@@ -90,7 +90,7 @@ CREATE TABLE documents (
 
 ### Document Chunks Table
 
-Stores text chunks from documents for hybrid retrieval and search.
+Stores text chunks from documents for retrieval and search.
 
 ```sql
 CREATE TABLE document_chunks (
@@ -104,11 +104,16 @@ CREATE TABLE document_chunks (
     element_types TEXT[] NULL,
     token_count INTEGER,
     chunk_hash VARCHAR(64),
+    topics TEXT NULL,
     embedding_version VARCHAR(50) DEFAULT 'mxbai-embed-large',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     CONSTRAINT fk_document_chunks_document FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE,
     CONSTRAINT uk_document_chunks_position UNIQUE(document_id, chunk_ordinal)
 );
+
+-- Full-text search index for multi-topic queries
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_document_chunks_topics_gin 
+ON document_chunks USING GIN (topics gin_trgm_ops);
 ```
 
 #### Field Descriptions
@@ -125,6 +130,7 @@ CREATE TABLE document_chunks (
 | `element_types` | TEXT[] | Types of elements from unstructured library | Optional |
 | `token_count` | INTEGER | Number of tokens in chunk | Optional |
 | `chunk_hash` | VARCHAR(64) | Content hash for deduplication | Optional |
+| `topics` | TEXT | LLM-generated comma-separated multi-topics for search discoverability | Optional |
 
 ### URLs Table
 
@@ -258,7 +264,7 @@ CREATE TABLE email_accounts (
 | `batch_limit` | INTEGER | Maximum emails per batch | DEFAULT 50 |
 | `use_ssl` | BOOLEAN | Enable SSL/TLS connection | DEFAULT TRUE |
 | `refresh_interval_minutes` | INTEGER | Sync frequency in minutes | DEFAULT 60 |
-| `offset_position` | INTEGER | **NEW**: Current processing offset position for resuming interrupted operations | DEFAULT 0 |
+| `offset_position` | INTEGER | Current processing offset position for resuming interrupted operations | DEFAULT 0 |
 | `last_synced` | TIMESTAMP | Last successful sync time | Optional |
 | `last_update_status` | VARCHAR | Status of last sync attempt | Optional |
 | `next_run` | TIMESTAMP | Scheduled next sync time | Optional |
@@ -308,6 +314,48 @@ CREATE TABLE email_messages (
 | `processed_timestamp` | TIMESTAMP | When email was processed | DEFAULT CURRENT_TIMESTAMP |
 | `created_at` | TIMESTAMP | Record creation time | DEFAULT CURRENT_TIMESTAMP |
 | `updated_at` | TIMESTAMP | Last record update | DEFAULT CURRENT_TIMESTAMP |
+
+### Email Chunks Table
+
+Stores extracted text chunks from email messages for retrieval and full-text search. Email chunks are linked to the parent email via the message ID (string primary key in `emails`).
+
+```sql
+CREATE TABLE email_chunks (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    email_id TEXT NOT NULL,
+    chunk_text TEXT NOT NULL,
+    chunk_index INTEGER NOT NULL,
+    token_count INTEGER,
+    chunk_hash VARCHAR(64),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    CONSTRAINT fk_email_chunks_email FOREIGN KEY (email_id) REFERENCES emails(message_id) ON DELETE CASCADE,
+    CONSTRAINT uk_email_chunks_position UNIQUE(email_id, chunk_index)
+);
+```
+
+#### Field Descriptions
+
+| Field | Type | Description | Constraints |
+|-------|------|-------------|-------------|
+| `id` | UUID | Unique identifier for the chunk | PRIMARY KEY, DEFAULT uuid_generate_v4() |
+| `email_id` | TEXT | Parent email message identifier (matches `emails.message_id`) | NOT NULL, FK → emails(message_id) |
+| `chunk_text` | TEXT | The actual text content of the email chunk | NOT NULL |
+| `chunk_index` | INTEGER | Sequential chunk number within the email (0-based) | NOT NULL |
+| `token_count` | INTEGER | Token count for the chunk (optional) | Optional |
+| `chunk_hash` | VARCHAR(64) | Content hash used for deduplication | Optional |
+| `created_at` | TIMESTAMP | When the chunk was created/stored | DEFAULT NOW() |
+
+#### Indexes and Performance
+
+- `idx_email_chunks_email_id` on `email_chunks(email_id)` — speeds lookups by parent email.
+- `idx_email_chunks_hash` on `email_chunks(chunk_hash)` — speeds deduplication checks.
+- `idx_email_chunks_position` on `(email_id, chunk_index)` — supports the unique position constraint and ordered retrieval.
+
+#### Notes
+
+- Email chunks use the parent `emails.message_id` string as the foreign-key reference to keep the email primary identifier stable across accounts and transfers.
+- The unique constraint on `(email_id, chunk_index)` prevents duplicate chunk inserts for the same message and position.
+- For retrieval, full-text search indexes (GIN on to_tsvector(chunk_text)) are created to support fast FTS queries against email chunks.
 
 ## Milvus Schema
 
@@ -580,7 +628,7 @@ To prevent regressions when modifying one domain:
 - NEVER introduce a new identifier pattern (always UUID primary keys for core tables)
 - Reuse status vocabulary (see table above)
 - Keep uniqueness enforcement declarative (DB constraints) + minimal pre-checks (filesystem for files)
-- Add any new domain to: schema doc tables, stats panels, and hybrid retrieval only if logically required
+- Add any new domain to: schema doc tables, stats panels, and retrieval only if logically required
 - Prefer UPDATE over INSERT during processing phases (no duplicate logical rows)
 
 # End of augmented schema section.
