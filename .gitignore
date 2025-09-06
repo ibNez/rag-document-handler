@@ -120,4 +120,12 @@ celerybeat.pid
 .dmypy.json
 dmypy.json
 
+# SSH keys (generated files)
+id_ed25519*
+id_rsa*
+*.pub
+
+# Generated container files
+containers/
+
 tests/asset_generator*

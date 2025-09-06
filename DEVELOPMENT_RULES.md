@@ -1,6 +1,13 @@
-<!-- SOURCE THE ENVIRONMENT!  source .venv/bin/activate
-We do not use placeholder, stubbed in data, or any other type of fake code.  We don't mask our failures with fallbacks we log them and fail out so we can identify and fix the issue.
-We are creating a new application and most not create backward compatibility code. We can simply reinstall to continue testing. -->
+<!-- 
+STRICT RULES:
+1. Do not include design instructions in the code or documentation only describe the functionality.
+2. Do not use backward compatibility code. This is a new application.
+3. Do not use stubbed in data, place holder code, or fake wireframes.
+4. Do not use fallbacks for failures, use exceptions with logging to expose the problem.
+5. Do not modify data at the database level
+6. Do not run commands in the terminal with more than 5 lines.
+7. Source the python environment before running code in the terminal. source .venv/bin/activate
+8. Move depricated files to backup/ folder -->
 # RAG Knowledge Base Manager - Development Rules & Standards
 
 ## 📋 Overview

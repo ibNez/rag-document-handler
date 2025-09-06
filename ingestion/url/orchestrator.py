@@ -11,7 +11,7 @@ import os
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 
-from .manager import PostgreSQLURLManager
+from .source_manager import URLSourceManager
 from ingestion.document.manager import DocumentManager
 
 logger = logging.getLogger(__name__)
@@ -23,7 +23,7 @@ class URLOrchestrator:
     def __init__(
         self,
         config,
-        url_manager: Optional[PostgreSQLURLManager] = None,
+        url_manager: Optional[URLSourceManager] = None,
         processor: Optional[Any] = None,  # URL processor will be implemented later
         milvus_manager: Optional[Any] = None,  # For storing chunks in vector database
         snapshot_service: Optional[Any] = None,  # For creating PDF snapshots

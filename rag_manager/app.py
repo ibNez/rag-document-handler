@@ -199,17 +199,17 @@ class RAGKnowledgebaseManager:
 
     def _initialize_url_manager(self) -> None:
         """Initialize URL manager based on feature flags."""
-        logger.info("Initializing PostgreSQL URL Manager")
+        logger.info("Initializing URL Source Manager")
         try:
-            from ingestion.url.manager import PostgreSQLURLManager
+            from ingestion.url.source_manager import URLSourceManager
             if self.postgres_manager:
-                self.url_manager = PostgreSQLURLManager(self.postgres_manager)
-                logger.info("PostgreSQL URL Manager initialized successfully")
+                self.url_manager = URLSourceManager(self.postgres_manager, self.milvus_manager)
+                logger.info("URL Source Manager initialized successfully")
             else:
                 logger.error("Cannot initialize URL manager: PostgreSQL manager not available")
                 self.url_manager = None
         except ImportError as e:
-            logger.error(f"Failed to import PostgreSQL URL Manager: {e}")
+            logger.error(f"Failed to import URL Source Manager: {e}")
             self.url_manager = None
 
     def _initialize_url_orchestrator(self) -> None:
@@ -267,8 +267,8 @@ class RAGKnowledgebaseManager:
                 return
             
             # Initialize PostgreSQL email account manager (stats from PostgreSQL, not Milvus)
-            from ingestion.email.manager import PostgreSQLEmailManager
-            self.email_account_manager = PostgreSQLEmailManager(self.postgres_manager)
+            from ingestion.email.account_manager import EmailAccountManager
+            self.email_account_manager = EmailAccountManager(self.postgres_manager)
             logger.info("PostgreSQL email account manager initialized with PostgreSQL-based statistics")
             
             # Ensure email vector store is ready (separate from document vector store)
@@ -276,7 +276,7 @@ class RAGKnowledgebaseManager:
             logger.info("Email vector store validated for email embeddings")
             
             # Create PostgreSQL-based email message manager
-            from ingestion.email.manager import PostgreSQLEmailManager as EmailMessageManager
+            from ingestion.email.account_manager import EmailAccountManager as EmailMessageManager
             email_message_manager = EmailMessageManager(self.postgres_manager)
             logger.info("PostgreSQL email message manager initialized")
             

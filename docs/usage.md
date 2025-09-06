@@ -17,11 +17,11 @@ The application exposes a Flask web interface for managing documents, URLs, emai
 
 ## Architecture Overview
 
-The refactored application uses:
+The application uses:
 - **PostgreSQL**: Document metadata, URL scheduling, email accounts and messages
 - **Milvus**: Vector embeddings for semantic search
 - **Modular Ingestion**: Separate processing for documents, URLs, and emails
-- **Panel-Specific Statistics**: Dedicated statistics providers for each dashboard section
+- **Modular Retrieval**: Dedicated retrieval modules for different content types
 - **Template Partials**: Well-organized, maintainable template structure
 
 ## Dashboard Interface

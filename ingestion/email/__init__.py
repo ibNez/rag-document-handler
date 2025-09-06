@@ -11,6 +11,7 @@ from .connectors import EmailConnector, IMAPConnector, GmailConnector, ExchangeC
 from .orchestrator import EmailOrchestrator
 from .processor import EmailProcessor
 from .ingest import run_email_ingestion
+from .account_manager import EmailAccountManager
 
 __all__ = [
     "EmailConnector",
@@ -19,5 +20,6 @@ __all__ = [
     "ExchangeConnector",
     "EmailOrchestrator",
     "EmailProcessor",
+    "EmailAccountManager",
     "run_email_ingestion",
 ]

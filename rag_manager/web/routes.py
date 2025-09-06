@@ -9,6 +9,7 @@ import os
 import logging
 import psycopg2.extras
 import hashlib
+import re
 from typing import Any, Dict
 from datetime import datetime, timedelta
 
@@ -18,6 +19,7 @@ from werkzeug.utils import secure_filename
 from ..core.config import Config
 from ..core.models import DocumentProcessingStatus, URLProcessingStatus, EmailProcessingStatus
 from .stats import StatsProvider
+from .validation import InputValidator, ValidationError
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -293,11 +295,29 @@ class WebRoutes:
             logger.info(f"Search endpoint called with method: {request.method}")
             
             if request.method == 'POST':
-                query = request.form.get('query', '').strip()
-                top_k = int(request.form.get('top_k', 10))
-                search_type = request.form.get('search_type', 'rag')  # 'rag' or 'similarity'
-                
-                logger.info(f"Processing search request - Query: '{query}', Top K: {top_k}, Type: {search_type}")
+                try:
+                    # Validate search inputs with proper error handling
+                    query = InputValidator.validate_search_query(request.form.get('query', ''))
+                    top_k = InputValidator.validate_integer(
+                        request.form.get('top_k', 10), 
+                        "Results count", 
+                        min_val=1, 
+                        max_val=50
+                    )
+                    search_type = InputValidator.validate_string(
+                        request.form.get('search_type', 'rag'),
+                        "Search type",
+                        max_length=20,
+                        pattern=re.compile(r'^(rag|similarity)$')
+                    )
+                    
+                    logger.info(f"Processing validated search request - Query: '{query[:50]}...', Top K: {top_k}, Type: {search_type}")
+                    
+                except ValidationError as e:
+                    logger.error(f"Search input validation failed: {e}")
+                    flash(f"Invalid input: {e}", 'error')
+                    return render_template('index.html', 
+                                         all_stats=self.stats_provider.get_all_stats())
                 
                 if query:
                     try:
@@ -594,19 +614,35 @@ class WebRoutes:
         @self.app.route('/document/<path:filename>/update', methods=['POST'])
         def update_document_metadata(filename):
             """Update editable document metadata like title."""
-            title = request.form.get('title','').strip()
-            if '..' in filename or filename.startswith('/'):
-                abort(400)
-            uploaded_path = os.path.join(self.config.UPLOADED_FOLDER, filename)
+            try:
+                # Validate filename to prevent path traversal attacks
+                safe_filename = InputValidator.validate_filename(filename, "Document filename")
+                
+                # Validate title input
+                title = InputValidator.validate_string(
+                    request.form.get('title', ''),
+                    "Document title",
+                    max_length=200,
+                    required=False
+                )
+                
+                logger.info(f"Updating metadata for validated document: {safe_filename[:50]}...")
+                
+            except ValidationError as e:
+                logger.error(f"Document metadata validation failed: {e}")
+                flash(f"Invalid input: {e}", 'error')
+                return redirect(url_for('index'))
+            
+            uploaded_path = os.path.join(self.config.UPLOADED_FOLDER, safe_filename)
             if not os.path.isfile(uploaded_path):
                 flash('Document not found', 'error')
                 return redirect(url_for('index'))
             try:
                 if title:
                     # Get the correct file_path for the upsert
-                    uploaded_path = os.path.join(self.config.UPLOADED_FOLDER, filename)
+                    uploaded_path = os.path.join(self.config.UPLOADED_FOLDER, safe_filename)
                     self.rag_manager.document_manager.upsert_document_metadata(
-                        filename, 
+                        safe_filename, 
                         {
                             'title': title,
                             'file_path': uploaded_path
@@ -808,10 +844,21 @@ class WebRoutes:
         @self.app.route('/add_url', methods=['POST'])
         def add_url():
             """Add a new URL with automatic title extraction and initial processing."""
-            url = request.form.get('url', '').strip()
-            
-            if not url:
-                flash('URL is required', 'error')
+            try:
+                # Validate URL input with comprehensive security checks
+                url = InputValidator.validate_string(
+                    request.form.get('url', ''),
+                    "URL",
+                    max_length=2000,
+                    required=True,
+                    pattern=re.compile(r'^https?://[^\s/$.?#].[^\s]*$', re.IGNORECASE)
+                )
+                
+                logger.info(f"Processing validated URL addition: {url[:100]}...")
+                
+            except ValidationError as e:
+                logger.error(f"URL validation failed: {e}")
+                flash(f"Invalid URL: {e}", 'error')
                 return redirect(url_for('index'))
             
             result = self.rag_manager.url_manager.add_url(url)
@@ -980,44 +1027,67 @@ class WebRoutes:
                 flash('Invalid URL ID format', 'error')
                 return redirect(url_for('index'))
                 
-            title = request.form.get('title')
-            description = request.form.get('description')
-            refresh_raw = request.form.get('refresh_interval_minutes')
-            crawl_domain_flag = 1 if request.form.get('crawl_domain') in ('on', '1', 'true', 'True') else 0
-            ignore_robots_flag = 1 if request.form.get('ignore_robots') in ('on', '1', 'true', 'True') else 0
-            
-            # Optional retention fields
-            sr_raw = request.form.get('snapshot_retention_days')
-            sm_raw = request.form.get('snapshot_max_snapshots')
-            
-            refresh_interval_minutes = None
-            if refresh_raw:
-                try:
-                    refresh_interval_minutes = int(refresh_raw)
-                    if refresh_interval_minutes < 0:
-                        refresh_interval_minutes = None
-                except ValueError:
-                    refresh_interval_minutes = None
-            
-            snapshot_retention_days = 0  # Default to 0 (unlimited)
-            snapshot_max_snapshots = 0   # Default to 0 (unlimited)
             try:
-                if sr_raw and sr_raw.strip() != '':
-                    v = int(sr_raw)
-                    if v >= 0:
-                        snapshot_retention_days = v
-            except ValueError:
-                snapshot_retention_days = 0  # Invalid input defaults to unlimited
-            try:
-                if sm_raw and sm_raw.strip() != '':
-                    v = int(sm_raw)
-                    if v >= 0:
-                        snapshot_max_snapshots = v
-            except ValueError:
-                snapshot_max_snapshots = 0  # Invalid input defaults to unlimited
-
-            logger.debug(f"Updating URL metadata for ID: '{url_id_str}'")
-            logger.debug(f"Form data - title: '{title}', description: '{description}', refresh: {refresh_interval_minutes}")
+                # Validate form inputs for URL update
+                title = None
+                title_input = request.form.get('title')
+                if title_input:
+                    title = InputValidator.validate_string(
+                        title_input,
+                        "Title",
+                        max_length=200
+                    )
+                
+                description = None
+                description_input = request.form.get('description')
+                if description_input:
+                    description = InputValidator.validate_string(
+                        description_input,
+                        "Description",
+                        max_length=1000
+                    )
+                
+                refresh_interval_minutes = None
+                refresh_raw = request.form.get('refresh_interval_minutes')
+                if refresh_raw:
+                    refresh_interval_minutes = InputValidator.validate_integer(
+                        refresh_raw,
+                        "Refresh interval",
+                        min_val=1,
+                        max_val=10080  # 1 week in minutes
+                    )
+                
+                crawl_domain_flag = 1 if request.form.get('crawl_domain') in ('on', '1', 'true', 'True') else 0
+                ignore_robots_flag = 1 if request.form.get('ignore_robots') in ('on', '1', 'true', 'True') else 0
+                
+                # Optional retention fields with validation
+                snapshot_retention_days = 0  # Default to 0 (unlimited)
+                snapshot_max_snapshots = 0   # Default to 0 (unlimited)
+                
+                sr_raw = request.form.get('snapshot_retention_days')
+                if sr_raw and sr_raw.strip():
+                    snapshot_retention_days = InputValidator.validate_integer(
+                        sr_raw,
+                        "Snapshot retention days",
+                        min_val=0,
+                        max_val=3650  # 10 years max
+                    )
+                
+                sm_raw = request.form.get('snapshot_max_snapshots')
+                if sm_raw and sm_raw.strip():
+                    snapshot_max_snapshots = InputValidator.validate_integer(
+                        sm_raw,
+                        "Max snapshots",
+                        min_val=0,
+                        max_val=10000
+                    )
+                
+                logger.info(f"Validated URL update inputs for ID: {url_id_str}")
+                
+            except ValidationError as e:
+                logger.error(f"URL update validation failed: {e}")
+                flash(f"Invalid input: {e}", 'error')
+                return redirect(url_for('index'))
             
             result = self.rag_manager.url_manager.update_url_metadata(
                 url_id_str, title, description, refresh_interval_minutes,
@@ -1095,32 +1165,85 @@ class WebRoutes:
         @self.app.route('/email_accounts', methods=['POST'])
         def add_email_account():
             """Create a new email account configuration."""
-            account_name = request.form.get('account_name', '').strip()
-            server_type = request.form.get('server_type', 'imap').strip().lower() or 'imap'
-            server = request.form.get('server', '').strip()
-            email_address = request.form.get('email_address', '').strip()
-            password = request.form.get('password', '').strip()
-            port_str = request.form.get('port', '').strip()
-            mailbox = request.form.get('mailbox', '').strip() or None
-            batch_limit_str = request.form.get('batch_limit', '').strip()
-            refresh_raw = request.form.get('refresh_interval_minutes', '').strip()
-            use_ssl = request.form.get('use_ssl') in ('1', 'on')
-
-            logger.info(
-                "Request to add email account '%s' (%s) on %s for %s",
-                account_name, server_type, server, email_address,
-            )
-
-            if not all([account_name, server, email_address, password, port_str]):
-                flash('Missing required fields', 'error')
-                return redirect(url_for('index'))
-
             try:
-                port = int(port_str)
-                batch_limit = int(batch_limit_str) if batch_limit_str else None
-                refresh_interval = int(refresh_raw) if refresh_raw else self.config.EMAIL_DEFAULT_REFRESH_MINUTES
-            except ValueError:
-                flash('Port, batch limit and refresh interval must be numbers', 'error')
+                # Validate all email account inputs with comprehensive security checks
+                account_name = InputValidator.validate_string(
+                    request.form.get('account_name', ''),
+                    "Account name",
+                    max_length=50,
+                    required=True
+                )
+                
+                server_type = InputValidator.validate_string(
+                    request.form.get('server_type', 'imap').lower() or 'imap',
+                    "Server type",
+                    max_length=10,
+                    pattern=re.compile(r'^(imap|pop3)$')
+                )
+                
+                server = InputValidator.validate_string(
+                    request.form.get('server', ''),
+                    "Server address",
+                    max_length=255,
+                    required=True
+                )
+                
+                email_address = InputValidator.validate_email(
+                    request.form.get('email_address', ''),
+                    "Email address"
+                )
+                
+                password = InputValidator.validate_string(
+                    request.form.get('password', ''),
+                    "Password",
+                    max_length=255,
+                    required=True
+                )
+                
+                port = InputValidator.validate_port(
+                    request.form.get('port', ''),
+                    "Port"
+                )
+                
+                mailbox = None
+                mailbox_input = request.form.get('mailbox', '').strip()
+                if mailbox_input:
+                    mailbox = InputValidator.validate_string(
+                        mailbox_input,
+                        "Mailbox",
+                        max_length=100
+                    )
+                
+                batch_limit = None
+                batch_limit_str = request.form.get('batch_limit', '').strip()
+                if batch_limit_str:
+                    batch_limit = InputValidator.validate_integer(
+                        batch_limit_str,
+                        "Batch limit",
+                        min_val=1,
+                        max_val=10000
+                    )
+                
+                refresh_interval = self.config.EMAIL_DEFAULT_REFRESH_MINUTES
+                refresh_raw = request.form.get('refresh_interval_minutes', '').strip()
+                if refresh_raw:
+                    refresh_interval = InputValidator.validate_integer(
+                        refresh_raw,
+                        "Refresh interval",
+                        min_val=1,
+                        max_val=10080  # 1 week in minutes
+                    )
+                
+                use_ssl = request.form.get('use_ssl') in ('1', 'on')
+                
+                logger.info(
+                    "Request to add validated email account '%s' (%s) on %s for %s",
+                    account_name, server_type, server, email_address
+                )
+                
+            except ValidationError as e:
+                logger.error(f"Email account validation failed: {e}")
+                flash(f"Invalid input: {e}", 'error')
                 return redirect(url_for('index'))
 
             record = {

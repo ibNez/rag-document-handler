@@ -1,16 +1,17 @@
 """
 Retrieval Modules
-Following DEVELOPMENT_RULES.md for all development requirements
 
 This module contains retrieval systems for searching processed content.
 Organized by content type (email, document) for scalable search functionality.
 """
 
 # Import email retrieval components
-from .email.manager import EmailRetriever
+from .email.processor import EmailProcessor
+from .email.search_manager import EmailSearchManager
 from .email.postgres_fts_retriever import PostgresFTSRetriever
 
 __all__ = [
-    "EmailRetriever", 
+    "EmailProcessor",
+    "EmailSearchManager", 
     "PostgresFTSRetriever"
 ]

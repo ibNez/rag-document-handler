@@ -32,12 +32,11 @@ For complete installation options and deployment guides, see [Installation Docum
 The RAG Knowledge Base Manager uses a modular, dual-database architecture with enhanced email processing, real-time dashboard capabilities, comprehensive auto-refresh functionality, and a well-organized template structure using partials.
 
 **Core Components:**
-- **Modular Architecture**: Clean separation of concerns with dedicated modules for email, URL, and document processing
+- **Modular Architecture**: Clean separation of concerns with dedicated ingestion and retrieval modules
 - **Dual Database System**: PostgreSQL for metadata, Milvus for vector embeddings
 - **Advanced Email Integration**: IMAP, Gmail API, and Exchange support with encrypted credential storage
 - **Real-Time Dashboard**: Comprehensive auto-refresh for all panels with modular template partials
 - **Conversational AI**: Enhanced RAG-powered chat interface with intelligent query classification
-- **Panel-Specific Statistics**: Dedicated statistics providers for each dashboard panel
 - **Template Partials**: Well-organized, maintainable template structure with reusable components
 
 For detailed architectural information, system design, component interactions, directory structure, and enhanced features, see the [Architecture Documentation](docs/architecture.md).

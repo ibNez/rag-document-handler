@@ -2,11 +2,11 @@
 
 Welcome to the documentation hub for the **RAG Knowledgebase Manager** project. This directory contains comprehensive guides that expand on the root `README.md`.
 
-The application provides a complete RAG solution using a dual database architecture with refactored ingestion modules, panel-specific statistics providers, and a modular template system:
+The application provides a complete RAG solution using a dual database architecture with modular ingestion and retrieval systems:
 - **PostgreSQL**: Document metadata, URLs, emails, and analytics with JSONB flexibility
 - **Milvus**: Vector embeddings and similarity search for semantic retrieval
 - **Modular Ingestion**: Separate modules for email, URL, and document processing
-- **Panel-Specific Statistics**: Dedicated statistics providers for each dashboard section
+- **Modular Retrieval**: Dedicated retrieval modules for different content types
 - **Template Partials**: Well-organized, maintainable template structure using modular components
 
 ## Quick Start
@@ -20,7 +20,7 @@ source .venv/bin/activate   # Always source the environment first
 
 ## Architecture Overview
 
-The refactored codebase follows Python best practices with clear separation of concerns:
+The codebase follows Python best practices with clear separation of concerns:
 
 ```
 ingestion/
@@ -30,11 +30,17 @@ ingestion/
 ├── document/     # Document extraction and chunking
 └── utils/        # Shared utilities (crypto, scheduling)
 
+retrieval/
+├── document/     # Document search and retrieval operations
+├── email/        # Email-specific search and retrieval
+└── url/          # URL-specific search and retrieval
+
 rag_manager/
-├── managers/     # Milvus vector operations and RAG search
-└── web/          # Flask routes, web interface, and panel-specific statistics
-    ├── panels/   # Individual statistics providers for each dashboard panel
-    └── stats.py  # Statistics coordinator
+├── core/         # Core configuration and models
+├── data/         # Data access layer (PostgreSQL, Milvus)
+├── managers/     # Business logic managers
+├── web/          # Flask routes and web interface
+└── utils/        # RAG-specific utilities
 
 templates/
 ├── partials/     # Modular template components for maintainable UI
