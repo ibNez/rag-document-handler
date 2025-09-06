@@ -2,7 +2,7 @@
 
 Privacy‑first, self‑hosted data ingestion and transformation platform for building a governed, RAG‑ready knowledge lake. It consolidates heterogeneous sources (documents, emails, and web pages/URLs with snapshots) into a normalized pipeline that extracts text, cleans/normalizes content, chunks intelligently, enriches metadata, generates embeddings (Milvus), and persists structured context (PostgreSQL) while keeping all raw and derived data inside your infrastructure.
 
-The web interface has two focused surfaces: (1) the primary Source Management dashboard where you add/monitor documents, emails, and URLs, track processing state, chunk/embedding coverage, and schema integrity; and (2) a separate Validation Search page that runs scoped semantic lookups through a lightweight local LLM (Ollama) purely to verify that embeddings, metadata, and chunk boundaries are correct. This search is a QA/validation tool—not a production end‑user knowledge assistant—so you can catch ingestion or normalization issues early before upstream RAG pipelines consume the data.
+The web interface provides three focused surfaces: (1) a **Dashboard** for comprehensive system monitoring with real-time metrics and status displays; (2) a **Manager** for content administration where you add/monitor documents, emails, and URLs, track processing state, chunk/embedding coverage, and schema integrity; and (3) an **Ask AI** page that runs scoped semantic lookups through a lightweight local LLM (Ollama) purely to verify that embeddings, metadata, and chunk boundaries are correct. The AI search is a QA/validation tool—not a production end‑user knowledge assistant—so you can catch ingestion or normalization issues early before upstream RAG pipelines consume the data.
 
 Core value: provide a single, reproducible, auditable ETL surface for private knowledge assets so you can safely power Retrieval‑Augmented Generation without leaking sensitive content to public LLM APIs. Secure credential handling (encrypted email credentials), deterministic processing, idempotent ingestion, and modular pipelines make it easy to extend sources while preserving privacy, governance, and observability.
 
@@ -199,10 +199,19 @@ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 
 ### Web Interface Features
 
+**Dashboard:**
+- **System Monitoring**: Real-time connection status for SQL, Milvus, and Ollama services
+- **Metrics Overview**: Document counts, keyword analysis, and processing statistics
+- **Capacity Monitoring**: Disk usage, database sizes, and threshold-based alerts
+
+**Manager:**
 - **Document Upload**: PDF, DOCX, TXT, MD files (max 100MB)
-- **URL Management**: Automatic title extraction and storage
-- **Semantic Search**: Natural language queries across documents
-- **Batch Processing**: Stage files for later processing
+- **URL Management**: Automatic title extraction, crawling, and snapshot generation
+- **Email Integration**: IMAP, Gmail API, and Exchange account management
+
+**Ask AI:**
+- **Semantic Search**: Natural language queries across all content types
+- **RAG Validation**: Query testing to verify embedding and retrieval quality
 
 For detailed usage instructions, workflows, and troubleshooting, see the [Usage Documentation](docs/usage.md).
 
