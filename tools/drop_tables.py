@@ -11,6 +11,7 @@ import os
 import sys
 import psycopg2
 from dotenv import load_dotenv
+from rag_manager.managers.postgres_manager import PostgreSQLManager
 
 def main():
     """Drop specified PostgreSQL tables completely."""
@@ -49,34 +50,20 @@ def main():
                 return
     
     try:
-        # Connect to PostgreSQL
-        print(f"🔌 Connecting to PostgreSQL: {user}@{host}:{port}/{database}")
-        conn = psycopg2.connect(
-            host=host,
-            port=port,
-            database=database,
-            user=user,
-            password=password
-        )
-        
-        with conn.cursor() as cur:
-            print(f"🗑️  Dropping {len(tables_to_drop)} table(s)...")
-            
-            for table in tables_to_drop:
-                print(f"   Dropping table: {table}")
-                cur.execute(f"DROP TABLE IF EXISTS {table} CASCADE;")
-            
-            conn.commit()
-            print("✅ Successfully dropped all specified tables")
-        
-        conn.close()
+        # Connect via PostgreSQLManager
+        print(f"🔌 Connecting to PostgreSQL via PostgreSQLManager: {user}@{host}:{port}/{database}")
+        mgr = PostgreSQLManager()
+        with mgr.get_connection() as conn:
+            with conn.cursor() as cur:
+                print(f"🗑️  Dropping {len(tables_to_drop)} table(s)...")
+                for table in tables_to_drop:
+                    print(f"   Dropping table: {table}")
+                    cur.execute(f"DROP TABLE IF EXISTS {table} CASCADE;")
+                conn.commit()
+                print("✅ Successfully dropped all specified tables")
         print("🎉 Tables dropped! Restart the application to recreate with new schema.")
-        
-    except psycopg2.Error as e:
-        print(f"❌ PostgreSQL error: {e}")
-        sys.exit(1)
     except Exception as e:
-        print(f"❌ Unexpected error: {e}")
+        print(f"❌ PostgreSQL error or unexpected error: {e}")
         sys.exit(1)
 
 if __name__ == "__main__":

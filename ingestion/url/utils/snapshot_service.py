@@ -18,6 +18,8 @@ from pathlib import Path
 
 # Playwright imports (no fallback as per requirements)
 from playwright.async_api import async_playwright
+
+from ingestion.document.manager import DocumentManager
 from playwright.sync_api import sync_playwright, Browser, Page, Response
 
 logger = logging.getLogger(__name__)
@@ -40,6 +42,7 @@ class URLSnapshotService:
     def __init__(self, postgres_manager, config, url_manager=None):
         """Initialize snapshot service with database and configuration."""
         self.postgres_manager = postgres_manager
+        self.document_manager = DocumentManager(postgres_manager) if postgres_manager else None
         self.url_manager = url_manager
         self.config = config
         self.snapshot_dir = getattr(config, 'SNAPSHOT_DIR', os.path.join('uploaded', 'snapshots'))
@@ -362,20 +365,41 @@ class URLSnapshotService:
                 url_record = self.url_manager.get_url_by_id(url_id)
             original_title = url_record.get("title", domain) if url_record else domain
             
-            snapshot_title = f"{original_title} (Snapshot {timestamp})"
+            # Snapshot linkage is authoritative and stored in url_snapshots table.
+            snapshot_title = f"{original_title}"
             filename = os.path.basename(pdf_path)  # Extract just the PDF filename
             
             # Store in documents table
-            document_id = self.postgres_manager.store_document(
-                file_path=pdf_path,
-                filename=filename,
-                title=snapshot_title,
-                content_type="text/html",  # Content type remains HTML as per spec
-                file_size=file_size,
-                document_type="url"
-            )
-            
-            logger.info(f"Stored snapshot document {document_id} for URL {url_id}")
+            if self.document_manager:
+                document_id = self.document_manager.store_document(
+                    file_path=pdf_path,
+                    filename=filename,
+                    title=snapshot_title,
+                    content_type="text/html",  # Content type remains HTML as per spec
+                    file_size=file_size,
+                    document_type="url"
+                )
+                logger.info(f"Stored snapshot document {document_id} for URL {url_id}")
+            else:
+                logger.error("Document manager not available - cannot store snapshot document")
+                return None
+
+            # Ensure a url_snapshots row exists linking this URL and the stored document.
+            # This keeps snapshot identifiers out of human-facing titles while preserving
+            # point-in-time linkage programmatically.
+            try:
+                with self.postgres_manager.get_connection() as conn:
+                    with conn.cursor() as cursor:
+                        cursor.execute(
+                            "INSERT INTO url_snapshots (id, url_id, document_id, created_at) VALUES (uuid_generate_v4(), %s, %s, %s)",
+                            (url_id, document_id, datetime.utcnow())
+                        )
+                        conn.commit()
+                        logger.debug(f"Inserted url_snapshots row for url_id={url_id} document_id={document_id}")
+            except Exception:
+                # If insertion fails (for example, extension not present or row exists), log and continue.
+                logger.exception("Failed to insert url_snapshots linkage (non-fatal)")
+
             return document_id
             
         except Exception as e:
@@ -591,14 +615,15 @@ class URLSnapshotService:
                 with conn.cursor() as cursor:
                     # Find documents that are snapshots (contain URL ID in title or file_path)
                     cursor.execute("""
-                        SELECT id, title, file_path, created_at, file_size
+                        SELECT id AS document_id, title, file_path, created_at, file_size
                         FROM documents 
                         WHERE document_type = 'url' 
                         AND (title LIKE %s OR file_path LIKE %s)
                         ORDER BY created_at DESC
                     """, (f"%{url_id}%", f"%{url_id}%"))
                     
-                    return [dict(row) for row in cursor.fetchall()]
+                    rows = [dict(row) for row in cursor.fetchall()]
+                    return rows
                     
         except Exception as e:
             logger.error(f"Error getting snapshot documents for URL {url_id}: {e}")
@@ -607,8 +632,8 @@ class URLSnapshotService:
     def _delete_snapshot(self, doc: Dict[str, Any]) -> bool:
         """Delete a snapshot document and its files."""
         try:
-            doc_id = doc["id"]
-            file_path = doc["file_path"]
+            doc_id = doc.get("document_id")
+            file_path = doc.get("file_path")
             
             # Delete from database
             with self.postgres_manager.get_connection() as conn:
@@ -629,5 +654,5 @@ class URLSnapshotService:
             return True
             
         except Exception as e:
-            logger.error(f"Error deleting snapshot {doc.get('id')}: {e}")
+            logger.error(f"Error deleting snapshot {doc.get('document_id')}: {e}")
             return False

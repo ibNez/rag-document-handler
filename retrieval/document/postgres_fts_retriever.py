@@ -10,7 +10,7 @@ import logging
 from typing import List, Any, Dict, Optional
 from langchain_core.documents import Document
 
-from ingestion.core.postgres_manager import PostgreSQLManager
+from rag_manager.managers.postgres_manager import PostgreSQLManager
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +62,7 @@ class DocumentPostgresFTSRetriever:
                     # Build dynamic query with optional filters
                     base_query = """
                         SELECT 
-                            dc.id,
+                            dc.id AS document_chunk_id,
                             dc.document_id,
                             dc.chunk_text,
                             dc.chunk_ordinal,
@@ -107,8 +107,7 @@ class DocumentPostgresFTSRetriever:
                     
                     documents = []
                     for row in results:
-                        # Extract fields directly from database
-                        id = row['id']
+                        document_chunk_id = row['document_chunk_id']
                         document_id = row['document_id']
                         chunk_text = row['chunk_text']
                         chunk_ordinal = row['chunk_ordinal']
@@ -123,12 +122,12 @@ class DocumentPostgresFTSRetriever:
                         file_path = row['file_path']
                         document_created = row['document_created']
                         chunk_created = row['chunk_created']
-                        
-                        # Create LangChain Document with comprehensive metadata
+
+                        # Create LangChain Document with comprehensive metadata using table-specific id
                         doc = Document(
                             page_content=chunk_text,
                             metadata={
-                                'id': id,
+                                'document_chunk_id': document_chunk_id,
                                 'document_id': document_id,
                                 'chunk_ordinal': chunk_ordinal,
                                 'page_start': page_start,

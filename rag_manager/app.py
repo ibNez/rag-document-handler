@@ -127,7 +127,7 @@ class RAGKnowledgebaseManager:
     def _initialize_database_managers(self) -> None:
         """Initialize PostgreSQL database managers."""
         try:
-            from ingestion.core.postgres_manager import PostgreSQLManager, PostgreSQLConfig
+            from rag_manager.managers.postgres_manager import PostgreSQLManager, PostgreSQLConfig
             from ingestion.core.database_manager import RAGDatabaseManager
             
             postgres_config = PostgreSQLConfig(
@@ -141,12 +141,12 @@ class RAGKnowledgebaseManager:
             self.database_manager = RAGDatabaseManager(postgres_config)
             logger.info("PostgreSQL integration initialized successfully")
             
-            # Set PostgreSQL manager on MilvusManager for hybrid document retrieval
+            # Set PostgreSQL manager on MilvusManager for document retrieval
             if hasattr(self, 'milvus_manager') and self.milvus_manager:
                 self.milvus_manager.set_postgres_manager(self.postgres_manager)
-                logger.info("Document hybrid retrieval initialized")
+                logger.info("Document retrieval initialized")
             
-            # Initialize hybrid retrieval system for email search
+            # Initialize retrieval system for email search
             # 
             # WHAT THIS DOES:
             # This initializes our advanced email search system that combines two retrieval methods:
@@ -246,7 +246,8 @@ class RAGKnowledgebaseManager:
                 url_manager=self.url_manager,
                 processor=self.document_processor,  # Use existing document processor for URL content
                 milvus_manager=self.milvus_manager,  # Add MilvusManager for vector storage
-                snapshot_service=snapshot_service   # Add snapshot service for PDF generation
+                snapshot_service=snapshot_service,  # Add snapshot service for PDF generation
+                postgres_manager=self.postgres_manager
             )
             logger.info("URL orchestrator initialized successfully")
         except Exception as e:
@@ -302,13 +303,13 @@ class RAGKnowledgebaseManager:
                 self.scheduler_manager.set_email_orchestrator(self.email_orchestrator)
             logger.info("Email orchestrator set in scheduler manager")
             
-            # Initialize hybrid email retrieval system (clean architecture)
+            # Initialize email retrieval system (clean architecture)
             try:
                 email_vector_store = self.milvus_manager.get_email_vector_store()
                 self.email_account_manager.initialize_hybrid_retrieval(email_vector_store)
                 logger.info("Hybrid email retrieval system initialized successfully in EmailManager")
             except Exception as e:
-                logger.error(f"Failed to initialize hybrid retrieval in EmailManager: {e}")
+                logger.error(f"Failed to initialize retrieval in EmailManager: {e}")
                 logger.warning("Email search will fall back to vector-only mode")
             
         except Exception as e:
@@ -893,8 +894,27 @@ class RAGKnowledgebaseManager:
                     logger.info(f"Skipping topic enrichment for {filename} - model not available")
                 else:
                     logger.info(f"Ollama classification service confirmed available (model: {classification_status.model_name})")
-                    self.document_processor.enrich_topics(chunks)
-                    logger.info(f"Topic enrichment completed for: {filename}")
+                    chunks = self.document_processor.enrich_topics(chunks)
+                    
+                    # Log topic statistics for analysis
+                    topic_stats = self.document_processor.get_topic_statistics(chunks)
+                    logger.info(f"Multi-topic enrichment completed for: {filename}")
+                    logger.info(f"Topic statistics: {topic_stats['unique_topics']} unique topics, "
+                               f"{topic_stats['coverage_percentage']}% coverage, "
+                               f"avg {topic_stats['avg_topics_per_chunk']} topics/chunk")
+                    logger.debug(f"Most common topics: {topic_stats['most_common_topics']}")
+                    
+                    # Log detailed topic distribution for debugging
+                    if topic_stats['total_topic_assignments'] > 0:
+                        logger.debug(f"Total topic assignments: {topic_stats['total_topic_assignments']}, "
+                                   f"chunks without topics: {topic_stats['chunks_without_topics']}")
+                        
+                        # Log topic source breakdown
+                        sources = {}
+                        for topic, source_list in topic_stats['topic_sources'].items():
+                            for source in source_list:
+                                sources[source] = sources.get(source, 0) + 1
+                        logger.debug(f"Topic source breakdown: {sources}")
             except Exception as e:
                 logger.warning(f"Topic enrichment failed for {filename}: {e}")
                 logger.info(f"Continuing document processing without topic enrichment")
@@ -941,45 +961,19 @@ class RAGKnowledgebaseManager:
                     status.message = f"Storage failed: {str(e)[:100]}..."
                     return
             
-            # Store document chunks in PostgreSQL for hybrid retrieval
+            # Store document chunks in PostgreSQL for retrieval
             status.message = "Storing chunks in PostgreSQL..."
             status.progress = 85
             
-            if self.postgres_manager:
-                logger.info(f"Storing {len(chunks)} chunks in PostgreSQL for document: {filename}")
+            if self.postgres_manager and getattr(self, 'document_manager', None):
+                logger.info(f"Storing {len(chunks)} chunks in PostgreSQL for document: {filename} via DocumentManager.persist_chunks")
                 try:
-                    for i, chunk in enumerate(chunks):
-                        chunk_text = chunk.page_content or ''
-                        page_start = chunk.metadata.get('page')
-                        page_end = chunk.metadata.get('page')  # For single page chunks
-                        section_path = chunk.metadata.get('section_path')
-                        element_types = chunk.metadata.get('element_types', [])
-                        token_count = len(chunk_text.split()) if chunk_text else 0
-                        chunk_hash = chunk.metadata.get('content_hash')
-                        
-                        # Store chunk in PostgreSQL with proper UUID foreign key
-                        chunk_id = self.postgres_manager.store_document_chunk(
-                            document_id=document_id,  # Use real UUID from document creation
-                            chunk_text=chunk_text,
-                            chunk_ordinal=i,
-                            page_start=page_start,
-                            page_end=page_end,
-                            section_path=section_path,
-                            element_types=element_types,
-                            token_count=token_count,
-                            chunk_hash=chunk_hash
-                        )
-                        
-                        # Update chunk metadata with the actual database IDs for consistency
-                        chunk.metadata['chunk_id'] = str(chunk_id)
-                        chunk.metadata['document_id'] = str(document_id)  # Standard field name - ID reference
-                    
-                    logger.info(f"Successfully stored {len(chunks)} document chunks in PostgreSQL")
+                    stored = self.document_manager.persist_chunks(document_id=str(document_id), chunks=chunks)
+                    logger.info(f"Persisted {stored}/{len(chunks)} chunks for document {document_id}")
                 except Exception as e:
-                    logger.error(f"Failed to store document chunks in PostgreSQL: {e}")
-                    # Continue with processing, don't fail the entire operation
+                    logger.error(f"Failed to persist document chunks via DocumentManager: {e}")
             else:
-                logger.warning("PostgreSQL manager not available, skipping document chunk storage")
+                logger.warning("PostgreSQL manager or DocumentManager not available, skipping document chunk storage")
             
             # Move file to uploaded folder
             uploaded_path = os.path.join(self.config.UPLOADED_FOLDER, filename)
@@ -1039,8 +1033,8 @@ class RAGKnowledgebaseManager:
             # Also update database status to 'failed' on error
             try:
                 # Update status using ID if we have it, otherwise skip database update
-                if self.postgres_manager and 'document_id' in locals():
-                    self.postgres_manager.update_processing_status(locals()['document_id'], 'failed')
+                if self.document_manager and 'document_id' in locals():
+                    self.document_manager.update_processing_status(locals()['document_id'], 'failed')
                     logger.info(f"Updated document {locals()['document_id']} status to 'failed'")
                 else:
                     logger.warning(f"Cannot update database status to 'failed' - document not yet created in database")

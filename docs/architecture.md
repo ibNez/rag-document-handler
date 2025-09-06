@@ -183,7 +183,7 @@ ingestion/
 
 ### Hybrid Retrieval System Integration
 
-The system features an advanced hybrid retrieval approach integrated into the main search functionality:
+The system features an advanced retrieval approach integrated into the main search functionality:
 
 #### MilvusManager Enhancements
 - **Hybrid Retrievers**: Combines vector similarity and PostgreSQL full-text search
@@ -425,7 +425,7 @@ retrieval/
 ├── __init__.py                    # Retrieval system initialization
 ├── email/
 │   ├── __init__.py
-│   ├── hybrid_retriever.py        # Email hybrid search with RRF fusion
+│   ├── manager.py                 # Email search with RRF fusion
 │   └── postgres_fts_retriever.py  # PostgreSQL full-text search for emails
 └── document/
     ├── __init__.py
@@ -481,7 +481,7 @@ ingestion/
 | `rag_manager/app.py` | Main application orchestrator class |
 | `rag_manager/managers/milvus_manager.py` | Vector database operations and RAG search functionality |
 | `rag_manager/web/routes.py` | Web interface and route handlers |
-| `retrieval/email/hybrid_retriever.py` | Email hybrid search combining vector + PostgreSQL FTS with RRF fusion |
+| `retrieval/email/manager.py` | Email search combining vector + PostgreSQL FTS with RRF fusion |
 | `retrieval/email/postgres_fts_retriever.py` | PostgreSQL full-text search optimized for email content |
 | `ingestion/core/` | Core database abstraction and PostgreSQL management |
 | `ingestion/email/` | Email account management, processing, and connectors |
@@ -751,7 +751,7 @@ Final Hybrid Results:
 - **Strengths**: Fast exact keyword matching, handles stemming and stop words
 - **Use Case**: When you know specific words/phrases that should be in the email
 
-**retrieval/email/hybrid_retriever.py**
+**retrieval/email/manager.py**
 - **Purpose**: Combines keyword and semantic search for comprehensive results
 - **Input**: Search query + number of results needed
 - **Process**:
@@ -767,7 +767,7 @@ Final Hybrid Results:
 ```python
 # How it's used in ingestion/email/manager.py
 def search_emails_hybrid(self, query: str, top_k: int = 5):
-    # This method uses the hybrid retriever to search emails
+    # This method uses the retriever to search emails
     return self.hybrid_retriever.search(query, k=top_k)
 ```
 

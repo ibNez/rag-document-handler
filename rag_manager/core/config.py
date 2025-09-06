@@ -66,7 +66,8 @@ class Config:
         'CLASSIFICATION_BASE_URL', 
         f"http://{os.getenv('OLLAMA_CLASSIFICATION_HOST','localhost')}:{os.getenv('OLLAMA_CLASSIFICATION_PORT','11434')}"
     )
-    CHAT_TEMPERATURE: float = float(os.getenv('CHAT_TEMPERATURE', '0.1'))
+    # Default to deterministic (extractive) behavior to minimize synthesis/hallucination
+    CHAT_TEMPERATURE: float = float(os.getenv('CHAT_TEMPERATURE', '0.0'))
     
     # PostgreSQL Configuration
     POSTGRES_HOST: str = os.getenv("POSTGRES_HOST", "localhost")

@@ -7,9 +7,12 @@ Following DEVELOPMENT_RULES.md for all development requirements.
 
 import asyncio
 import logging
+import os
+from datetime import datetime
 from typing import Dict, List, Optional, Any
 
 from .manager import PostgreSQLURLManager
+from ingestion.document.manager import DocumentManager
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +27,7 @@ class URLOrchestrator:
         processor: Optional[Any] = None,  # URL processor will be implemented later
         milvus_manager: Optional[Any] = None,  # For storing chunks in vector database
         snapshot_service: Optional[Any] = None,  # For creating PDF snapshots
+        postgres_manager: Optional[Any] = None,  # Explicit Postgres manager for chunk persistence
     ) -> None:
         """Initialize URL orchestrator with dependencies."""
         self.config = config
@@ -31,17 +35,20 @@ class URLOrchestrator:
         self.processor = processor
         self.milvus_manager = milvus_manager
         self.snapshot_service = snapshot_service
+        # Prefer explicit postgres_manager if provided; otherwise try to infer from milvus_manager
+        self.postgres_manager = postgres_manager or (getattr(self.milvus_manager, 'postgres_manager', None) if self.milvus_manager else None)
+        self.document_manager = DocumentManager(self.postgres_manager) if self.postgres_manager else None
         self.urls: List[Dict[str, Any]] = []
-        
+
         # Initialize domain crawler for discovering new URLs with robots.txt support
         self.domain_crawler = None
         if self.url_manager:
             from ingestion.url.utils.domain_crawler import DomainCrawler
             self.domain_crawler = DomainCrawler(self.url_manager, respect_robots=True)
             logger.info("Domain crawler initialized with robots.txt enforcement")
-            
+
         logger.info("URL Orchestrator initialized with async domain crawling support")
-            
+
         self.refresh_urls()
 
     def refresh_urls(self) -> None:
@@ -94,12 +101,13 @@ class URLOrchestrator:
         
         try:
             # Get URL details
-            urls = [url for url in self.urls if url.get('id') == url_id]
+            # PostgreSQLURLManager canonicalizes the primary key to 'url_id'
+            urls = [url for url in self.urls if url.get('url_id') == url_id]
             if not urls:
                 # Refresh URLs and try again
                 logger.info(f"URL {url_id} not found in cache, refreshing URL list...")
                 self.refresh_urls()
-                urls = [url for url in self.urls if url.get('id') == url_id]
+                urls = [url for url in self.urls if url.get('url_id') == url_id]
                 if not urls:
                     logger.error(f"URL {url_id} not found even after refresh")
                     return {"success": False, "error": f"URL {url_id} not found"}
@@ -108,6 +116,25 @@ class URLOrchestrator:
             url_string = url_record.get('url')
             
             logger.info(f"Processing URL {url_id}: {url_string}")
+            # Create a per-run trace logger to capture step-by-step ingestion events
+            trace_logger = None
+            try:
+                traces_dir = os.path.join(getattr(self.config, 'LOG_DIR', 'logs'), 'ingestion_traces')
+                os.makedirs(traces_dir, exist_ok=True)
+                trace_log_path = os.path.join(traces_dir, f"{url_id}.log")
+                trace_logger = logging.getLogger(f"ingest_trace_{url_id}")
+                # Avoid duplicating handlers if this logger already exists
+                if not trace_logger.handlers:
+                    fh = logging.FileHandler(trace_log_path)
+                    fh.setLevel(logging.INFO)
+                    formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
+                    fh.setFormatter(formatter)
+                    trace_logger.addHandler(fh)
+                trace_logger.setLevel(logging.INFO)
+                trace_logger.info(f"Starting ingestion trace for URL {url_id} ({url_string}) at {datetime.utcnow().isoformat()}Z")
+            except Exception:
+                # Best-effort tracing: don't fail ingestion if trace setup fails
+                trace_logger = None
             
             # Mark URL as being processed
             self.url_manager.set_refreshing(url_id, True)
@@ -115,6 +142,7 @@ class URLOrchestrator:
             # Create snapshot (always enabled)
             snapshot_created = False
             snapshot_result = None
+            doc_id = None
             
             if self.snapshot_service:
                 try:
@@ -126,6 +154,8 @@ class URLOrchestrator:
                     if snapshot_result.get("success"):
                         # Check if content has changed before storing
                         content_hash = snapshot_result.get("content_hash")
+                        if trace_logger:
+                            trace_logger.info(f"Snapshot created; content_hash={content_hash}")
                         
                         if self.snapshot_service.check_content_changed(url_id, content_hash):
                             # Store snapshot as document
@@ -136,6 +166,19 @@ class URLOrchestrator:
                             if doc_id:
                                 logger.info(f"Stored snapshot document {doc_id} for URL {url_id}")
                                 snapshot_created = True
+                                if trace_logger:
+                                    trace_logger.info(f"Stored snapshot document_id={doc_id}")
+                                    # Also attach a per-document trace logger that writes to the same file
+                                    try:
+                                        doc_trace_logger = logging.getLogger(f"ingest_trace_{doc_id}")
+                                        if not doc_trace_logger.handlers:
+                                            for h in trace_logger.handlers:
+                                                doc_trace_logger.addHandler(h)
+                                        doc_trace_logger.setLevel(trace_logger.level)
+                                        doc_trace_logger.info(f"Linked document trace to URL trace: doc_id={doc_id} url_id={url_id}")
+                                    except Exception:
+                                        # Best-effort linking of tracegers
+                                        pass
                                 
                                 # Update URL content hash
                                 self.url_manager.update_url_hash_status(
@@ -146,6 +189,8 @@ class URLOrchestrator:
                                 cleanup_result = self.snapshot_service.cleanup_old_snapshots(url_id)
                                 if cleanup_result.get("deleted", 0) > 0:
                                     logger.info(f"Cleaned up {cleanup_result['deleted']} old snapshots for URL {url_id}")
+                                    if trace_logger:
+                                        trace_logger.info(f"Cleaned up {cleanup_result['deleted']} old snapshots")
                             else:
                                 logger.warning(f"Failed to store snapshot document for URL {url_id}")
                         else:
@@ -155,6 +200,8 @@ class URLOrchestrator:
                         
                 except Exception as e:
                     logger.error(f"Snapshot processing failed for URL {url_id}: {e}")
+                    if trace_logger:
+                        trace_logger.exception(f"Snapshot processing failed: {e}")
                     # Continue with regular processing even if snapshot fails
             
             # Process URL content using the document processor
@@ -163,22 +210,48 @@ class URLOrchestrator:
                     # Use document processor to extract and chunk content
                     chunks = self.processor.load_and_chunk_url(url_string, str(url_id))
                     logger.info(f"Extracted {len(chunks)} chunks from URL {url_id}")
+                    if trace_logger:
+                        trace_logger.info(f"Chunking result count={len(chunks)}")
                     
-                    # Store chunks in vector database if milvus_manager is available
+                    # Store chunks in Milvus if available
                     if self.milvus_manager and chunks:
                         try:
-                            # Use UUID for Milvus storage, not the URL string
-                            # All metadata is managed by PostgreSQL as single source of truth
-                            self.milvus_manager.insert_documents(str(url_id), chunks)
-                            logger.info(f"Successfully stored {len(chunks)} chunks from URL {url_id} in vector database")
+                            milvus_id = doc_id if snapshot_created and doc_id else str(url_id)
+                            if trace_logger:
+                                trace_logger.info(f"Using milvus_id={milvus_id} for insert_documents (snapshot_created={snapshot_created})")
+
+                            inserted = self.milvus_manager.insert_documents(milvus_id, chunks)
+                            logger.info(f"Successfully stored {inserted} chunks from URL {url_id} in vector database (milvus_id={milvus_id})")
+                            if trace_logger:
+                                trace_logger.info(f"Milvus insert result: {inserted}")
                         except Exception as e:
                             logger.error(f"Failed to store chunks from URL {url_id} in vector database: {e}")
+                            if trace_logger:
+                                trace_logger.exception(f"Milvus insert failed: {e}")
                             raise
                     elif not self.milvus_manager:
                         logger.warning(f"URL {url_id}: Extracted {len(chunks)} chunks but no MilvusManager available for storage")
+
+                    # Persist chunk rows to Postgres using DocumentManager
+                    if not self.document_manager:
+                        err = "No document_manager available on URLOrchestrator; cannot persist chunks"
+                        logger.error(err)
+                        if trace_logger:
+                            trace_logger.error(err)
+                        raise RuntimeError(err)
+
+                    doc_identifier = doc_id if snapshot_created and doc_id else str(url_id)
+                    if trace_logger:
+                        trace_logger.info(f"Persisting {len(chunks)} chunks to Postgres for document_id={doc_identifier} via DocumentManager")
+
+                    stored = self.document_manager.persist_chunks(doc_identifier, chunks, trace_logger=trace_logger)
+                    if trace_logger:
+                        trace_logger.info(f"Persisted {stored}/{len(chunks)} chunks to Postgres for document_id={doc_identifier} via DocumentManager")
                     
                 except Exception as e:
                     logger.error(f"Failed to process URL content for {url_id}: {e}")
+                    if trace_logger:
+                        trace_logger.exception(f"Content processing failed: {e}")
                     raise
             else:
                 logger.warning("No document processor available for URL content processing")
@@ -186,6 +259,12 @@ class URLOrchestrator:
             # Mark URL as processed
             refresh_interval = url_record.get('refresh_interval_minutes')
             self.url_manager.mark_scraped(url_id, refresh_interval)
+            if trace_logger:
+                try:
+                    trace_logger.info(f"Marked URL {url_id} as scraped; refresh_interval={refresh_interval}")
+                    trace_logger.info(f"Completed ingestion trace for URL {url_id} at {datetime.utcnow().isoformat()}Z")
+                except Exception:
+                    pass
             
             # Perform domain crawling if enabled
             domain_crawl_result = None
@@ -259,7 +338,7 @@ class URLOrchestrator:
                 "error": str(exc)
             }
 
-    def get_processing_status(self, url_id: int) -> Dict[str, Any]:
+    def get_processing_status(self, url_id: str) -> Dict[str, Any]:
         """
         Get the current processing status for a URL.
         
@@ -274,10 +353,10 @@ class URLOrchestrator:
         
         try:
             # Get URL details
-            urls = [url for url in self.urls if url.get('id') == url_id]
+            urls = [url for url in self.urls if url.get('url_id') == url_id]
             if not urls:
                 self.refresh_urls()
-                urls = [url for url in self.urls if url.get('id') == url_id]
+                urls = [url for url in self.urls if url.get('url_id') == url_id]
                 if not urls:
                     return {"status": "not_found", "message": f"URL {url_id} not found"}
             

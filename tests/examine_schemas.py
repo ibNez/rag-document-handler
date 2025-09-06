@@ -17,17 +17,12 @@ def examine_postgres_schema():
     print("=" * 60)
     
     try:
-        pg_conn = psycopg2.connect(
-            host='localhost',
-            port='5432', 
-            database='rag_metadata',
-            user='rag_user',
-            password='secure_password'
-        )
-        
-        with pg_conn.cursor() as cursor:
-            # Get table schema
-            cursor.execute("""
+        from rag_manager.managers.postgres_manager import PostgreSQLManager
+        pg_mgr = PostgreSQLManager()
+        with pg_mgr.get_connection() as pg_conn:
+            with pg_conn.cursor() as cursor:
+                # Get table schema
+                cursor.execute("""
                 SELECT column_name, data_type, is_nullable, column_default
                 FROM information_schema.columns 
                 WHERE table_name = 'documents' 
@@ -71,7 +66,10 @@ def examine_postgres_schema():
             else:
                 print("  No data found")
                 
-        pg_conn.close()
+        try:
+            pg_mgr.close()
+        except Exception:
+            pass
         
     except Exception as e:
         print(f"PostgreSQL Error: {e}")

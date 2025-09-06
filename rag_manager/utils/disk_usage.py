@@ -213,13 +213,13 @@ def get_postgres_table_sizes(postgres_manager, limit: int = 5) -> Dict[str, Any]
                 
                 for row in cur.fetchall():
                     table_info = {
-                        "schema": row[0],
-                        "name": row[1], 
-                        "bytes": row[2],
-                        "human": row[3]
+                        "schema": row.get('schemaname') if isinstance(row, dict) else row[0],
+                        "name": row.get('tablename') if isinstance(row, dict) else row[1],
+                        "bytes": row.get('size_bytes') if isinstance(row, dict) else row[2],
+                        "human": row.get('size_pretty') if isinstance(row, dict) else row[3]
                     }
                     tables.append(table_info)
-                    total_bytes += row[2]
+                    total_bytes += table_info['bytes']
                 
                 return {
                     "tables": tables,

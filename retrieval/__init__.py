@@ -7,10 +7,10 @@ Organized by content type (email, document) for scalable search functionality.
 """
 
 # Import email retrieval components
-from .email.hybrid_retriever import HybridRetriever
+from .email.manager import EmailRetriever
 from .email.postgres_fts_retriever import PostgresFTSRetriever
 
 __all__ = [
-    "HybridRetriever", 
+    "EmailRetriever", 
     "PostgresFTSRetriever"
 ]

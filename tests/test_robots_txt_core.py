@@ -242,7 +242,7 @@ class TestDomainCrawlerIntegration:
         """Test that domain crawler initializes with robots.txt components."""
         try:
             from ingestion.url.utils.domain_crawler import DomainCrawler
-            from ingestion.core.postgres_manager import PostgreSQLManager
+            from rag_manager.managers.postgres_manager import PostgreSQLManager
             from ingestion.url.manager import PostgreSQLURLManager
             
             # Initialize components
@@ -278,7 +278,7 @@ class TestURLManagerRobotsIntegration:
     async def test_url_manager_robots_methods(self):
         """Test that URL manager has robots.txt methods."""
         try:
-            from ingestion.core.postgres_manager import PostgreSQLManager
+            from rag_manager.managers.postgres_manager import PostgreSQLManager
             from ingestion.url.manager import PostgreSQLURLManager
             
             # Initialize URL manager

@@ -92,7 +92,8 @@ class SchedulerManager:
                         due_accounts = email_orchestrator.get_due_accounts()
                         logger.debug(f"Found {len(due_accounts)} due email accounts")
                         for account in due_accounts:
-                            logger.debug(f"  Due account: {account.get('account_name')} (ID: {account.get('id')})")
+                            acct_id = account.get('email_account_id')
+                            logger.debug(f"  Due account: {account.get('account_name')} (ID: {acct_id})")
                     except Exception as exc:
                         logger.error(f"Failed to get due email accounts: {exc}")
                         due_accounts = []
@@ -132,8 +133,8 @@ class SchedulerManager:
                     if urls_to_process >= url_slots_available:
                         logger.debug(f"URL concurrency limit reached ({self.max_concurrent_urls}), skipping remaining URLs")
                         break
-                        
-                    url_id = rec.get('id')
+                    # Expect canonical 'url_id' from the URL manager
+                    url_id = rec.get('url_id')
                     if url_id is None or url_id in self.url_processing_status:
                         continue
                     self.url_processing_status[url_id] = URLProcessingStatus(url=rec.get('url'))
@@ -151,8 +152,8 @@ class SchedulerManager:
                     if emails_to_process >= email_slots_available:
                         logger.debug(f"Email concurrency limit reached ({self.max_concurrent_emails}), skipping remaining accounts")
                         break
-                        
-                    acct_id = account.get('id')
+                    # Use canonical 'email_account_id' from account records
+                    acct_id = account.get('email_account_id')
                     if acct_id is None or acct_id in self.email_processing_status:
                         continue
                     self.email_processing_status[acct_id] = EmailProcessingStatus(email_id=acct_id)

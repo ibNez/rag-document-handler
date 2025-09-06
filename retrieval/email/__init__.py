@@ -6,9 +6,9 @@ This module contains specialized retrievers for the RAG system.
 """
 
 from .postgres_fts_retriever import PostgresFTSRetriever
-from .hybrid_retriever import HybridRetriever
+from .manager import EmailRetriever
 
 __all__ = [
     "PostgresFTSRetriever",
-    "HybridRetriever"
+    "EmailRetriever"
 ]

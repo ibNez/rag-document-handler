@@ -9,9 +9,11 @@ This module provides document-specific retrieval capabilities including:
 """
 
 from .postgres_fts_retriever import DocumentPostgresFTSRetriever
-from .hybrid_retriever import DocumentHybridRetriever
+from .processor import DocumentProcessor
+from .manager import DocumentManager
 
 __all__ = [
     'DocumentPostgresFTSRetriever',
-    'DocumentHybridRetriever'
+    'DocumentProcessor',
+    'DocumentManager'
 ]

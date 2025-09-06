@@ -113,7 +113,7 @@ class PostgreSQLURLManager:
                     url_id = cursor.fetchone()['id']
                     conn.commit()
                     logger.info(f"Added URL: {url} with title: {title} (ID: {url_id}) {f'(parent: {parent_url_id})' if parent_url_id else '(root URL)'} - Snapshots: always enabled")
-                    return {"success": True, "message": "URL added successfully", "id": str(url_id), "title": title}
+                    return {"success": True, "message": "URL added successfully", "url_id": str(url_id), "title": title}
         except Exception as e:
             if "duplicate key" in str(e).lower():
                 return {"success": False, "message": "URL already exists"}
@@ -127,7 +127,7 @@ class PostgreSQLURLManager:
                 with conn.cursor() as cursor:
                     cursor.execute(
                         """
-               SELECT id, url, title, description, status, refresh_interval_minutes, 
+               SELECT id AS url_id, url, title, description, status, refresh_interval_minutes, 
                    crawl_domain, ignore_robots, snapshot_retention_days, snapshot_max_snapshots,
                    last_crawled, is_refreshing, last_refresh_started, last_content_hash, last_update_status,
                    created_at, updated_at, parent_url_id,
@@ -146,15 +146,12 @@ class PostgreSQLURLManager:
                     urls = []
                     for row in cursor.fetchall():
                         url_dict = dict(row)
-                        # Convert UUID to string
-                        url_dict['id'] = str(url_dict['id'])
                         
                         # Convert boolean to int for SQLite compatibility
                         url_dict['crawl_domain'] = 1 if url_dict.get('crawl_domain') else 0
                         url_dict['ignore_robots'] = 1 if url_dict.get('ignore_robots') else 0
                         
-                        # Map PostgreSQL columns to SQLite equivalents
-                        url_dict['added_date'] = url_dict['created_at']
+                        # Map PostgreSQL columns used by the UI
                         url_dict['last_scraped'] = url_dict['last_crawled']
                         
                         # last_update_status is now a direct column
@@ -189,8 +186,6 @@ class PostgreSQLURLManager:
                     child_urls = []
                     for row in cursor.fetchall():
                         url_dict = dict(row)
-                        # Convert UUID to string
-                        url_dict['id'] = str(url_dict['id'])
                         
                         # Convert datetime objects to strings for JSON serialization
                         for key, value in url_dict.items():
@@ -351,8 +346,6 @@ class PostgreSQLURLManager:
                     urls = []
                     for row in cursor.fetchall():
                         url_dict = dict(row)
-                        # Convert UUID to string
-                        url_dict['id'] = str(url_dict['id'])
                         if url_dict.get('parent_url_id'):
                             url_dict['parent_url_id'] = str(url_dict['parent_url_id'])
                         
@@ -360,9 +353,11 @@ class PostgreSQLURLManager:
                         url_dict['crawl_domain'] = 1 if url_dict.get('crawl_domain') else 0
                         url_dict['ignore_robots'] = 1 if url_dict.get('ignore_robots') else 0
                         
-                        # Map PostgreSQL columns to SQLite equivalents
-                        url_dict['added_date'] = url_dict['created_at']
+                        # Map PostgreSQL columns used by the UI
                         url_dict['last_scraped'] = url_dict['last_crawled']
+                        
+                        # Canonicalize the primary key to 'url_id' for orchestrator compatibility
+                        url_dict['url_id'] = url_dict['id']
                         
                         # last_update_status is now a direct column
                         # No need to extract from metadata
@@ -526,14 +521,15 @@ class PostgreSQLURLManager:
                     row = cursor.fetchone()
                     if row:
                         url_dict = dict(row)
-                        url_dict['id'] = str(url_dict['id'])
+                        url_dict['url_id'] = str(url_dict.get('id'))
+                        if 'id' in url_dict:
+                            del url_dict['id']
                         
                         # Normalize booleans for UI compatibility
                         url_dict['crawl_domain'] = 1 if url_dict.get('crawl_domain') else 0
                         url_dict['ignore_robots'] = 1 if url_dict.get('ignore_robots') else 0
                         
-                        # Map PostgreSQL columns to SQLite equivalents
-                        url_dict['added_date'] = url_dict['created_at']
+                        # Map PostgreSQL columns used by the UI
                         url_dict['last_scraped'] = url_dict['last_crawled']
 
                         # last_update_status is now a direct column
@@ -674,14 +670,12 @@ class PostgreSQLURLManager:
                     rows = []
                     for row in cursor.fetchall():
                         url_dict = dict(row)
-                        url_dict['id'] = str(url_dict['id'])
                         
                         # Convert boolean to int for SQLite compatibility
                         url_dict['crawl_domain'] = 1 if url_dict.get('crawl_domain') else 0
                         url_dict['ignore_robots'] = 1 if url_dict.get('ignore_robots') else 0
                         
-                        # Map PostgreSQL columns to SQLite equivalents
-                        url_dict['added_date'] = url_dict['created_at']
+                        # Map PostgreSQL columns used by the UI
                         url_dict['last_scraped'] = url_dict['last_crawled']
                         
                         # Convert datetime objects to strings

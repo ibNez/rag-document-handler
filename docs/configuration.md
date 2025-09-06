@@ -122,14 +122,14 @@ This document provides comprehensive information about all configuration variabl
 
 | Variable | Description | Default | Required | Example |
 |----------|-------------|---------|----------|---------|
-| `HYBRID_RETRIEVAL_ENABLED` | Enable hybrid search | `true` | No | `false` |
+| `HYBRID_RETRIEVAL_ENABLED` | Enable search | `true` | No | `false` |
 | `RRF_CONSTANT` | Reciprocal Rank Fusion constant | `60` | No | `40` |
 | `VECTOR_WEIGHT` | Weight for vector similarity scores | `0.7` | No | `0.8` |
 | `FTS_WEIGHT` | Weight for full-text search scores | `0.3` | No | `0.2` |
 
 **Hybrid Retrieval Details:**
 
-- **HYBRID_RETRIEVAL_ENABLED**: Enables the advanced hybrid search combining vector similarity and PostgreSQL full-text search.
+- **HYBRID_RETRIEVAL_ENABLED**: Enables the advanced search combining vector similarity and PostgreSQL full-text search.
 
 - **RRF_CONSTANT**: Controls the Reciprocal Rank Fusion algorithm sensitivity. Higher values reduce the impact of rank differences.
 

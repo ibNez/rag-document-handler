@@ -94,7 +94,7 @@ class URLPanelStats:
             
             for url in urls:
                 url_string = url.get('url', '')
-                url_id = url.get('id', '')
+                url_id = url.get('url_id', '')
                 
                 if url_string:
                     # Count chunks for this URL in Milvus

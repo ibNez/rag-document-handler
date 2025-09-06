@@ -5,11 +5,12 @@ Coordinates between PostgreSQL (metadata) and Milvus (vectors).
 
 import logging
 from typing import Dict, List, Optional, Any, Protocol
-from dataclasses import dataclass
 from datetime import datetime
 import json
 
-from .postgres_manager import PostgreSQLManager, PostgreSQLConfig
+from rag_manager.managers.postgres_manager import PostgreSQLManager, PostgreSQLConfig
+from rag_manager.core.models import DocumentMetadata
+from ingestion.document.manager import DocumentManager
 
 logger = logging.getLogger(__name__)
 
@@ -18,24 +19,6 @@ class VectorStore(Protocol):
     def store_embeddings(self, doc_id: str, embeddings: List[float]) -> None: ...
     def similarity_search(self, query_vector: List[float], limit: int) -> List[str]: ...
     def delete_document(self, doc_id: str) -> None: ...
-
-@dataclass
-class DocumentMetadata:
-    """Document metadata structure."""
-    document_id: str
-    filename: str  # Required: just the filename (e.g., "document.pdf")
-    file_path: str  # Required: full path to file (e.g., "/path/to/document.pdf")
-    title: Optional[str] = None
-    content_preview: Optional[str] = None
-    content_type: Optional[str] = None
-    file_size: Optional[int] = None
-    word_count: Optional[int] = None
-    processing_status: str = 'pending'
-    metadata: Optional[Dict[str, Any]] = None
-    
-    def __post_init__(self):
-        if self.metadata is None:
-            self.metadata = {}
 
 class RAGDatabaseManager:
     """
@@ -47,6 +30,7 @@ class RAGDatabaseManager:
                  vector_store: Optional[VectorStore] = None):
         """Initialize with PostgreSQL and vector store."""
         self.postgres = PostgreSQLManager(postgres_config)
+        self.document_manager = DocumentManager(self.postgres)
         self.vector_store = vector_store
         logger.info("RAG Database Manager initialized")
     
@@ -56,8 +40,8 @@ class RAGDatabaseManager:
         Returns the document ID.
         """
         try:
-            # Store metadata in PostgreSQL
-            doc_uuid = self.postgres.store_document(
+            # Store metadata in PostgreSQL using document manager
+            doc_uuid = self.document_manager.store_document(
                 file_path=metadata.file_path,
                 filename=metadata.filename,
                 document_id=metadata.document_id,
@@ -70,7 +54,7 @@ class RAGDatabaseManager:
             )
             
             # Update processing status
-            self.postgres.update_processing_status(metadata.document_id, 'processing')
+            self.document_manager.update_processing_status(metadata.document_id, 'processing')
             
             # Store embeddings in vector store if available
             if self.vector_store and content:
@@ -78,14 +62,14 @@ class RAGDatabaseManager:
                     # Note: Embedding generation would be handled by the vector store
                     # or passed in as pre-computed embeddings
                     logger.info(f"Vector storage would be handled for document: {metadata.document_id}")
-                    self.postgres.update_processing_status(metadata.document_id, 'completed')
+                    self.document_manager.update_processing_status(metadata.document_id, 'completed')
                 except Exception as e:
                     logger.error(f"Failed to store embeddings for {metadata.document_id}: {e}")
-                    self.postgres.update_processing_status(metadata.document_id, 'failed')
+                    self.document_manager.update_processing_status(metadata.document_id, 'failed')
                     raise
             else:
                 # Mark as completed even without vector storage for now
-                self.postgres.update_processing_status(metadata.document_id, 'completed')
+                self.document_manager.update_processing_status(metadata.document_id, 'completed')
             
             logger.info(f"Successfully stored document: {metadata.document_id}")
             return metadata.document_id
@@ -94,7 +78,7 @@ class RAGDatabaseManager:
             logger.error(f"Failed to store document {metadata.document_id}: {e}")
             # Update status to failed
             try:
-                self.postgres.update_processing_status(metadata.document_id, 'failed')
+                self.document_manager.update_processing_status(metadata.document_id, 'failed')
             except:
                 pass  # Don't fail if status update fails
             raise

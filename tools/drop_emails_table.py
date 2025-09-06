@@ -4,7 +4,7 @@ Drop the existing emails table and let our new manager create the correct one.
 """
 
 import os
-import psycopg2
+from rag_manager.managers.postgres_manager import PostgreSQLManager
 from dotenv import load_dotenv
 
 def main():
@@ -20,28 +20,17 @@ def main():
     password = os.getenv('POSTGRES_PASSWORD', 'secure_password')
     
     try:
-        # Connect to PostgreSQL
-        conn = psycopg2.connect(
-            host=host,
-            port=port,
-            database=database,
-            user=user,
-            password=password
-        )
-        
-        with conn.cursor() as cur:
-            print("🗑️  Dropping emails table...")
-            cur.execute("DROP TABLE IF EXISTS emails CASCADE;")
-            conn.commit()
-            print("✅ Successfully dropped emails table")
-        
-        conn.close()
+        mgr = PostgreSQLManager()
+        with mgr.get_connection() as conn:
+            with conn.cursor() as cur:
+                print("🗑️  Dropping emails table...")
+                cur.execute("DROP TABLE IF EXISTS emails CASCADE;")
+                conn.commit()
+                print("✅ Successfully dropped emails table")
         print("🎉 Ready for new table creation!")
         
-    except psycopg2.Error as e:
-        print(f"❌ PostgreSQL error: {e}")
     except Exception as e:
-        print(f"❌ Unexpected error: {e}")
+        print(f"❌ PostgreSQL error or unexpected error: {e}")
 
 if __name__ == "__main__":
     main()

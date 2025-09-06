@@ -43,7 +43,7 @@
                                 </thead>
                                 <tbody>
                                 {% for url in urls %}
-                                    <tr data-url-row="{{ url.id }}">
+                                    <tr data-url-row="{{ url.url_id }}">
                                         <td>
                                             <div class="d-flex flex-column">
                                                 <div class="d-flex align-items-center">
@@ -116,15 +116,15 @@
                                             {% endif %}
                                         </td>
                                         <td>
-                                            {% set up = url_processing_status.get(url.id) if url_processing_status else None %}
+                                            {% set up = url_processing_status.get(url.url_id) if url_processing_status else None %}
                                             {% if up %}
                                                 <div class="small mb-1">
                                                     <span class="badge bg-info" title="{{ up.message }}">{{ up.status.title() }}</span>
                                                 </div>
                                                 <div class="progress progress-custom">
-                                                    <div class="progress-bar bg-success progress-animated"
-                                                         role="progressbar" aria-valuemin="0" aria-valuemax="100"
-                                                         data-url-id="{{ url.id }}"
+                                          <div class="progress-bar bg-success progress-animated"
+                                              role="progressbar" aria-valuemin="0" aria-valuemax="100"
+                                              data-url-id="{{ url.url_id }}"
                                                          data-initial-progress="{{ up.progress or 0 }}"
                                                          style="width: 0%"></div>
                                                 </div>
@@ -167,15 +167,15 @@
                                         </td>
                                         <td class="text-end">
                                             <div class="btn-group btn-group-sm" role="group">
-                                                <button type="button" class="btn btn-outline-secondary action-btn" data-bs-toggle="modal" data-bs-target="#editUrlModal-{{ url.id }}" title="Edit">
+                                                <button type="button" class="btn btn-outline-secondary action-btn" data-bs-toggle="modal" data-bs-target="#editUrlModal-{{ url.url_id }}" title="Edit">
                                                     <i class="fas fa-pen"></i>
                                                 </button>
-                                                <form method="POST" action="{{ url_for('ingest_url', url_id=url.id) }}">
+                                                <form method="POST" action="{{ url_for('ingest_url', url_id=url.url_id) }}">
                                                     <button type="submit" class="btn btn-outline-primary action-btn" title="Refresh now">
                                                         <i class="fas fa-sync"></i>
                                                     </button>
                                                 </form>
-                                                <form method="POST" action="{{ url_for('delete_url_bg', url_id=url.id) }}" onsubmit="return confirm('Are you sure you want to delete this URL and its embeddings?')">
+                                                <form method="POST" action="{{ url_for('delete_url_bg', url_id=url.url_id) }}" onsubmit="return confirm('Are you sure you want to delete this URL and its embeddings?')">
                                                     <button type="submit" class="btn btn-outline-danger action-btn" title="Delete">
                                                         <i class="fas fa-trash"></i>
                                                     </button>

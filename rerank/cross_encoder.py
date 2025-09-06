@@ -94,6 +94,21 @@ class CrossEncoderReranker:
         except Exception as e:
             logger.error(f"Failed to initialize cross-encoder model: {e}")
             self.model = None
+
+    def _get_canonical_chunk_id(self, candidate: Dict[str, Any]) -> str:
+        """Return the canonical chunk id for a candidate.
+
+        Enforces table-specific keys only: `document_chunk_id` or `email_chunk_id`.
+        """
+        doc_cid = candidate.get('document_chunk_id')
+        if doc_cid:
+            return doc_cid
+        email_cid = candidate.get('email_chunk_id')
+        if email_cid:
+            return email_cid
+        # Log the problematic row for debugging and fail fast
+        logger.error(f"Missing canonical chunk id for candidate metadata: {candidate}")
+        raise KeyError('Missing canonical chunk id (document_chunk_id or email_chunk_id)')
     
     def is_available(self) -> bool:
         """Check if reranker is available for use."""
@@ -133,7 +148,8 @@ class CrossEncoderReranker:
             
             for candidate in candidates:
                 text = candidate.get('text', '')
-                chunk_id = candidate.get('chunk_id', candidate.get('id', ''))
+                # Enforce canonical chunk id keys
+                chunk_id = self._get_canonical_chunk_id(candidate)
                 original_score = candidate.get('score', candidate.get('similarity_score', 0.0))
                 
                 # Truncate text if too long
@@ -200,7 +216,8 @@ class CrossEncoderReranker:
         results = []
         
         for i, candidate in enumerate(candidates):
-            chunk_id = candidate.get('chunk_id', candidate.get('id', ''))
+            # Enforce canonical id usage in fallback as well (no legacy fallbacks)
+            chunk_id = self._get_canonical_chunk_id(candidate)
             text = candidate.get('text', '')
             original_score = candidate.get('score', candidate.get('similarity_score', 0.0))
             
