@@ -16,7 +16,7 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 
 from .connectors import IMAPConnector, GmailConnector, ExchangeConnector
-from .manager import PostgreSQLEmailManager
+from .account_manager import EmailAccountManager
 from .processor import EmailProcessor
 from .ingest import _normalize
 
@@ -29,7 +29,7 @@ class EmailOrchestrator:
     def __init__(
         self,
         config,
-        account_manager: Optional[PostgreSQLEmailManager] = None,
+        account_manager: Optional[EmailAccountManager] = None,
         processor: Optional[EmailProcessor] = None,
     ) -> None:
         self.config = config

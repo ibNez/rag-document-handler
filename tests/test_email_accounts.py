@@ -28,7 +28,7 @@ sys.modules.setdefault("psycopg2", types.SimpleNamespace(
 ))
 
 # Create a simple mock manager for tests
-class MockPostgreSQLEmailManager:
+class MockEmailAccountManager:
     def __init__(self, *args, **kwargs):
         self.accounts = []
         self.next_id = 1
@@ -99,18 +99,18 @@ sys.modules.setdefault(
 )
 sys.modules.setdefault("langchain_core.tools", types.SimpleNamespace(tool=lambda f: f))
 
-# Import is no longer needed since we use MockPostgreSQLEmailManager
+# Import is no longer needed since we use MockEmailAccountManager
 # from ingestion.email.account_manager import EmailAccountManager
 
 
 @pytest.fixture
-def manager(monkeypatch: pytest.MonkeyPatch) -> MockPostgreSQLEmailManager:
-    """Return a mock PostgreSQL email manager for testing."""
+def manager(monkeypatch: pytest.MonkeyPatch) -> MockEmailAccountManager:
+    """Return a mock email account manager for testing."""
     monkeypatch.setenv("EMAIL_ENCRYPTION_KEY", Fernet.generate_key().decode())
-    return MockPostgreSQLEmailManager()
+    return MockEmailAccountManager()
 
 
-def test_email_account_manager_crud(manager: MockPostgreSQLEmailManager) -> None:
+def test_email_account_manager_crud(manager: MockEmailAccountManager) -> None:
     """CRUD operations on ``EmailAccountManager`` should persist changes."""
     record = {
         "account_name": "Work",
@@ -182,7 +182,7 @@ class DummyRAGKnowledgebaseManager:
     """Mock RAG manager for testing."""
     
     def __init__(self, *args, **kwargs):
-        self.email_manager = MockPostgreSQLEmailManager()
+        self.email_manager = MockEmailAccountManager()
         self.milvus_manager = DummyMilvusManager({})
     
     def _start_scheduler(self):

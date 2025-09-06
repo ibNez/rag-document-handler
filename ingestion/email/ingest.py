@@ -13,7 +13,7 @@ from bs4 import BeautifulSoup
 from .connectors import EmailConnector, IMAPConnector
 from .utils import compute_header_hash
 from .processor import EmailProcessor
-from .manager import PostgreSQLEmailManager
+from .account_manager import EmailAccountManager
 
 CONTENT_HASH_RECIPE_VERSION = 1
 
@@ -172,7 +172,7 @@ def main() -> None:
             pass
 
     milvus = _NoopMilvus()
-    email_manager = PostgreSQLEmailManager(postgres_config)
+    email_manager = EmailAccountManager(postgres_config)
     processor = EmailProcessor(milvus, email_manager)
     since = datetime.now(UTC) - timedelta(days=args.since_days)
     run_email_ingestion(connector, processor, since_date=since)

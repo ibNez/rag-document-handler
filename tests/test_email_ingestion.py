@@ -41,7 +41,7 @@ sys.modules.setdefault("cryptography.fernet", types.SimpleNamespace(Fernet=objec
 from ingestion.email.ingest import _normalize, run_email_ingestion
 from ingestion.email.processor import EmailProcessor
 import ingestion.email.orchestrator as orchestrator_module
-from ingestion.email.email_manager_postgresql import PostgreSQLEmailManager
+from ingestion.email.account_manager import EmailAccountManager
 
 
 postgres_config = {
@@ -55,7 +55,7 @@ postgres_config = {
 
 @pytest.fixture
 def email_manager():
-    return PostgreSQLEmailManager(postgres_config)
+    return EmailAccountManager(postgres_config)
 
 
 @pytest.fixture
@@ -274,7 +274,7 @@ def test_email_processor_process_uses_dependencies(raw_email_record: Dict[str, A
             return [[float(i)] for i, _ in enumerate(docs)]
 
     milvus = MagicMock()
-    from ingestion.email.email_manager_postgresql import PostgreSQLEmailManager
+    from ingestion.email.account_manager import EmailAccountManager
 
     postgres_config = {
         "host": "localhost",
@@ -284,7 +284,7 @@ def test_email_processor_process_uses_dependencies(raw_email_record: Dict[str, A
         "database": "test_db"
     }
 
-    email_manager = PostgreSQLEmailManager(postgres_config)
+    email_manager = EmailAccountManager(postgres_config)
     processor = EmailProcessor(milvus, email_manager, embedding_model=FakeEmbedModel(), chunk_size=50, chunk_overlap=0)
     processor.manager.upsert_email = MagicMock()
 

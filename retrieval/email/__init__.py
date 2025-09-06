@@ -1,14 +1,17 @@
 """
 RAG Knowledge Base Manager Retrievers Module
-Following DEVELOPMENT_RULES.md for all development requirements
 
 This module contains specialized retrievers for the RAG system.
+Provides email search capabilities including FTS and hybrid search.
 """
 
 from .postgres_fts_retriever import PostgresFTSRetriever
-from .manager import EmailRetriever
+from .processor import EmailProcessor
+from .search_manager import EmailSearchManager
+from .postgres_fts_retriever import PostgresFTSRetriever
 
 __all__ = [
     "PostgresFTSRetriever",
-    "EmailRetriever"
+    "EmailProcessor",
+    "EmailSearchManager"
 ]

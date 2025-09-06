@@ -267,8 +267,8 @@ class RAGKnowledgebaseManager:
                 return
             
             # Initialize PostgreSQL email account manager (stats from PostgreSQL, not Milvus)
-            from ingestion.email.manager import PostgreSQLEmailManager
-            self.email_account_manager = PostgreSQLEmailManager(self.postgres_manager)
+            from ingestion.email.account_manager import EmailAccountManager
+            self.email_account_manager = EmailAccountManager(self.postgres_manager)
             logger.info("PostgreSQL email account manager initialized with PostgreSQL-based statistics")
             
             # Ensure email vector store is ready (separate from document vector store)
@@ -276,7 +276,7 @@ class RAGKnowledgebaseManager:
             logger.info("Email vector store validated for email embeddings")
             
             # Create PostgreSQL-based email message manager
-            from ingestion.email.manager import PostgreSQLEmailManager as EmailMessageManager
+            from ingestion.email.account_manager import EmailAccountManager as EmailMessageManager
             email_message_manager = EmailMessageManager(self.postgres_manager)
             logger.info("PostgreSQL email message manager initialized")
             
