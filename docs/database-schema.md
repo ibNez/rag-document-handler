@@ -5,14 +5,14 @@ This document provides comprehensive documentation of all database schemas used 
 ## Overview
 
 The system uses a dual-database architecture with clean data access:
-- **PostgreSQL**: Relational metadata storage managed through `rag_manager/data/postgres_connection.py`
+- **PostgreSQL**: Relational metadata storage managed through `rag_manager/managers/postgres_manager.py`
 - **Milvus**: Vector embeddings storage accessed via `rag_manager/managers/milvus_manager.py`
 
 ## Data Access Architecture
 
 The system provides clean separation of database concerns:
 - **Core Layer**: `rag_manager/core/` provides configuration and models
-- **PostgreSQL Layer**: `rag_manager/data/postgres_connection.py` handles connection management
+- **PostgreSQL Layer**: `rag_manager/managers/postgres_manager.py` handles connection management
 - **Vector Layer**: `rag_manager/managers/milvus_manager.py` manages embeddings and search
 - **Data Access**: Modular data managers use core abstractions for each domain
 
@@ -271,25 +271,23 @@ CREATE TABLE email_accounts (
 | `created_at` | TIMESTAMP | Record creation time | DEFAULT CURRENT_TIMESTAMP |
 | `updated_at` | TIMESTAMP | Last record update | DEFAULT CURRENT_TIMESTAMP |
 
-### Email Messages Table
+### Emails Table
 
 Stores individual email message metadata and content.
 
 ```sql
-CREATE TABLE email_messages (
-    message_id VARCHAR PRIMARY KEY,
-    account_id INTEGER NOT NULL REFERENCES email_accounts(id),
-    subject VARCHAR,
-    from_addr VARCHAR,
-    to_addrs TEXT,
+CREATE TABLE emails (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    message_id TEXT UNIQUE NOT NULL,
+    from_addr TEXT,
+    to_addrs JSONB,
+    subject TEXT,
     date_utc TIMESTAMP,
-    body_text TEXT,
-    body_html TEXT,
-    attachments_info JSONB,
-    server_type VARCHAR,
-    content_hash VARCHAR,
-    validation_status VARCHAR DEFAULT 'valid',
-    processed_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    header_hash TEXT UNIQUE NOT NULL,
+    content_hash TEXT UNIQUE,
+    content TEXT,
+    attachments TEXT,
+    headers JSONB,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -299,21 +297,45 @@ CREATE TABLE email_messages (
 
 | Field | Type | Description | Constraints |
 |-------|------|-------------|-------------|
-| `message_id` | VARCHAR | **REQUIRED**: Unique email message identifier (no fallback generation) | PRIMARY KEY |
-| `account_id` | INTEGER | References email_accounts.id | NOT NULL, FOREIGN KEY |
-| `subject` | VARCHAR | Email subject line | Optional |
-| `from_addr` | VARCHAR | Sender email address | Optional |
-| `to_addrs` | TEXT | Comma-separated recipient addresses | Optional |
+| `id` | UUID | Unique email identifier | PRIMARY KEY, DEFAULT uuid_generate_v4() |
+| `message_id` | TEXT | **REQUIRED**: Unique email Message-ID header (no fallback generation) | UNIQUE NOT NULL |
+| `from_addr` | TEXT | Sender email address | Optional |
+| `to_addrs` | JSONB | Recipients as JSON array | Optional |
+| `subject` | TEXT | Email subject line | Optional |
 | `date_utc` | TIMESTAMP | Email date in UTC | Optional |
-| `body_text` | TEXT | Plain text body content | Optional |
-| `body_html` | TEXT | HTML body content | Optional |
-| `attachments_info` | JSONB | Attachment metadata and info | Optional |
-| `server_type` | VARCHAR | Source server type | Optional |
-| `content_hash` | VARCHAR | **NEW**: Hash for deduplication across accounts | Optional |
-| `validation_status` | VARCHAR | **NEW**: Corruption detection results ('valid', 'corrupted', 'missing_headers') | DEFAULT 'valid' |
-| `processed_timestamp` | TIMESTAMP | When email was processed | DEFAULT CURRENT_TIMESTAMP |
+| `header_hash` | TEXT | **NEW**: Hash of email headers for deduplication | UNIQUE NOT NULL |
+| `content_hash` | TEXT | **NEW**: Hash of email content for deduplication | UNIQUE |
+| `content` | TEXT | Full email body content | Optional |
+| `attachments` | TEXT | Attachment information | Optional |
+| `headers` | JSONB | **NEW**: Complete email headers collection for metadata analysis | Optional |
 | `created_at` | TIMESTAMP | Record creation time | DEFAULT CURRENT_TIMESTAMP |
 | `updated_at` | TIMESTAMP | Last record update | DEFAULT CURRENT_TIMESTAMP |
+
+#### Headers Field Details
+
+The `headers` JSONB field contains all email headers collected during processing:
+
+- **Standard Headers**: From, To, Subject, Date, Message-ID, Content-Type
+- **MIME Headers**: MIME-Version, Content-Transfer-Encoding  
+- **Threading Headers**: In-Reply-To, References for email thread tracking
+- **Routing Headers**: Received, Return-Path, Delivered-To
+- **Authentication Headers**: DKIM-Signature, SPF, DMARC headers
+- **Custom Headers**: X-* headers and application-specific metadata
+
+Example headers structure:
+```json
+{
+  "from": "sender@example.com",
+  "to": "recipient@example.com", 
+  "subject": "Email Subject",
+  "date": "Wed, 01 Jan 2025 12:00:00 -0000",
+  "message-id": "<unique-id@example.com>",
+  "content-type": "text/plain; charset=utf-8",
+  "x-priority": "1",
+  "received": ["by mail.example.com..."],
+  "dkim-signature": "v=1; a=rsa-sha256..."
+}
+```
 
 ### Email Chunks Table
 
@@ -328,7 +350,7 @@ CREATE TABLE email_chunks (
     token_count INTEGER,
     chunk_hash VARCHAR(64),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    CONSTRAINT fk_email_chunks_email FOREIGN KEY (email_id) REFERENCES emails(message_id) ON DELETE CASCADE,
+    CONSTRAINT fk_email_chunks_email FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE,
     CONSTRAINT uk_email_chunks_position UNIQUE(email_id, chunk_index)
 );
 ```
@@ -338,7 +360,7 @@ CREATE TABLE email_chunks (
 | Field | Type | Description | Constraints |
 |-------|------|-------------|-------------|
 | `id` | UUID | Unique identifier for the chunk | PRIMARY KEY, DEFAULT uuid_generate_v4() |
-| `email_id` | TEXT | Parent email message identifier (matches `emails.message_id`) | NOT NULL, FK → emails(message_id) |
+| `email_id` | UUID | Parent email identifier (matches `emails.id`) | NOT NULL, FK → emails(id) |
 | `chunk_text` | TEXT | The actual text content of the email chunk | NOT NULL |
 | `chunk_index` | INTEGER | Sequential chunk number within the email (0-based) | NOT NULL |
 | `token_count` | INTEGER | Token count for the chunk (optional) | Optional |
@@ -353,7 +375,7 @@ CREATE TABLE email_chunks (
 
 #### Notes
 
-- Email chunks use the parent `emails.message_id` string as the foreign-key reference to keep the email primary identifier stable across accounts and transfers.
+- Email chunks use UUID foreign keys to reference parent emails via `emails.id` for consistency with document chunks architecture.
 - The unique constraint on `(email_id, chunk_index)` prevents duplicate chunk inserts for the same message and position.
 - For retrieval, full-text search indexes (GIN on to_tsvector(chunk_text)) are created to support fast FTS queries against email chunks.
 
@@ -442,7 +464,7 @@ fields = [
     "chunk_ordinal": chunk_index
 }
 
-# Milvus documents collection (clean minimal schema)
+# Milvus documents collection
 {
     "document_id": document_id,  # ID reference to PostgreSQL
     "page": page_number,
@@ -486,26 +508,43 @@ fields = [
 # PostgreSQL emails table
 {
     "id": email_uuid,  # Auto-generated UUID
+    "message_id": original_message_id,  # From email headers
     "subject": email_subject,
     "from_addr": sender_address,
-    "message_id": original_message_id
+    "to_addrs": ["recipient1@example.com", "recipient2@example.com"],  # JSONB array
+    "date_utc": email_timestamp,
+    "header_hash": "abc123...",  # Hash of headers for deduplication
+    "content_hash": "def456...",  # Hash of content for deduplication
+    "content": full_email_content,
+    "headers": {  # Complete headers collection (NEW)
+        "from": "sender@example.com",
+        "to": "recipient@example.com",
+        "subject": "Email Subject",
+        "date": "Wed, 01 Jan 2025 12:00:00 -0000",
+        "message-id": "<unique-id@example.com>",
+        "content-type": "text/plain; charset=utf-8",
+        "x-priority": "1",
+        "received": ["by mail.example.com..."]
+    }
 }
 
 # PostgreSQL email_chunks table
 {
-    "id": chunk_id,  # Auto-generated UUID
-    "email_id": email_id,  # FK to emails.id
+    "id": chunk_uuid,  # Auto-generated UUID
+    "email_id": email_uuid,  # FK to emails.id
     "chunk_text": text_content,
-    "chunk_ordinal": chunk_index
+    "chunk_index": chunk_position,
+    "token_count": 150,
+    "chunk_hash": "ghi789..."
 }
 
 # Milvus emails collection (clean minimal schema)
 {
-    "email_id": email_id,  # ID reference to PostgreSQL
+    "email_id": email_uuid,  # ID reference to PostgreSQL
     "page": chunk_index,
     "content_hash": "ghi789...",
     "text": text_chunk
-    # Note: subject, from_addr, etc. retrieved from PostgreSQL
+    # Note: subject, from_addr, headers, etc. retrieved from PostgreSQL
 }
 ```
 

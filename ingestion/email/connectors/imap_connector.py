@@ -321,6 +321,12 @@ class IMAPConnector(EmailConnector):
 
         participants = sorted({p for p in ([from_addr] if from_addr else []) + to_addrs + cc_addrs})
 
+        # Extract all email headers for metadata storage
+        headers = {}
+        for header_name, header_value in msg.items():
+            # Store headers with normalized names
+            headers[header_name] = self._decode_header_value(header_value) if header_value else header_value
+
         record = {
             "message_id": message_id,
             "thread_id": self._derive_thread_id(message_id, in_reply_to, references_ids),
@@ -335,11 +341,12 @@ class IMAPConnector(EmailConnector):
             "is_reply": is_reply,
             "is_forward": is_forward,
             "raw_size_bytes": raw_size_bytes,
-            "body_text": body_text,
+            "content": body_text,
             "body_html": body_html,
             "language": None,
             "has_attachments": has_attachments,
             "attachment_manifest": attachment_manifest,
+            "headers": headers,  # Add the collected headers
             "ingested_at": None,
             "updated_at": None,
             "content_hash": None,

@@ -182,6 +182,34 @@ ingestion/
 - **Embedding Generation**: Vector embeddings for semantic search capabilities
 - **Metadata Enrichment**: Thread context, sender/recipient analysis, temporal data
 
+#### 4. Headers Collection System (`connectors/imap_connector.py`)
+- **Comprehensive Collection**: All email headers captured during parsing via `msg.items()`
+- **Header Normalization**: Header names converted to lowercase for consistency
+- **Encoding Handling**: Proper decoding of encoded header values with charset detection
+- **JSON Storage**: Headers stored as JSONB in PostgreSQL for efficient querying
+- **Cross-Connector Support**: Gmail and Exchange connectors inherit headers collection from IMAP base
+- **Metadata Analysis**: Headers provide authentication, routing, threading, and priority information
+
+##### Headers Collection Features
+- **Standard Headers**: From, To, Subject, Date, Message-ID, Content-Type
+- **MIME Headers**: MIME-Version, Content-Transfer-Encoding
+- **Threading Headers**: In-Reply-To, References for email thread tracking
+- **Routing Headers**: Received, Return-Path, Delivered-To
+- **Authentication Headers**: DKIM-Signature, SPF, DMARC headers
+- **Custom Headers**: X-* headers and application-specific metadata
+
+##### Headers Query Capabilities
+```sql
+-- Find emails from specific sender
+SELECT * FROM emails WHERE headers->>'from' LIKE '%@example.com%';
+
+-- Find high priority emails  
+SELECT * FROM emails WHERE headers->>'x-priority' = '1';
+
+-- Search by custom headers
+SELECT * FROM emails WHERE headers ? 'x-custom-header';
+```
+
 ### Hybrid Retrieval System Integration
 
 The system features an advanced retrieval approach integrated into the main search functionality:
@@ -499,55 +527,58 @@ ingestion/
 
 ### PostgreSQL (Metadata Storage)
 
+#### Emails Table
+- **id** (UUID, PRIMARY KEY): Auto-generated unique email identifier
+- **message_id** (TEXT, UNIQUE): **REQUIRED**: Original email Message-ID header (no fallback generation)
+- **from_addr** (TEXT): Sender email address
+- **to_addrs** (JSONB): Recipients as JSON array
+- **subject** (TEXT): Email subject line
+- **date_utc** (TIMESTAMP): Email date in UTC
+- **header_hash** (TEXT, UNIQUE): **NEW**: Hash of email headers for deduplication
+- **content_hash** (TEXT, UNIQUE): **NEW**: Hash of email content for deduplication
+- **content** (TEXT): Full email body content
+- **attachments** (TEXT): Attachment information
+- **headers** (JSONB): **NEW**: Complete email headers collection for metadata analysis
+- **created_at** (TIMESTAMP): Record creation time
+- **updated_at** (TIMESTAMP): Last record update
+
+#### Email Chunks Table
+- **id** (UUID, PRIMARY KEY): Auto-generated unique chunk identifier
+- **email_id** (UUID, FOREIGN KEY): References emails.id
+- **chunk_text** (TEXT): Text content of the chunk
+- **chunk_index** (INTEGER): Sequential chunk number within email
+- **token_count** (INTEGER): Number of tokens in chunk
+- **chunk_hash** (VARCHAR): Hash of chunk content for deduplication
+- **created_at** (TIMESTAMP): Record creation time
+
 #### Documents Table
-- **document_id** (VARCHAR): Unique identifier for uploaded documents
-- **filename** (VARCHAR): Original filename from upload
-- **content_type** (VARCHAR): MIME type of the document
-- **file_size** (INTEGER): Size in bytes
-- **upload_timestamp** (TIMESTAMP): When document was uploaded
+- **id** (UUID, PRIMARY KEY): Auto-generated unique identifier
+- **document_type** (VARCHAR): Type of document: 'file' or 'url'
+- **title** (TEXT): Document title or page title
+- **content_preview** (TEXT): Preview of document content
+- **file_path** (TEXT): Filename for files, URL for web pages
+- **content_type** (VARCHAR): MIME type
+- **file_size** (BIGINT): Size in bytes
+- **word_count** (INTEGER): Total word count
+- **page_count** (INTEGER): Number of pages
+- **chunk_count** (INTEGER): Number of text chunks
 - **processing_status** (VARCHAR): Processing state (pending, completed, failed)
-- **metadata** (JSONB): Flexible attributes (page_count, author, etc.)
+- **file_hash** (VARCHAR): Unique file content hash
+- **created_at** (TIMESTAMP): Record creation time
+- **updated_at** (TIMESTAMP): Last record update
 
 #### URLs Table  
 - **id** (UUID, PRIMARY KEY): Auto-generated unique identifier
-- **url** (VARCHAR): The crawled URL
-- **title** (VARCHAR): Extracted page title
-- **status** (VARCHAR): Crawl status (active, inactive, failed)
+- **url** (TEXT, UNIQUE): The crawled URL
+- **title** (TEXT): Extracted page title
+- **description** (TEXT): Page description
+- **status** (VARCHAR): Crawl status (pending, completed, failed)
+- **content_type** (VARCHAR): Page content type
 - **last_crawled** (TIMESTAMP): Last successful crawl time
-- **next_crawl** (TIMESTAMP): Scheduled next crawl time
-- **crawl_interval_minutes** (INTEGER): Refresh frequency
-- **metadata** (JSONB): Page metadata, headers, content stats
-
-#### Email Accounts Table
-- **id** (SERIAL, PRIMARY KEY): Auto-incrementing account ID
-- **account_name** (VARCHAR): User-friendly name for the account
-- **server_type** (VARCHAR): Protocol type (imap, pop3, exchange)
-- **server** (VARCHAR): Mail server hostname
-- **port** (INTEGER): Mail server port number
-- **email_address** (VARCHAR): Account email address
-- **encrypted_password** (BYTEA): Encrypted password using EMAIL_ENCRYPTION_KEY
-- **mailbox** (VARCHAR): Target mailbox/folder (default: INBOX)
-- **batch_limit** (INTEGER): Maximum emails per batch
-- **use_ssl** (BOOLEAN): Enable SSL/TLS connection
-- **refresh_interval_minutes** (INTEGER): Sync frequency
-- **offset_position** (INTEGER): **NEW**: Current processing offset position for resuming operations
-- **last_synced** (TIMESTAMP): Last successful sync time
-- **last_update_status** (VARCHAR): Status of last sync attempt
-- **next_run** (TIMESTAMP): Scheduled next sync time
-
-#### Email Messages Table
-- **message_id** (VARCHAR, PRIMARY KEY): **REQUIRED**: Unique email message identifier (no fallback generation)
-- **account_id** (INTEGER, FOREIGN KEY): References email_accounts.id
-- **subject** (VARCHAR): Email subject line
-- **from_addr** (VARCHAR): Sender email address
-- **to_addrs** (TEXT): Comma-separated recipient addresses
-- **date_utc** (TIMESTAMP): Email date in UTC
-- **body_text** (TEXT): Plain text body content
-- **body_html** (TEXT): HTML body content
-- **attachments_info** (JSONB): Attachment metadata
-- **server_type** (VARCHAR): Source server type
-- **content_hash** (VARCHAR): **NEW**: Hash for deduplication across accounts
-- **validation_status** (VARCHAR): **NEW**: Corruption detection results ('valid', 'corrupted', 'missing_headers')
+- **crawl_depth** (INTEGER): Crawl depth setting
+- **refresh_interval_minutes** (INTEGER): Refresh frequency
+- **snapshot_retention_days** (INTEGER): Snapshot retention policy
+- **parent_url_id** (UUID): Parent URL for hierarchical crawling
 - **processed_timestamp** (TIMESTAMP): When email was processed
 
 ### Milvus (Vector Storage)

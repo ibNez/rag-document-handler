@@ -24,7 +24,7 @@ class EmailAccountManager:
 
     def __init__(self, postgres_manager: Any) -> None:
         """Initialize with PostgreSQL manager for pure PostgreSQL-based email account management."""
-        self.db_manager = PostgreSQLManager(postgres_manager.pool)
+        self.db_manager = PostgreSQLManager()
         self.postgres_pool = postgres_manager.pool
         # Add pool attribute for compatibility with EmailProcessor
         self.pool = postgres_manager.pool
@@ -296,14 +296,17 @@ class EmailAccountManager:
         """
         return self.email_data_manager.format_email_context(results)
 
-    def upsert_email(self, record: Dict[str, Any]) -> None:
+    def upsert_email(self, record: Dict[str, Any]) -> str:
         """
         Upsert an email record using EmailDataManager.
         
         Args:
             record: Email record dictionary with required fields
+            
+        Returns:
+            The UUID of the upserted email record
         """
-        self.email_data_manager.upsert_email(record)
+        return self.email_data_manager.upsert_email(record)
 
     def update_total_emails_in_mailbox(self, account_id: int, total_emails: int) -> None:
         """

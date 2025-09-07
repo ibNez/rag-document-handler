@@ -34,7 +34,7 @@ class EmailManager:
             postgres_manager: PostgreSQL manager instance with connection pool
             milvus_manager: Optional Milvus manager for vector operations
         """
-        self.db_manager = PostgreSQLManager(postgres_manager.pool)
+        self.db_manager = PostgreSQLManager()
         self.postgres_pool = postgres_manager.pool
         self.pool = postgres_manager.pool  # Compatibility alias
         self.milvus_manager = milvus_manager
@@ -49,14 +49,17 @@ class EmailManager:
     # PostgreSQL Email Operations
     # =============================================================================
     
-    def upsert_email(self, record: Dict[str, Any]) -> None:
+    def upsert_email(self, record: Dict[str, Any]) -> str:
         """
         Upsert an email record into PostgreSQL database.
         
         Args:
             record: Email record dictionary with required fields
+            
+        Returns:
+            The database-generated UUID id for the stored email
         """
-        required_fields = ["message_id", "subject", "body_text"]
+        required_fields = ["message_id", "subject", "content"]
         missing_fields = [field for field in required_fields if not record.get(field)]
         
         if missing_fields:
@@ -73,7 +76,7 @@ class EmailManager:
                     if isinstance(to_addrs, str):
                         to_addrs = [to_addrs]
                     
-                    # Upsert email record using correct schema
+                    # Upsert email record using correct schema and return the ID
                     cur.execute("""
                         INSERT INTO emails (
                             message_id, from_addr, to_addrs, subject, date_utc, 
@@ -91,6 +94,7 @@ class EmailManager:
                             attachments = EXCLUDED.attachments,
                             headers = EXCLUDED.headers,
                             updated_at = CURRENT_TIMESTAMP
+                        RETURNING id
                     """, (
                         message_id,
                         record.get("from_addr", ""),
@@ -99,12 +103,19 @@ class EmailManager:
                         record.get("date_utc"),
                         record.get("header_hash", ""),
                         record.get("content_hash", ""),
-                        record.get("body_text", ""),
+                        record.get("content", ""),
                         json.dumps(record.get("attachments", [])) if record.get("attachments") else None,
                         json.dumps(record.get("headers", {})) if record.get("headers") else None
                     ))
+                    
+                    result = cur.fetchone()
+                    if not result:
+                        raise ValueError(f"Failed to retrieve ID for upserted email: {message_id}")
+                    
+                    email_id = str(result['id'])
                 conn.commit()
-                logger.info(f"Successfully upserted email record: {message_id}")
+                logger.info(f"Successfully upserted email record: {message_id} with ID: {email_id}")
+                return email_id
                 
         except Exception as e:
             logger.error(f"Failed to upsert email record {message_id}: {e}")
