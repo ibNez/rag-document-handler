@@ -31,7 +31,7 @@ class InputValidator:
     
     # Security patterns
     SAFE_TEXT_PATTERN = re.compile(r'^[a-zA-Z0-9\s\-_\.\@\(\)\[\]]+$')
-    EMAIL_PATTERN = re.compile(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$')
+    EMAIL_PATTERN = re.compile(r'^[a-zA-Z0-9._%+-]+@([a-zA-Z0-9.-]+\.[a-zA-Z]{2,}|[a-zA-Z0-9.-]*local[a-zA-Z0-9.-]*)$')
     DOMAIN_PATTERN = re.compile(r'^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$')
     
     @staticmethod

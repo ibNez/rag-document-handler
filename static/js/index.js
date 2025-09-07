@@ -139,13 +139,127 @@
 
   // === Email Accounts Section (modal + list) ===
   // refreshEmailAccounts: Re-fetches #email-accounts block, then re-binds modal button listeners.
-  function refreshEmailAccounts(){ fetch(window.location.href).then(r=>r.text()).then(html => { const doc=new DOMParser().parseFromString(html,'text/html'); const newSec=doc.querySelector('#email-accounts'); const cur=document.querySelector('#email-accounts'); if(newSec && cur){ cur.innerHTML=newSec.innerHTML; applyLocalTimes(cur); attachEmailAccountListeners(); } }); }
+  function refreshEmailAccounts(){ fetch(window.location.href).then(r=>r.text()).then(html => { const doc=new DOMParser().parseFromString(html,'text/html'); const newSec=doc.querySelector('#email-accounts'); const cur=document.querySelector('#email-accounts'); if(newSec && cur){ cur.innerHTML=newSec.innerHTML; applyLocalTimes(cur); attachEmailAccountListeners(); setupEmailAccountFormHandlers(); } }); }
   // attachEmailAccountListeners: Binds click handlers for Edit/Delete account buttons to populate modals.
   function attachEmailAccountListeners(){ document.querySelectorAll('.edit-account-btn').forEach(btn => { btn.addEventListener('click', () => { fetch('/email_accounts').then(r=>r.json()).then(accounts => { const id=btn.dataset.id; const account=accounts.find(a=>a.id==id); if(account){ fillEditForm(account, btn.dataset.action); } else { populateEditFormFromDataset(btn); } }).catch(()=> populateEditFormFromDataset(btn)); }); }); document.querySelectorAll('.delete-account-btn').forEach(btn => { btn.addEventListener('click', () => { const form=document.getElementById('deleteEmailAccountForm'); form.action=btn.dataset.action; document.getElementById('deleteAccountName').textContent=btn.dataset.name||''; }); }); }
   // fillEditForm: Populates the edit modal with live account data from /email_accounts.
   function fillEditForm(account, action){ const form=document.getElementById('editEmailAccountForm'); form.action=action; const map={ editAccountId:account.id, editAccountName:account.account_name, editServer:account.server, editEmailAddress:account.email_address, editPassword:'', editPort:account.port, editMailbox:account.mailbox, editBatchLimit:account.batch_limit, editRefreshInterval:account.refresh_interval_minutes, editUseSSL:account.use_ssl, editServerType:account.server_type||'imap', editLastSyncedOffset:account.last_synced_offset||'0'}; Object.keys(map).forEach(id=>{ const el=document.getElementById(id); if(!el) return; if(el.type==='checkbox') el.checked=!!map[id]; else el.value = map[id] ?? ''; }); }
   // populateEditFormFromDataset: Fallback when live fetch fails; uses data-* attributes on the clicked button.
   function populateEditFormFromDataset(btn){ const form=document.getElementById('editEmailAccountForm'); form.action=btn.dataset.action; const fieldMap={ editAccountId:'id', editAccountName:'name', editServer:'server', editEmailAddress:'email', editPassword:null, editPort:'port', editMailbox:'mailbox', editBatchLimit:'batch', editRefreshInterval:'interval', editUseSSL:'ssl', editServerType:'type', editLastSyncedOffset:'offset'}; Object.entries(fieldMap).forEach(([id,key])=>{ const el=document.getElementById(id); if(!el) return; if(id==='editUseSSL') el.checked=['1','true','on'].includes(btn.dataset[key]); else if(id==='editPassword') el.value=''; else el.value= btn.dataset[key] || (id==='editServerType'?'imap':''); }); }
+
+  // === Email Account Form Handlers ===
+  // setupEmailAccountFormHandlers: Sets up AJAX form submission handlers for add/edit forms
+  function setupEmailAccountFormHandlers() {
+    // Handle Add Email Account form
+    const addForm = document.getElementById('addEmailAccountForm');
+    if (addForm) {
+      addForm.addEventListener('submit', function(e) {
+        e.preventDefault();
+        handleEmailAccountSubmission(addForm, 'addEmailAccountError', 'addEmailAccountSuccess', 'addEmailAccountSubmit');
+      });
+    }
+
+    // Handle Edit Email Account form
+    const editForm = document.getElementById('editEmailAccountForm');
+    if (editForm) {
+      editForm.addEventListener('submit', function(e) {
+        e.preventDefault();
+        handleEmailAccountSubmission(editForm, 'editEmailAccountError', 'editEmailAccountSuccess', 'editEmailAccountSubmit');
+      });
+    }
+
+    // Clear messages when modals are opened
+    const addModal = document.getElementById('addEmailAccountModal');
+    const editModal = document.getElementById('editEmailAccountModal');
+    
+    if (addModal) {
+      addModal.addEventListener('show.bs.modal', function() {
+        const errorDiv = document.getElementById('addEmailAccountError');
+        const successDiv = document.getElementById('addEmailAccountSuccess');
+        if (errorDiv) errorDiv.classList.add('d-none');
+        if (successDiv) successDiv.classList.add('d-none');
+      });
+    }
+    
+    if (editModal) {
+      editModal.addEventListener('show.bs.modal', function() {
+        const errorDiv = document.getElementById('editEmailAccountError');
+        const successDiv = document.getElementById('editEmailAccountSuccess');
+        if (errorDiv) errorDiv.classList.add('d-none');
+        if (successDiv) successDiv.classList.add('d-none');
+      });
+    }
+  }
+
+  // handleEmailAccountSubmission: Common handler for add/edit email account forms
+  function handleEmailAccountSubmission(form, errorId, successId, submitId) {
+    const errorDiv = document.getElementById(errorId);
+    const successDiv = document.getElementById(successId);
+    const submitBtn = document.getElementById(submitId);
+    const spinner = submitBtn.querySelector('.spinner-border');
+
+    // Hide previous messages
+    errorDiv.classList.add('d-none');
+    successDiv.classList.add('d-none');
+
+    // Show loading state
+    submitBtn.disabled = true;
+    spinner.classList.remove('d-none');
+
+    // Prepare form data
+    const formData = new FormData(form);
+
+    // Submit via AJAX
+    fetch(form.action, {
+      method: 'POST',
+      headers: {
+        'X-Requested-With': 'XMLHttpRequest'
+      },
+      body: formData
+    })
+    .then(response => response.json())
+    .then(data => {
+      if (data.success) {
+        // Hide error message before showing success
+        errorDiv.classList.add('d-none');
+        
+        successDiv.textContent = data.message;
+        successDiv.classList.remove('d-none');
+        
+        // Reset form and close modal after a brief delay
+        setTimeout(() => {
+          form.reset();
+          const modal = form.closest('.modal');
+          if (modal) {
+            const modalInstance = bootstrap.Modal.getInstance(modal);
+            if (modalInstance) {
+              modalInstance.hide();
+            }
+          }
+          // Refresh the email accounts section
+          refreshEmailAccounts();
+        }, 1500);
+      } else {
+        // Hide success message before showing error
+        successDiv.classList.add('d-none');
+        
+        errorDiv.textContent = data.error || 'An error occurred';
+        errorDiv.classList.remove('d-none');
+      }
+    })
+    .catch(error => {
+      // Hide success message before showing error
+      successDiv.classList.add('d-none');
+      
+      errorDiv.textContent = 'Network error: ' + error.message;
+      errorDiv.classList.remove('d-none');
+    })
+    .finally(() => {
+      // Reset loading state
+      submitBtn.disabled = false;
+      spinner.classList.add('d-none');
+    });
+  }
 
   // === Stats & Section Partial Refreshers ===
   // refreshKnowledgebaseStats: Swaps metrics cards inside #knowledgebase-stats.
@@ -274,6 +388,7 @@
   document.addEventListener('DOMContentLoaded', () => {
     applyLocalTimes();
     attachEmailAccountListeners();
+    setupEmailAccountFormHandlers();
     document.addEventListener('click', globalClickHandler);
     setInterval(refreshProcessingStatus, 2000);
     setInterval(refreshUrlStatuses, 1500);

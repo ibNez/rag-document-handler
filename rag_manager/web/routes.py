@@ -1237,6 +1237,8 @@ class WebRoutes:
         @self.app.route('/email_accounts', methods=['POST'])
         def add_email_account():
             """Create a new email account configuration."""
+            is_ajax = request.headers.get('X-Requested-With') == 'XMLHttpRequest' or request.headers.get('Content-Type', '').startswith('application/json')
+            
             try:
                 # Validate all email account inputs with comprehensive security checks
                 account_name = InputValidator.validate_string(
@@ -1315,8 +1317,11 @@ class WebRoutes:
                 
             except ValidationError as e:
                 logger.error(f"Email account validation failed: {e}")
-                flash(f"Invalid input: {e}", 'error')
-                return redirect(url_for('index'))
+                if is_ajax:
+                    return jsonify({"success": False, "error": f"Invalid input: {e}"}), 400
+                else:
+                    flash(f"Invalid input: {e}", 'error')
+                    return redirect(url_for('index'))
 
             record = {
                 'account_name': account_name,
@@ -1335,18 +1340,30 @@ class WebRoutes:
                 if hasattr(self.rag_manager, 'email_account_manager') and self.rag_manager.email_account_manager:
                     self.rag_manager.email_account_manager.create_account(record)
                     logger.info("Email account '%s' added successfully", account_name)
-                    flash('Email account added successfully', 'success')
+                    if is_ajax:
+                        return jsonify({"success": True, "message": "Email account added successfully"})
+                    else:
+                        flash('Email account added successfully', 'success')
                 else:
-                    flash('Email account manager not available', 'error')
+                    if is_ajax:
+                        return jsonify({"success": False, "error": "Email account manager not available"}), 500
+                    else:
+                        flash('Email account manager not available', 'error')
             except Exception as e:
                 logger.exception("Failed to add email account '%s': %s", account_name, e)
-                flash(f'Failed to add email account: {e}', 'error')
+                if is_ajax:
+                    return jsonify({"success": False, "error": f"Failed to add email account: {e}"}), 500
+                else:
+                    flash(f'Failed to add email account: {e}', 'error')
 
-            return redirect(url_for('index'))
+            if not is_ajax:
+                return redirect(url_for('index'))
 
         @self.app.route('/email_accounts/<account_id>', methods=['POST'])
         def update_email_account(account_id: str):
             """Update an existing email account configuration."""
+            is_ajax = request.headers.get('X-Requested-With') == 'XMLHttpRequest' or request.headers.get('Content-Type', '').startswith('application/json')
+            
             account_name = request.form.get('account_name', '').strip()
             server = request.form.get('server', '').strip()
             email_address = request.form.get('email_address', '').strip()
@@ -1376,42 +1393,67 @@ class WebRoutes:
                 try:
                     updates['batch_limit'] = int(batch_limit_str)
                 except ValueError:
-                    flash('Batch limit must be a number', 'error')
-                    return redirect(url_for('index'))
+                    if is_ajax:
+                        return jsonify({"success": False, "error": "Batch limit must be a number"}), 400
+                    else:
+                        flash('Batch limit must be a number', 'error')
+                        return redirect(url_for('index'))
             if port_str:
                 try:
                     updates['port'] = int(port_str)
                 except ValueError:
-                    flash('Port must be a number', 'error')
-                    return redirect(url_for('index'))
+                    if is_ajax:
+                        return jsonify({"success": False, "error": "Port must be a number"}), 400
+                    else:
+                        flash('Port must be a number', 'error')
+                        return redirect(url_for('index'))
             if refresh_raw:
                 try:
                     updates['refresh_interval_minutes'] = int(refresh_raw)
                 except ValueError:
-                    flash('Refresh interval must be a number', 'error')
-                    return redirect(url_for('index'))
+                    if is_ajax:
+                        return jsonify({"success": False, "error": "Refresh interval must be a number"}), 400
+                    else:
+                        flash('Refresh interval must be a number', 'error')
+                        return redirect(url_for('index'))
             if last_synced_offset_str:
                 try:
                     updates['last_synced_offset'] = int(last_synced_offset_str)
                 except ValueError:
-                    flash('Last synced offset must be a number', 'error')
-                    return redirect(url_for('index'))
+                    if is_ajax:
+                        return jsonify({"success": False, "error": "Last synced offset must be a number"}), 400
+                    else:
+                        flash('Last synced offset must be a number', 'error')
+                        return redirect(url_for('index'))
             updates['use_ssl'] = 1 if use_ssl else 0
 
             if not updates:
-                flash('No fields to update', 'error')
-                return redirect(url_for('index'))
+                if is_ajax:
+                    return jsonify({"success": False, "error": "No fields to update"}), 400
+                else:
+                    flash('No fields to update', 'error')
+                    return redirect(url_for('index'))
 
             try:
                 if hasattr(self.rag_manager, 'email_account_manager') and self.rag_manager.email_account_manager:
                     self.rag_manager.email_account_manager.update_account(account_id, updates)
-                    flash('Email account updated successfully', 'success')
+                    if is_ajax:
+                        return jsonify({"success": True, "message": "Email account updated successfully"})
+                    else:
+                        flash('Email account updated successfully', 'success')
                 else:
-                    flash('Email account manager not available', 'error')
+                    if is_ajax:
+                        return jsonify({"success": False, "error": "Email account manager not available"}), 500
+                    else:
+                        flash('Email account manager not available', 'error')
             except Exception as e:
-                flash(f'Failed to update email account: {e}', 'error')
+                if is_ajax:
+                    return jsonify({"success": False, "error": f"Failed to update email account: {e}"}), 500
+                else:
+                    flash(f'Failed to update email account: {e}', 'error')
 
-            return redirect(url_for('index'))
+            if not is_ajax:
+                return redirect(url_for('index'))
 
         @self.app.route('/email_accounts/<account_id>/delete', methods=['POST'])
         def delete_email_account(account_id: str):

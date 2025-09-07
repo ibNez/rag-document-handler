@@ -4,12 +4,16 @@
 <div class="modal fade" id="addEmailAccountModal" tabindex="-1" aria-labelledby="addEmailAccountLabel" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content">
-            <form method="POST" action="{{ url_for('add_email_account') }}">
+            <form id="addEmailAccountForm" method="POST" action="{{ url_for('add_email_account') }}">
                 <div class="modal-header">
                     <h5 class="modal-title" id="addEmailAccountLabel">Add Email Account</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
                 <div class="modal-body">
+                    <!-- Error message display area -->
+                    <div id="addEmailAccountError" class="alert alert-danger d-none" role="alert"></div>
+                    <!-- Success message display area -->
+                    <div id="addEmailAccountSuccess" class="alert alert-success d-none" role="alert"></div>
                     <div class="mb-3">
                         <label class="form-label">Display Name</label>
                         <input type="text" class="form-control" name="account_name" required>
@@ -61,7 +65,10 @@
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" class="btn btn-primary">Save</button>
+                    <button type="submit" class="btn btn-primary" id="addEmailAccountSubmit">
+                        <span class="spinner-border spinner-border-sm d-none" role="status" aria-hidden="true"></span>
+                        Save
+                    </button>
                 </div>
             </form>
         </div>
@@ -78,6 +85,10 @@
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
                 <div class="modal-body">
+                    <!-- Error message display area -->
+                    <div id="editEmailAccountError" class="alert alert-danger d-none" role="alert"></div>
+                    <!-- Success message display area -->
+                    <div id="editEmailAccountSuccess" class="alert alert-success d-none" role="alert"></div>
                     <input type="hidden" name="account_id" id="editAccountId">
                     <div class="mb-3">
                         <label class="form-label">Display Name</label>
@@ -136,7 +147,10 @@
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" class="btn btn-primary">Save changes</button>
+                    <button type="submit" class="btn btn-primary" id="editEmailAccountSubmit">
+                        <span class="spinner-border spinner-border-sm d-none" role="status" aria-hidden="true"></span>
+                        Save changes
+                    </button>
                 </div>
             </form>
         </div>
