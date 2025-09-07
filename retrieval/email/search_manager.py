@@ -168,6 +168,14 @@ class EmailSearchManager:
         """Update total emails in mailbox for an account."""
         self.email_data_manager.update_total_emails_in_mailbox(account_id, total_emails)
     
+    def update_account_sync_status(self, account_id: int, last_synced = None, 
+                                  last_update_status: Optional[str] = None, 
+                                  current_offset: Optional[int] = None) -> None:
+        """Update email account sync status and position."""
+        self.email_data_manager.update_account_sync_status(
+            account_id, last_synced, last_update_status, current_offset
+        )
+    
     def search_chunks_for_email(self, email_id: str) -> List[Dict[str, Any]]:
         """Get all chunks for a specific email."""
         return self.email_data_manager.search_chunks_for_email(email_id)

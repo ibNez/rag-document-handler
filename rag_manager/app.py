@@ -90,7 +90,7 @@ class RAGKnowledgebaseManager:
         # Processing status tracking
         self.processing_status: Dict[str, DocumentProcessingStatus] = {}
         self.url_processing_status: Dict[str, URLProcessingStatus] = {}  # Changed to str for UUID keys
-        self.email_processing_status: Dict[int, EmailProcessingStatus] = {}
+        self.email_processing_status: Dict[str, EmailProcessingStatus] = {}  # Changed to str for UUID keys
         
         # Initialize the SchedulerManager (but don't start it yet)
         self.scheduler_manager = SchedulerManager(self.url_manager, self.config)
@@ -302,6 +302,9 @@ class RAGKnowledgebaseManager:
             if hasattr(self, 'scheduler_manager') and self.scheduler_manager:
                 self.scheduler_manager.set_email_orchestrator(self.email_orchestrator)
             logger.info("Email orchestrator set in scheduler manager")
+            
+            # Clean up any stale email processing status entries
+            self._cleanup_stale_email_processing_status()
             
             # Initialize email retrieval system (clean architecture)
             try:
@@ -647,12 +650,36 @@ class RAGKnowledgebaseManager:
             cleanup_thread = threading.Thread(target=cleanup_status, daemon=True)
             cleanup_thread.start()
 
-    def _refresh_email_account_background(self, account_id: int) -> None:
+    def _cleanup_stale_email_processing_status(self) -> None:
+        """Clean up stale email processing status entries for accounts that no longer exist."""
+        if not self.email_account_manager:
+            return
+        
+        try:
+            # Get current account IDs
+            current_accounts = self.email_account_manager.list_accounts(include_password=False)
+            current_account_ids = {acc.get('email_account_id') for acc in current_accounts if acc.get('email_account_id')}
+            
+            # Find stale entries in processing status
+            stale_ids = set(self.email_processing_status.keys()) - current_account_ids
+            
+            # Remove stale entries
+            for stale_id in stale_ids:
+                logger.info(f"Removing stale email processing status for account {stale_id}")
+                del self.email_processing_status[stale_id]
+                
+            if stale_ids:
+                logger.info(f"Cleaned up {len(stale_ids)} stale email processing status entries")
+                
+        except Exception as e:
+            logger.error(f"Failed to cleanup stale email processing status: {e}")
+
+    def _refresh_email_account_background(self, account_id: str) -> None:
         """
         Fetch emails for a specific account in a background thread using PostgreSQL.
         
         Args:
-            account_id: The ID of the email account to process
+            account_id: The ID of the email account to process (UUID string)
         """
         from datetime import datetime
         from .core.models import EmailProcessingStatus
@@ -669,11 +696,17 @@ class RAGKnowledgebaseManager:
         # Initialize processing status
         try:
             # Get account details for status tracking
+            logger.debug(f"Looking for account with ID: {account_id}")
             accounts = self.email_account_manager.list_accounts(include_password=False)
-            account = next((acc for acc in accounts if acc.get("id") == account_id), None)
+            logger.debug(f"Available accounts: {[acc.get('email_account_id') for acc in accounts]}")
+            account = next((acc for acc in accounts if acc.get("email_account_id") == account_id), None)
             
             if not account:
                 logger.error(f"Account {account_id} not found")
+                # Clean up stale processing status entry
+                if account_id in self.email_processing_status:
+                    logger.info(f"Removing stale processing status for account {account_id}")
+                    del self.email_processing_status[account_id]
                 return
                 
             # Create status tracker
@@ -691,17 +724,22 @@ class RAGKnowledgebaseManager:
             
             logger.info(f"Starting email refresh for account {account_id}: {account.get('account_name', '')}")
             
-            # Process emails using the orchestrator
-            status.message = "Processing emails..."
-            status.progress = 25
+            # Create a status callback to update the processing status
+            def update_status(new_status: str, progress: int, message: str):
+                """Update the email processing status with detailed information."""
+                if account_id in self.email_processing_status:
+                    status = self.email_processing_status[account_id]
+                    status.status = new_status
+                    status.progress = progress
+                    status.message = message
+                    if new_status == "completed":
+                        status.end_time = datetime.now()
+                    elif new_status == "error":
+                        status.error_details = message
+                        status.end_time = datetime.now()
             
-            self.email_orchestrator.run(account_id=account_id)
-            
-            # Complete successfully
-            status.status = "completed"
-            status.message = "Email refresh completed successfully"
-            status.progress = 100
-            status.end_time = datetime.now()
+            # Process emails using the orchestrator with status updates
+            self.email_orchestrator.run(account_id=account_id, status_callback=update_status)
             
             logger.info(f"Email refresh completed for account {account_id}")
             

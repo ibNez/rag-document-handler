@@ -120,9 +120,9 @@ class SchedulerManager:
                 
                 # Count currently running tasks
                 running_url_tasks = sum(1 for status in self.url_processing_status.values() 
-                                      if status.status == "processing")
+                                      if status.status in ["processing", "pending"])
                 running_email_tasks = sum(1 for status in self.email_processing_status.values() 
-                                        if status.status == "processing")
+                                        if status.status in ["processing", "pending", "connecting", "preparing", "syncing", "finalizing"])
                 
                 logger.debug(f"Currently running: {running_url_tasks} URL tasks, {running_email_tasks} email tasks")
                 
@@ -156,7 +156,20 @@ class SchedulerManager:
                     acct_id = account.get('email_account_id')
                     if acct_id is None or acct_id in self.email_processing_status:
                         continue
-                    self.email_processing_status[acct_id] = EmailProcessingStatus(email_id=acct_id)
+                    
+                    # Double-check account still exists before processing
+                    try:
+                        if hasattr(email_orchestrator, 'account_manager') and email_orchestrator.account_manager:
+                            current_accounts = email_orchestrator.account_manager.list_accounts(include_password=False)
+                            account_exists = any(acc.get('email_account_id') == acct_id for acc in current_accounts)
+                            if not account_exists:
+                                logger.warning(f"Skipping processing for non-existent account {acct_id}")
+                                continue
+                    except Exception as e:
+                        logger.warning(f"Failed to verify account existence for {acct_id}: {e}")
+                        continue
+                    
+                    # The _refresh_email_account_background method will handle status creation and updates
                     if self._refresh_email_account_background:
                         t = threading.Thread(target=self._refresh_email_account_background, args=(acct_id,))
                         t.daemon = True

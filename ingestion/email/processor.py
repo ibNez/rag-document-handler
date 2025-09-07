@@ -85,7 +85,7 @@ class EmailProcessor:
         )
         
         # Initialize PostgreSQL manager for chunk storage
-        self.db_manager = PostgreSQLManager(email_manager.pool)
+        self.db_manager = email_manager.db_manager
         
         # Use the PostgreSQL-based email manager directly
         self.manager = email_manager
@@ -106,10 +106,10 @@ class EmailProcessor:
     def _store_chunks(self, record: Dict[str, Any]) -> int:
         """Store email chunks in PostgreSQL for retrieval."""
         message_id = record.get("message_id")
-        body_text = record.get("body_text", "")
+        content = record.get("content", "")
         
-        if not body_text.strip():
-            logger.debug("No body text to chunk for message %s", message_id)
+        if not content.strip():
+            logger.debug("No content to chunk for message %s", message_id)
             return 0
         
         try:

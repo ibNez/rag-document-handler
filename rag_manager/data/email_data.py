@@ -255,6 +255,53 @@ class EmailDataManager(BaseDataManager):
         except Exception as e:
             logger.error(f"Failed to update total emails count for account {account_id}: {e}")
             raise
+
+    def update_account_sync_status(self, account_id: int, last_synced: Optional[datetime] = None, 
+                                  last_update_status: Optional[str] = None, 
+                                  current_offset: Optional[int] = None) -> None:
+        """
+        Update email account sync status and position.
+        
+        Args:
+            account_id: Email account ID
+            last_synced: Last synchronization timestamp
+            last_update_status: Status of last update (success/error)
+            current_offset: Current email offset position
+        """
+        try:
+            # Build dynamic query based on provided parameters
+            update_fields = []
+            params = []
+            
+            if last_synced is not None:
+                update_fields.append("last_synced = %s")
+                params.append(last_synced)
+            
+            if last_update_status is not None:
+                update_fields.append("last_update_status = %s")
+                params.append(last_update_status)
+            
+            if current_offset is not None:
+                update_fields.append("current_offset = %s")
+                params.append(current_offset)
+            
+            if not update_fields:
+                logger.warning(f"No fields to update for account {account_id}")
+                return
+            
+            query = f"""
+                UPDATE email_accounts 
+                SET {', '.join(update_fields)}, updated_at = CURRENT_TIMESTAMP
+                WHERE id = %s
+            """
+            params.append(account_id)
+            
+            self.execute_query(query, tuple(params))
+            logger.debug(f"Updated sync status for account {account_id}: fields={update_fields}")
+            
+        except Exception as e:
+            logger.error(f"Failed to update sync status for account {account_id}: {e}")
+            raise
     
     # =============================================================================
     # Email Search Operations  
