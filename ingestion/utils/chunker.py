@@ -316,8 +316,8 @@ class TextChunker:
         if subject:
             text_parts.append(f"Subject: {subject}")
         
-        # Add body content
-        body = email_content.get('content', '').strip()
+        # Add body content - check both possible field names
+        body = email_content.get('content', '').strip() or email_content.get('body_text', '').strip()
         if body:
             text_parts.append(body)
         
@@ -335,7 +335,7 @@ class TextChunker:
         email_chunks = []
         for chunk in text_chunks:
             email_chunk = {
-                'email_id': email_content.get('message_id'),
+                'email_id': email_content.get('id'),  # Use database UUID id, not message_id
                 'chunk_text': chunk['chunk_text'],
                 'chunk_index': chunk['chunk_index'],
                 'token_count': chunk['token_count'],

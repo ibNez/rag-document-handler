@@ -24,7 +24,7 @@ class EmailAccountManager:
 
     def __init__(self, postgres_manager: Any) -> None:
         """Initialize with PostgreSQL manager for pure PostgreSQL-based email account management."""
-        self.db_manager = PostgreSQLManager(postgres_manager.pool)
+        self.db_manager = PostgreSQLManager()
         self.postgres_pool = postgres_manager.pool
         # Add pool attribute for compatibility with EmailProcessor
         self.pool = postgres_manager.pool

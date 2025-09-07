@@ -47,6 +47,21 @@ templates/
 └── *.html        # Main templates using partials system
 ```
 
+## Recent Updates
+
+### Email Headers Collection (September 2025)
+- **Complete Headers Collection**: All email headers now automatically collected during sync
+- **JSONB Storage**: Headers stored in PostgreSQL for efficient querying and analysis
+- **Cross-Connector Support**: IMAP, Gmail, and Exchange connectors all collect headers
+- **Metadata Analysis**: Authentication, routing, threading, and priority information available
+- **Query Capabilities**: Advanced JSONB queries for header-based email filtering
+
+### PostgreSQL Architecture Consolidation
+- **Unified Schema Management**: Single source of truth in `postgres_manager.py`
+- **UUID-Based Architecture**: Consistent UUID primary keys across all tables
+- **Improved Data Integrity**: Proper foreign key relationships and constraints
+- **Enhanced Performance**: Optimized connection pooling and query efficiency
+
 ## Table of Contents
 
 - [Installation](installation.md) - Setup options, development mode, and deployment

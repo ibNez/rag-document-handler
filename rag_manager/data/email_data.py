@@ -41,14 +41,17 @@ class EmailDataManager(BaseDataManager):
     # Email Record Operations
     # =============================================================================
     
-    def upsert_email(self, record: Dict[str, Any]) -> None:
+    def upsert_email(self, record: Dict[str, Any]) -> str:
         """
         Insert or update email record in PostgreSQL.
         
         Args:
             record: Email record dictionary with required fields
+            
+        Returns:
+            The UUID of the upserted email record
         """
-        required_fields = ["message_id", "subject", "body_text"]
+        required_fields = ["message_id", "subject", "content"]
         missing_fields = [field for field in required_fields if not record.get(field)]
         
         if missing_fields:
@@ -80,6 +83,7 @@ class EmailDataManager(BaseDataManager):
                     attachments = EXCLUDED.attachments,
                     headers = EXCLUDED.headers,
                     updated_at = CURRENT_TIMESTAMP
+                RETURNING id
             """
             
             params = (
@@ -90,13 +94,19 @@ class EmailDataManager(BaseDataManager):
                 record.get("date_utc"),
                 record.get("header_hash", ""),
                 record.get("content_hash", ""),
-                record.get("body_text", ""),
+                record.get("content", ""),  # Use 'content' field instead of 'body_text'
                 json.dumps(record.get("attachments", [])) if record.get("attachments") else None,
                 json.dumps(record.get("headers", {})) if record.get("headers") else None
             )
             
-            self.execute_query(query, params)
-            logger.debug(f"Successfully upserted email record: {message_id}")
+            result = self.execute_query(query, params, fetch_one=True)
+            email_id = str(result['id']) if result else None
+            
+            if not email_id:
+                raise RuntimeError(f"Failed to get email ID for message {message_id}")
+                
+            logger.debug(f"Successfully upserted email record: {message_id} with ID: {email_id}")
+            return email_id
             
         except Exception as e:
             logger.error(f"Failed to upsert email record {message_id}: {e}")

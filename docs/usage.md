@@ -104,6 +104,28 @@ The Manager page provides dedicated content management functionality across all 
 - **Account Configuration**: Add, edit, and delete email accounts
 - **Sync Monitoring**: Real-time sync status and progress tracking
 - **Connection Testing**: Validation of email server connectivity
+- **Headers Collection**: **NEW** - Complete email headers automatically collected for advanced metadata analysis
+- **Threading Support**: Email thread tracking via In-Reply-To and References headers
+- **Authentication Analysis**: DKIM, SPF, and DMARC headers for security insights
+
+#### Email Headers Features
+The system now automatically collects and stores all email headers during sync:
+
+**Standard Headers**: From, To, Subject, Date, Message-ID, Content-Type
+**MIME Headers**: MIME-Version, Content-Transfer-Encoding  
+**Threading Headers**: In-Reply-To, References for conversation tracking
+**Routing Headers**: Received, Return-Path, Delivered-To for message flow analysis
+**Authentication Headers**: DKIM-Signature, SPF records, DMARC for security validation
+**Custom Headers**: X-* headers and application-specific metadata
+
+Headers are stored as JSONB in PostgreSQL enabling advanced queries:
+```sql
+-- Find high priority emails
+SELECT * FROM emails WHERE headers->>'x-priority' = '1';
+
+-- Search by sender domain
+SELECT * FROM emails WHERE headers->>'from' LIKE '%@company.com%';
+```
 
 ### Template Partials System
 
@@ -143,9 +165,11 @@ Questions about emails are automatically detected and processed through a specia
 Email results include clickable email IDs that open detailed email viewers with:
 - **Full email content** with HTML rendering support
 - **Sender and recipient information**
+- **Complete email headers** with all metadata for analysis
 - **Attachment details** with file sizes and types
-- **Thread and reply context**
-- **Technical metadata** (Message ID, headers, etc.)
+- **Thread and reply context** via In-Reply-To/References headers
+- **Authentication status** from DKIM, SPF, DMARC headers
+- **Technical metadata** (Message ID, routing information, etc.)
 
 ### General Document Queries
 Standard questions about documents and URLs use the existing RAG pipeline:

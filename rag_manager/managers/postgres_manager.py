@@ -31,31 +31,19 @@ class PostgreSQLConfig:
 class PostgreSQLManager:
     """PostgreSQL manager for RAG document metadata and analytics."""
     
-    def __init__(self, config_or_pool=None):
+    def __init__(self, config: Optional[PostgreSQLConfig] = None):
         """
         Initialize PostgreSQL manager with connection pooling.
         
         Args:
-            config_or_pool: Either a PostgreSQLConfig object or a connection pool.
-                          If None, creates default config.
+            config: PostgreSQL configuration object. If None, creates default config.
         """
-        # Check if it's a connection pool (duck typing)
-        if hasattr(config_or_pool, 'getconn') and hasattr(config_or_pool, 'putconn'):
-            # It's a connection pool - use it directly
-            self.pool = config_or_pool
-            self.config = None
-            logger.info("PostgreSQL manager initialized with existing pool")
-        else:
-            # It's a config object (or None)
-            self.config = config_or_pool or PostgreSQLConfig()
-            self._initialize_pool()
-            self._ensure_schema()
+        self.config = config or PostgreSQLConfig()
+        self._initialize_pool()
+        self._ensure_schema()
     
     def _initialize_pool(self) -> None:
         """Initialize connection pool."""
-        if not self.config:
-            raise ValueError("Cannot initialize pool without config")
-            
         try:
             self.pool = ThreadedConnectionPool(
                 self.config.min_connections,
@@ -99,12 +87,7 @@ class PostgreSQLManager:
                 self.pool.putconn(conn)
     
     def _ensure_schema(self) -> None:
-        """Create necessary tables and indexes. Skip if using external pool."""
-        if not self.config:
-            # Skip schema creation when using external pool - assume it's already set up
-            logger.debug("Skipping schema creation for external pool")
-            return
-            
+        """Create necessary tables and indexes."""
         schema_sql = """
         -- Enable required extensions
         CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
@@ -144,7 +127,7 @@ class PostgreSQLManager:
             header_hash TEXT UNIQUE NOT NULL,
             content_hash TEXT UNIQUE,
             content TEXT,
-            attachments JSONB,
+            attachments TEXT,
             headers JSONB,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -154,13 +137,13 @@ class PostgreSQLManager:
         -- Email chunks table for retrieval
         CREATE TABLE IF NOT EXISTS email_chunks (
             id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-            email_id TEXT NOT NULL,
+            email_id UUID NOT NULL,
             chunk_text TEXT NOT NULL,
             chunk_index INTEGER NOT NULL,
             token_count INTEGER,
             chunk_hash VARCHAR(64),
             created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-            CONSTRAINT fk_email_chunks_email FOREIGN KEY (email_id) REFERENCES emails(message_id) ON DELETE CASCADE,
+            CONSTRAINT fk_email_chunks_email FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE,
             CONSTRAINT uk_email_chunks_position UNIQUE(email_id, chunk_index)
         );
 
@@ -493,10 +476,83 @@ class PostgreSQLManager:
     # Document chunk methods - MOVED TO ingestion/document/manager.py
     # Methods moved: store_document_chunk, delete_document_chunks
 
+    def close_pool(self) -> None:
+        """Close the connection pool."""
+        if self.pool:
+            self.pool.closeall()
+            self.pool = None
+            logger.info("PostgreSQL connection pool closed")
+    
     def close(self) -> None:
         """Close connection pool."""
         if self.pool:
             self.pool.closeall()
             logger.info("PostgreSQL connection pool closed")
+    
+    def get_pool_status(self) -> dict:
+        """
+        Get connection pool status information.
+        
+        Returns:
+            Dictionary with pool status details
+        """
+        if not self.pool:
+            return {'status': 'not_initialized'}
+            
+        # Note: psycopg2 ThreadedConnectionPool doesn't expose internal stats
+        # This is a basic status check
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT 1")
+                    result = cur.fetchone()
+            
+            return {
+                'status': 'healthy',
+                'database': self.config.database,
+                'host': self.config.host,
+                'port': self.config.port,
+                'test_query': 'success' if result else 'failed'
+            }
+        except Exception as e:
+            return {
+                'status': 'error',
+                'error': str(e),
+                'database': self.config.database,
+                'host': self.config.host,
+                'port': self.config.port
+            }
 
-__all__ = ["PostgreSQLManager", "PostgreSQLConfig"]
+
+# Global instance for easy access
+_postgres_manager: Optional['PostgreSQLManager'] = None
+
+
+def get_postgres_manager(config: Optional[PostgreSQLConfig] = None) -> 'PostgreSQLManager':
+    """
+    Get the global PostgreSQL manager instance.
+    
+    Args:
+        config: Optional configuration for first-time initialization
+        
+    Returns:
+        PostgreSQL manager instance
+    """
+    global _postgres_manager
+    
+    if _postgres_manager is None:
+        _postgres_manager = PostgreSQLManager(config)
+    
+    return _postgres_manager
+
+
+def close_postgres_connections() -> None:
+    """Close all PostgreSQL connections."""
+    global _postgres_manager
+    
+    if _postgres_manager:
+        _postgres_manager.close_pool()
+        _postgres_manager = None
+
+
+__all__ = ["PostgreSQLManager", "PostgreSQLConfig", "get_postgres_manager", "close_postgres_connections"]

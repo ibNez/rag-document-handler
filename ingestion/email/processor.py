@@ -97,10 +97,28 @@ class EmailProcessor:
         )
 
     # ------------------------------------------------------------------
-    def _store_metadata(self, record: Dict[str, Any]) -> None:
-        """Persist an email record using :class:`EmailManager`."""
-        self.manager.upsert_email(record)
-        logger.info("Stored metadata for message %s", record.get("message_id"))
+    def _store_metadata(self, record: Dict[str, Any]) -> str:
+        """Persist an email record using :class:`EmailManager`.
+        
+        Returns:
+            The database-generated UUID id for the stored email
+        """
+        # Ensure required fields are present and generate missing hashes
+        if not record.get("header_hash"):
+            # Generate header hash from message_id and headers
+            header_data = f"{record.get('message_id', '')}{record.get('subject', '')}{record.get('from_addr', '')}"
+            record["header_hash"] = hashlib.sha256(header_data.encode('utf-8')).hexdigest()
+        
+        if not record.get("content_hash"):
+            # Generate content hash from body text
+            content = record.get("content", "")
+            record["content_hash"] = hashlib.sha256(content.encode('utf-8')).hexdigest()
+        
+        # Store the email and get the database ID directly from upsert
+        email_db_id = self.manager.upsert_email(record)
+        logger.info("Stored metadata for message %s with ID %s", record.get("message_id"), email_db_id)
+        
+        return email_db_id
 
     # ------------------------------------------------------------------
     def _store_chunks(self, record: Dict[str, Any]) -> int:
@@ -108,13 +126,20 @@ class EmailProcessor:
         message_id = record.get("message_id")
         content = record.get("content", "")
         
+        # DEBUG_EMAIL_ID: Log _store_chunks entry state
+        logger.debug(f"DEBUG_EMAIL_ID: _store_chunks called for message_id: {message_id}")
+        logger.debug(f"DEBUG_EMAIL_ID: record['id'] = {record.get('id')} (type: {type(record.get('id'))})")
+        logger.debug(f"DEBUG_EMAIL_ID: record keys = {list(record.keys())}")
+        
         if not content.strip():
             logger.debug("No content to chunk for message %s", message_id)
             return 0
         
         try:
             # Generate chunks using the text chunker
+            logger.debug(f"DEBUG_EMAIL_ID: About to call text_chunker.chunk_email")
             chunks = self.text_chunker.chunk_email(record)
+            logger.debug(f"DEBUG_EMAIL_ID: text_chunker returned {len(chunks) if chunks else 0} chunks")
             
             if not chunks:
                 logger.debug("No chunks generated for message %s", message_id)
@@ -126,6 +151,15 @@ class EmailProcessor:
                 with conn.cursor() as cur:
                     for chunk in chunks:
                         try:
+                            # DEBUG_EMAIL_ID: Log chunk details before insertion
+                            logger.debug(f"DEBUG_EMAIL_ID: Processing chunk {chunk.get('chunk_index', 'unknown')}")
+                            logger.debug(f"DEBUG_EMAIL_ID: chunk['email_id'] = {chunk.get('email_id')} (type: {type(chunk.get('email_id'))})")
+                            logger.debug(f"DEBUG_EMAIL_ID: chunk keys = {list(chunk.keys())}")
+                            
+                            if chunk.get('email_id') is None:
+                                logger.error(f"DEBUG_EMAIL_ID: FOUND NULL EMAIL_ID! Record 'id' = {record.get('id')}")
+                                logger.error(f"DEBUG_EMAIL_ID: Original record keys = {list(record.keys())}")
+                                
                             # Insert and return the generated UUID id for the chunk.
                             cur.execute("""
                                 INSERT INTO email_chunks (
@@ -261,13 +295,27 @@ class EmailProcessor:
         message_id = record.get("message_id")
         if not message_id:
             raise ValueError("record missing message_id")
-        body_text = record.get("body_text") or ""
+        
+        # DEBUG_EMAIL_ID: Log initial record state
+        logger.debug(f"DEBUG_EMAIL_ID: Starting process for message_id: {message_id}")
+        logger.debug(f"DEBUG_EMAIL_ID: Initial record keys: {list(record.keys())}")
+        logger.debug(f"DEBUG_EMAIL_ID: 'id' in record: {'id' in record}")
+        
+        # Check for content 
+        body_text = record.get("content", "")
 
-        # persist metadata regardless of body content
-        self._store_metadata(record)
+        # Persist metadata and get the database UUID id
+        email_db_id = self._store_metadata(record)
+        logger.debug(f"DEBUG_EMAIL_ID: _store_metadata returned: {email_db_id} (type: {type(email_db_id)})")
+        
+        # Add database ID to record for chunking
+        record['id'] = email_db_id
+        logger.debug(f"DEBUG_EMAIL_ID: Set record['id'] = {record['id']}")
         
         # Store chunks in PostgreSQL for retrieval
+        logger.debug(f"DEBUG_EMAIL_ID: About to call _store_chunks with record['id'] = {record.get('id')}")
         chunk_count = self._store_chunks(record)
+        logger.debug(f"DEBUG_EMAIL_ID: _store_chunks returned {chunk_count} chunks")
 
         if not body_text.strip():
             logger.debug(
