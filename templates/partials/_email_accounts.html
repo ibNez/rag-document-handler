@@ -46,18 +46,38 @@
                                         <div class="text-muted">Next: <span class="dt-local" data-utc="{{ acct.next_run or '' }}">{{ acct.next_run or '—' }}</span></div>
                                     </td>
                                     <td>
-                                        {% set up = email_processing_status.get(acct.id) if email_processing_status else None %}
+                                        {% set up = email_processing_status.get(acct.email_account_id) if email_processing_status else None %}
                                         {% if up %}
                                             <div class="small mb-1">
-                                                <span class="badge bg-info" title="{{ up.message }}">{{ up.status.title() }}</span>
+                                                <span class="status-indicator status-{{ up.status }}"></span>
+                                                <span class="badge 
+                                                    {% if up.status == 'error' %}bg-danger
+                                                    {% elif up.status == 'completed' %}bg-success
+                                                    {% elif up.status in ['connecting', 'preparing', 'syncing', 'processing', 'finalizing'] %}bg-info
+                                                    {% else %}bg-warning
+                                                    {% endif %}" 
+                                                    title="{{ up.message }}">{{ up.status.title() }}</span>
                                             </div>
                                             <div class="progress progress-custom">
-                                                <div class="progress-bar bg-success progress-animated"
+                                                <div class="progress-bar 
+                                                    {% if up.status == 'error' %}bg-danger
+                                                    {% elif up.status == 'completed' %}bg-success
+                                                    {% elif up.status in ['connecting', 'preparing'] %}bg-info
+                                                    {% elif up.status in ['syncing', 'processing'] %}bg-primary
+                                                    {% elif up.status == 'finalizing' %}bg-success
+                                                    {% else %}bg-warning
+                                                    {% endif %}
+                                                    {% if up.status in ['connecting', 'preparing', 'syncing', 'processing', 'finalizing'] %}progress-animated{% endif %}"
                                                      role="progressbar" aria-valuemin="0" aria-valuemax="100"
-                                                     data-email-id="{{ acct.id }}"
+                                                     data-email-id="{{ acct.email_account_id }}"
                                                      data-initial-progress="{{ up.progress or 0 }}"
                                                      style="width: 0%"></div>
                                             </div>
+                                            {% if up.message %}
+                                                <div class="small text-muted mt-1" title="{{ up.message }}">
+                                                    {{ up.message[:50] }}{% if up.message|length > 50 %}...{% endif %}
+                                                </div>
+                                            {% endif %}
                                         {% elif acct.last_update_status %}
                                             {% set status_text = acct.last_update_status %}
                                             <span class="status-indicator status-{{ 'completed' if status_text == 'ready' else ('error' if 'error' in status_text.lower() else 'pending') }}"></span>
@@ -71,8 +91,8 @@
                                         <div class="btn-group btn-group-sm" role="group">
                                             <button type="button" class="btn btn-outline-secondary action-btn edit-account-btn"
                                                     data-bs-toggle="modal" data-bs-target="#editEmailAccountModal"
-                                                    data-action="{{ url_for('update_email_account', account_id=acct.id) }}"
-                                                    data-id="{{ acct.id }}"
+                                                    data-action="{{ url_for('update_email_account', account_id=acct.email_account_id) }}"
+                                                    data-id="{{ acct.email_account_id }}"
                                                     data-name="{{ acct.account_name }}"
                                                     data-server="{{ acct.server }}"
                                                     data-email="{{ acct.email_address }}"
@@ -86,14 +106,14 @@
                                                     title="Edit">
                                                 <i class="fas fa-pen"></i>
                                             </button>
-                                            <form method="POST" action="{{ url_for('refresh_email_account', account_id=acct.id) }}">
+                                            <form method="POST" action="{{ url_for('refresh_email_account', account_id=acct.email_account_id) }}">
                                                 <button type="submit" class="btn btn-outline-primary action-btn" title="Refresh now">
                                                     <i class="fas fa-sync"></i>
                                                 </button>
                                             </form>
                                             <button type="button" class="btn btn-outline-danger action-btn delete-account-btn"
                                                     data-bs-toggle="modal" data-bs-target="#deleteEmailAccountModal"
-                                                    data-action="{{ url_for('delete_email_account', account_id=acct.id) }}"
+                                                    data-action="{{ url_for('delete_email_account', account_id=acct.email_account_id) }}"
                                                     data-name="{{ acct.account_name }}"
                                                     title="Delete">
                                                 <i class="fas fa-trash"></i>

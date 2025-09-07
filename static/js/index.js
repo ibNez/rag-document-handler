@@ -79,7 +79,7 @@
       let filename='';
       if(cardTitle){ const clone=cardTitle.cloneNode(true); clone.querySelectorAll('.status-indicator').forEach(el=>el.remove()); filename=clone.textContent.trim(); }
       if(!filename) return;
-      if(!card.querySelector('.status-processing, .status-chunking, .status-embedding, .status-storing')) return;
+      if(!card.querySelector('.status-processing, .status-chunking, .status-embedding, .status-storing, .status-connecting, .status-preparing, .status-syncing, .status-finalizing')) return;
       fetch(`/status/${encodeURIComponent(filename)}`)
         .then(r=>r.json())
         .then(data => { if(data.status==='not_found') return; updateCardStatus(card, data, filename); })
@@ -98,7 +98,7 @@
 
     // Hide/show action button based on processing status
     if(actionButton) {
-      const isProcessing = ['processing', 'queued', 'chunking', 'embedding', 'storing'].includes(data.status);
+      const isProcessing = ['processing', 'queued', 'chunking', 'embedding', 'storing', 'connecting', 'preparing', 'syncing', 'finalizing'].includes(data.status);
       actionButton.style.display = isProcessing ? 'none' : 'inline-block';
     }
 
@@ -109,10 +109,10 @@
       
       let html='';
       if(data.message){ const cls = data.status==='error'? 'text-danger': data.status==='completed'? 'text-success':'text-info'; html += `<small class="d-block ${cls}">${data.message}</small>`; }
-      if(typeof data.progress==='number' && data.progress>=0){ const pCls = data.status==='error'? 'bg-danger':'bg-success'; const anim = ['queued','processing','chunking','embedding','storing'].includes(data.status)?'progress-animated':''; html += `<div class="progress progress-custom mt-1" style="height:6px;"><div class="progress-bar ${pCls} ${anim}" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${data.progress}" style="width:${data.progress}%"></div></div>`; }
+      if(typeof data.progress==='number' && data.progress>=0){ const pCls = data.status==='error'? 'bg-danger':'bg-success'; const anim = ['queued','processing','chunking','embedding','storing','connecting','preparing','syncing','finalizing'].includes(data.status)?'progress-animated':''; html += `<div class="progress progress-custom mt-1" style="height:6px;"><div class="progress-bar ${pCls} ${anim}" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${data.progress}" style="width:${data.progress}%"></div></div>`; }
       stagingStatusArea.innerHTML = html; 
     }
-    else { const messageEl = card.querySelector('small'); if(messageEl && data.message) messageEl.textContent = data.message; const pb=card.querySelector('.progress-bar'); if(pb && typeof data.progress==='number'){ pb.style.width=`${data.progress}%`; pb.setAttribute('aria-valuenow', String(data.progress)); if(['queued','processing','chunking','embedding','storing'].includes(data.status)) pb.classList.add('progress-animated'); else pb.classList.remove('progress-animated'); } }
+    else { const messageEl = card.querySelector('small'); if(messageEl && data.message) messageEl.textContent = data.message; const pb=card.querySelector('.progress-bar'); if(pb && typeof data.progress==='number'){ pb.style.width=`${data.progress}%`; pb.setAttribute('aria-valuenow', String(data.progress)); if(['queued','processing','chunking','embedding','storing','connecting','preparing','syncing','finalizing'].includes(data.status)) pb.classList.add('progress-animated'); else pb.classList.remove('progress-animated'); } }
 
     if(data.message && data.message.toLowerCase().includes('deletion complete')) { removeCard(card, isStaging); return; }
     if(['completed','error'].includes(data.status) && isStaging){ setTimeout(()=>{ removeCard(card, true); if(data.status==='completed') refreshProcessedDocuments(); },3000); }
@@ -133,13 +133,13 @@
   function finalizeEmailStatus(pb,data){ try { const td=pb.closest('td'); if(td){ const statusText=data.last_update_status || '—'; const cls = statusText.startsWith('error')? 'bg-light text-dark':'bg-success'; td.innerHTML=`<span class="badge ${cls}">${statusText}</span>`; } } catch(e){} }
 
   // updateProgressBar: Shared utility for URL + Email ingestion progress rows.
-  function updateProgressBar(pb, pct, status){ pb.style.width=`${pct}%`; pb.setAttribute('aria-valuenow', String(pct)); if(['queued','processing','chunking','embedding','storing'].includes(status)) pb.classList.add('progress-animated'); else pb.classList.remove('progress-animated'); if(['completed','error'].includes(status)){ const td=pb.closest('td'); if(td){ const s=status==='completed'? 'updated':'error'; const cls = s==='updated'? 'bg-success':'bg-light text-dark'; td.innerHTML=`<span class="badge ${cls}">${s.charAt(0).toUpperCase()+s.slice(1)}</span>`; } } }
+  function updateProgressBar(pb, pct, status){ pb.style.width=`${pct}%`; pb.setAttribute('aria-valuenow', String(pct)); if(['queued','processing','chunking','embedding','storing','connecting','preparing','syncing','finalizing'].includes(status)) pb.classList.add('progress-animated'); else pb.classList.remove('progress-animated'); if(['completed','error'].includes(status)){ const td=pb.closest('td'); if(td){ const s=status==='completed'? 'updated':'error'; const cls = s==='updated'? 'bg-success':'bg-light text-dark'; td.innerHTML=`<span class="badge ${cls}">${s.charAt(0).toUpperCase()+s.slice(1)}</span>`; } } }
   // fadeRemoveRow: Generic fade out helper for table rows.
   function fadeRemoveRow(pb){ const row = pb.closest('tr'); if(row){ row.style.transition='opacity 200ms ease'; row.style.opacity='0'; setTimeout(()=> row.remove(),220); } }
 
   // === Email Accounts Section (modal + list) ===
   // refreshEmailAccounts: Re-fetches #email-accounts block, then re-binds modal button listeners.
-  function refreshEmailAccounts(){ fetch(window.location.href).then(r=>r.text()).then(html => { const doc=new DOMParser().parseFromString(html,'text/html'); const newSec=doc.querySelector('#email-accounts'); const cur=document.querySelector('#email-accounts'); if(newSec && cur){ cur.innerHTML=newSec.innerHTML; applyLocalTimes(cur); attachEmailAccountListeners(); setupEmailAccountFormHandlers(); } }); }
+  function refreshEmailAccounts(){ fetch(window.location.href).then(r=>r.text()).then(html => { const doc=new DOMParser().parseFromString(html,'text/html'); const newSec=doc.querySelector('#email-accounts'); const cur=document.querySelector('#email-accounts'); if(newSec && cur){ cur.innerHTML=newSec.innerHTML; applyLocalTimes(cur); attachEmailAccountListeners(); } }); }
   // attachEmailAccountListeners: Binds click handlers for Edit/Delete account buttons to populate modals.
   function attachEmailAccountListeners(){ document.querySelectorAll('.edit-account-btn').forEach(btn => { btn.addEventListener('click', () => { fetch('/email_accounts').then(r=>r.json()).then(accounts => { const id=btn.dataset.id; const account=accounts.find(a=>a.id==id); if(account){ fillEditForm(account, btn.dataset.action); } else { populateEditFormFromDataset(btn); } }).catch(()=> populateEditFormFromDataset(btn)); }); }); document.querySelectorAll('.delete-account-btn').forEach(btn => { btn.addEventListener('click', () => { const form=document.getElementById('deleteEmailAccountForm'); form.action=btn.dataset.action; document.getElementById('deleteAccountName').textContent=btn.dataset.name||''; }); }); }
   // fillEditForm: Populates the edit modal with live account data from /email_accounts.

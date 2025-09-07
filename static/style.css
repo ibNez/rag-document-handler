@@ -69,10 +69,14 @@ body {
 /* ===== Shared: Processing Status Indicators ===== */
 .status-indicator { width:12px; height:12px; border-radius:50%; display:inline-block; margin-right:8px; }
 .status-pending { background-color:#ffc107; }
+.status-connecting { background-color:#17a2b8; animation:pulse 1.25s infinite; }
+.status-preparing { background-color:#6c757d; animation:pulse 1.25s infinite; }
+.status-syncing { background-color:#007bff; animation:pulse 1.25s infinite; }
 .status-processing { background-color:#007bff; animation:pulse 1.25s infinite; }
 .status-chunking { background-color:#17a2b8; animation:pulse 1.25s infinite; }
 .status-embedding { background-color:#6f42c1; animation:pulse 1.25s infinite; }
 .status-storing { background-color:#fd7e14; animation:pulse 1.25s infinite; }
+.status-finalizing { background-color:#20c997; animation:pulse 1.25s infinite; }
 .status-completed { background-color:#28a745; }
 .status-error { background-color:#dc3545; }
 
