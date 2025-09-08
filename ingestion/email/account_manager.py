@@ -25,9 +25,6 @@ class EmailAccountManager:
     def __init__(self, postgres_manager: Any) -> None:
         """Initialize with PostgreSQL manager for pure PostgreSQL-based email account management."""
         self.db_manager = PostgreSQLManager()
-        self.postgres_pool = postgres_manager.pool
-        # Add pool attribute for compatibility with EmailProcessor
-        self.pool = postgres_manager.pool
         
         # Initialize email data manager for database operations
         self.email_data_manager = EmailDataManager(postgres_manager)
@@ -112,17 +109,16 @@ class EmailAccountManager:
                                    ELSE NULL
                                END AS next_run,
                                COALESCE(ea.total_emails_in_mailbox, 0) as total_emails,
-                               COALESCE(email_stats.synced_emails, 0) as synced_emails,
-                               COALESCE(email_stats.total_chunks, 0) as total_chunks
+                               COALESCE(global_stats.synced_emails, 0) as synced_emails,
+                               COALESCE(global_stats.total_chunks, 0) as total_chunks
                         FROM email_accounts ea
-                        LEFT JOIN (
+                        CROSS JOIN (
                             SELECT 
-                                from_addr,
-                                COUNT(DISTINCT message_id) as synced_emails,  -- Count unique emails, not chunks
-                                COUNT(*) as total_chunks  -- This counts chunks for chunk statistics
-                            FROM emails 
-                            GROUP BY from_addr
-                        ) email_stats ON ea.email_address = email_stats.from_addr
+                                COUNT(DISTINCT message_id) as synced_emails,
+                                COUNT(DISTINCT ec.id) as total_chunks
+                            FROM emails e
+                            LEFT JOIN email_chunks ec ON e.id = ec.email_id
+                        ) global_stats
                         ORDER BY ea.account_name
                     """
                 else:
@@ -137,17 +133,16 @@ class EmailAccountManager:
                                    ELSE NULL
                                END AS next_run,
                                COALESCE(ea.total_emails_in_mailbox, 0) as total_emails,
-                               COALESCE(email_stats.synced_emails, 0) as synced_emails,
-                               COALESCE(email_stats.total_chunks, 0) as total_chunks
+                               COALESCE(global_stats.synced_emails, 0) as synced_emails,
+                               COALESCE(global_stats.total_chunks, 0) as total_chunks
                         FROM email_accounts ea
-                        LEFT JOIN (
+                        CROSS JOIN (
                             SELECT 
-                                from_addr,
-                                COUNT(DISTINCT message_id) as synced_emails,  -- Count unique emails, not chunks
-                                COUNT(*) as total_chunks  -- This counts chunks for chunk statistics
-                            FROM emails 
-                            GROUP BY from_addr
-                        ) email_stats ON ea.email_address = email_stats.from_addr
+                                COUNT(DISTINCT message_id) as synced_emails,
+                                COUNT(DISTINCT ec.id) as total_chunks
+                            FROM emails e
+                            LEFT JOIN email_chunks ec ON e.id = ec.email_id
+                        ) global_stats
                         ORDER BY ea.account_name
                     """
                 cur.execute(accounts_query)
@@ -164,7 +159,7 @@ class EmailAccountManager:
                 return accounts
 
     def update_account(self, account_id: str, updates: Dict[str, Any]) -> None:
-        """Update an email account (PostgreSQL implementation)."""
+        """Update an email account."""
         if not updates:
             return
         
@@ -188,7 +183,7 @@ class EmailAccountManager:
             raise
 
     def delete_account(self, account_id: str) -> None:
-        """Delete an email account (PostgreSQL implementation)."""
+        """Delete an email account."""
         try:
             with self.db_manager.get_connection() as conn:
                 with conn.cursor() as cur:
@@ -200,7 +195,7 @@ class EmailAccountManager:
             raise
 
     def get_account_count(self) -> int:
-        """Get the total number of email accounts (PostgreSQL implementation)."""
+        """Get the total number of email accounts."""
         logger.debug("get_account_count called.")
         try:
             with self.db_manager.get_connection() as conn:
@@ -215,7 +210,7 @@ class EmailAccountManager:
             return 0
 
     def get_account_stats(self) -> Dict[str, Any]:
-        """Get email account statistics (PostgreSQL implementation)."""
+        """Get email account statistics."""
         try:
             with self.db_manager.get_connection() as conn:
                 with conn.cursor() as cur:
@@ -255,65 +250,4 @@ class EmailAccountManager:
                 'processed_messages': 0,
             }
 
-    def get_email_statistics_for_account(self, email_address: str) -> Dict[str, int]:
-        """Get email statistics for a specific account using EmailDataManager."""
-        return self.email_data_manager.get_email_statistics(email_address)
 
-    def initialize_hybrid_retrieval(self, email_vector_store: Any) -> None:
-        """
-        Initialize retrieval system using EmailDataManager.
-        
-        Args:
-            email_vector_store: Milvus email vector store from MilvusManager
-        """
-        self.email_data_manager.initialize_hybrid_retrieval(email_vector_store)
-        # Copy references for backward compatibility
-        self.postgres_fts_retriever = getattr(self.email_data_manager, 'postgres_fts_retriever', None)
-        self.hybrid_retriever = getattr(self.email_data_manager, 'hybrid_retriever', None)
-
-    def search_emails_hybrid(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
-        """
-        Hybrid email search using EmailDataManager.
-        
-        Args:
-            query: Search query
-            top_k: Maximum number of results to return
-            
-        Returns:
-            List of email chunks with relevance scores and metadata
-        """
-        return self.email_data_manager.search_emails_hybrid(query, top_k)
-
-    def format_email_context(self, results: List[Dict[str, Any]]) -> tuple:
-        """
-        Format search results for LLM context using EmailDataManager.
-        
-        Args:
-            results: List of search result dictionaries
-            
-        Returns:
-            Tuple of (context_text, sources)
-        """
-        return self.email_data_manager.format_email_context(results)
-
-    def upsert_email(self, record: Dict[str, Any]) -> str:
-        """
-        Upsert an email record using EmailDataManager.
-        
-        Args:
-            record: Email record dictionary with required fields
-            
-        Returns:
-            The UUID of the upserted email record
-        """
-        return self.email_data_manager.upsert_email(record)
-
-    def update_total_emails_in_mailbox(self, account_id: int, total_emails: int) -> None:
-        """
-        Update the total number of emails in the mailbox using EmailDataManager.
-        
-        Args:
-            account_id: Email account ID
-            total_emails: Total number of emails found in the mailbox
-        """
-        self.email_data_manager.update_total_emails_in_mailbox(account_id, total_emails)

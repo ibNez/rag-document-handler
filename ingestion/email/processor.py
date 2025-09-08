@@ -87,7 +87,10 @@ class EmailProcessor:
         # Initialize PostgreSQL manager for chunk storage
         self.db_manager = email_manager.db_manager
         
-        # Use the PostgreSQL-based email manager directly
+        # Use the EmailDataManager directly instead of the wrapper
+        self.email_data_manager = email_manager.email_data_manager
+        
+        # Keep reference to account manager for account-related operations
         self.manager = email_manager
             
         self.skipped_messages = 0
@@ -114,8 +117,8 @@ class EmailProcessor:
             content = record.get("content", "")
             record["content_hash"] = hashlib.sha256(content.encode('utf-8')).hexdigest()
         
-        # Store the email and get the database ID directly from upsert
-        email_db_id = self.manager.upsert_email(record)
+        # Store the email and get the database ID directly from EmailDataManager
+        email_db_id = self.email_data_manager.upsert_email(record)
         logger.info("Stored metadata for message %s with ID %s", record.get("message_id"), email_db_id)
         
         return email_db_id
@@ -299,11 +302,22 @@ class EmailProcessor:
         # DEBUG_EMAIL_ID: Log initial record state
         logger.debug(f"DEBUG_EMAIL_ID: Starting process for message_id: {message_id}")
         logger.debug(f"DEBUG_EMAIL_ID: Initial record keys: {list(record.keys())}")
-        logger.debug(f"DEBUG_EMAIL_ID: 'id' in record: {'id' in record}")
         
-        # Check for content 
-        body_text = record.get("content", "")
-
+        # Check for content FIRST - skip empty emails but log for investigation
+        content = record.get("content", "")
+        subject = record.get("subject", "")
+        
+        # Skip emails with no useful content for RAG processing
+        if not content.strip() and not subject.strip():
+            logger.warning(f"Skipping empty email Message-ID: {message_id} - no content or subject for RAG processing")
+            self.skipped_messages += 1
+            return
+        
+        # If only subject but no content, use subject as content
+        if not content.strip() and subject.strip():
+            record["content"] = subject
+            logger.debug(f"Using subject as content for Message-ID: {message_id}")
+        
         # Persist metadata and get the database UUID id
         email_db_id = self._store_metadata(record)
         logger.debug(f"DEBUG_EMAIL_ID: _store_metadata returned: {email_db_id} (type: {type(email_db_id)})")
@@ -317,13 +331,7 @@ class EmailProcessor:
         chunk_count = self._store_chunks(record)
         logger.debug(f"DEBUG_EMAIL_ID: _store_chunks returned {chunk_count} chunks")
 
-        if not body_text.strip():
-            logger.debug(
-                "Skipping message %s due to missing body text", message_id
-            )
-            self.skipped_messages += 1
-            return
-
+        body_text = record.get("content", "")
         chunks = [c for c in self.splitter.split_text(body_text) if c.strip()]
         if not chunks:
             logger.debug(
@@ -465,13 +473,13 @@ class EmailProcessor:
             )
             
             # Update the total emails count in the email manager (if available)
-            if hasattr(self.manager, 'update_total_emails_in_mailbox'):
+            if hasattr(self.email_data_manager, 'update_total_emails_in_mailbox'):
                 try:
                     # Get account info to update the total
                     accounts = self.manager.list_accounts()
                     if accounts:
                         account = accounts[0]  # Assuming we're processing one account at a time
-                        self.manager.update_total_emails_in_mailbox(account['id'], total_emails)
+                        self.email_data_manager.update_total_emails_in_mailbox(account['email_account_id'], total_emails)
                 except Exception as e:
                     logger.warning(f"Failed to update total emails count: {e}")
             

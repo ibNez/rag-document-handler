@@ -50,7 +50,7 @@ class DocumentDataManager(BaseDataManager):
                 INSERT INTO documents (
                     filename, title, content_preview, file_path, content_type,
                     file_size, word_count, page_count, chunk_count, avg_chunk_chars,
-                    median_chunk_chars, top_keywords, processing_time_seconds, processing_status
+                    median_chunk_chars, keywords, processing_time_seconds, processing_status
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (filename) 
                 DO UPDATE SET
@@ -64,7 +64,7 @@ class DocumentDataManager(BaseDataManager):
                     chunk_count = EXCLUDED.chunk_count,
                     avg_chunk_chars = EXCLUDED.avg_chunk_chars,
                     median_chunk_chars = EXCLUDED.median_chunk_chars,
-                    top_keywords = EXCLUDED.top_keywords,
+                    keywords = EXCLUDED.keywords,
                     processing_time_seconds = EXCLUDED.processing_time_seconds,
                     processing_status = EXCLUDED.processing_status,
                     updated_at = CURRENT_TIMESTAMP
@@ -82,7 +82,7 @@ class DocumentDataManager(BaseDataManager):
                 metadata.get('chunk_count', 0),
                 metadata.get('avg_chunk_chars', 0),
                 metadata.get('median_chunk_chars', 0),
-                metadata.get('top_keywords', []),
+                ', '.join(metadata.get('keywords', [])) if metadata.get('keywords') else '',
                 metadata.get('processing_time_seconds', 0),
                 metadata.get('processing_status', 'pending')
             )
@@ -106,7 +106,13 @@ class DocumentDataManager(BaseDataManager):
         """
         query = "SELECT * FROM documents WHERE filename = %s"
         result = self.execute_query(query, (filename,), fetch_one=True)
-        return dict(result) if result else None
+        if result:
+            result_dict = dict(result)
+            # Convert keywords back to list for UI compatibility
+            keywords_str = result_dict.get('keywords', '')
+            result_dict['keywords'] = [k.strip() for k in keywords_str.split(',') if k.strip()] if keywords_str else []
+            return result_dict
+        return None
     
     def delete_document_metadata(self, filename: str) -> bool:
         """
@@ -153,7 +159,7 @@ class DocumentDataManager(BaseDataManager):
             'avg_words_per_doc': 0,
             'avg_chunks_per_doc': 0,
             'median_chunk_chars': 0,
-            'top_keywords': []
+            'keywords': []
         }
         
         try:
@@ -186,23 +192,24 @@ class DocumentDataManager(BaseDataManager):
                             logger.warning(f"Failed to get document averages: {e}")
                         
                         try:
-                            # Get top keywords from explicit column
+                            # Get top keywords from comma-separated string
                             cursor.execute("""
-                                SELECT top_keywords
+                                SELECT keywords
                                 FROM documents 
-                                WHERE top_keywords IS NOT NULL AND array_length(top_keywords, 1) > 0
+                                WHERE keywords IS NOT NULL AND keywords != ''
                                 LIMIT 10
                             """)
                             all_keywords = []
                             for row in cursor.fetchall():
-                                keywords = row['top_keywords']
-                                if keywords and isinstance(keywords, list):
+                                keywords_str = row['keywords']
+                                if keywords_str:
+                                    keywords = [k.strip() for k in keywords_str.split(',') if k.strip()]
                                     all_keywords.extend(keywords[:3])  # Top 3 from each doc
                             
                             # Get most common
                             from collections import Counter
                             if all_keywords:
-                                kb_meta['top_keywords'] = [kw for kw, _ in Counter(all_keywords).most_common(8)]
+                                kb_meta['keywords'] = [kw for kw, _ in Counter(all_keywords).most_common(8)]
                         except Exception as e:
                             logger.warning(f"Failed to get top keywords: {e}")
                     
@@ -956,30 +963,4 @@ class DocumentDataManager(BaseDataManager):
             logger.error(f"Document FTS search failed for query '{query}': {e}")
             raise
     
-    # =============================================================================
-    # Vector Operations (Milvus)
-    # =============================================================================
-    
-    def delete_document_vectors(self, document_id: str) -> bool:
-        """
-        Delete document vectors from Milvus.
-        
-        Args:
-            document_id: Document identifier
-            
-        Returns:
-            True if successful, False otherwise
-        """
-        if not self.milvus_manager:
-            logger.warning("Milvus manager not available for vector deletion")
-            return False
-        
-        try:
-            # Implementation depends on Milvus manager interface
-            # This is a placeholder for future Milvus operations
-            logger.debug(f"Would delete vectors for document {document_id}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Failed to delete vectors for document {document_id}: {e}")
-            return False
+

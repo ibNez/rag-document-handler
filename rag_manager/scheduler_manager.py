@@ -52,7 +52,10 @@ class SchedulerManager:
         """Return current scheduler diagnostic info."""
         alive = bool(self._scheduler_thread and self._scheduler_thread.is_alive())
         try:
-            due_preview = self.url_manager.get_due_urls()[:5]
+            if self.url_manager and hasattr(self.url_manager, 'get_due_urls'):
+                due_preview = self.url_manager.get_due_urls()[:5]
+            else:
+                due_preview = []
         except Exception:
             due_preview = []
         last_cycle_age = None
@@ -79,7 +82,16 @@ class SchedulerManager:
             try:
                 cycle += 1
                 self._scheduler_last_cycle = time.time()
-                due_urls = self.url_manager.get_due_urls()
+                
+                # Check if URL manager is available before accessing it
+                due_urls = []
+                if self.url_manager and hasattr(self.url_manager, 'get_due_urls'):
+                    try:
+                        due_urls = self.url_manager.get_due_urls()
+                    except Exception as e:
+                        logger.debug(f"Failed to get due URLs: {e}")
+                        due_urls = []
+                        
                 due_accounts = []
                 active_emails_total = 0
                 
@@ -108,12 +120,20 @@ class SchedulerManager:
                     logger.warning("Email orchestrator not available in scheduler")
                     due_accounts = []
                     
+                # Get URL count safely
+                url_count = 0
+                if self.url_manager and hasattr(self.url_manager, 'url_data') and self.url_manager.url_data:
+                    try:
+                        url_count = self.url_manager.url_data.get_url_count()
+                    except Exception as e:
+                        logger.debug(f"Failed to get URL count: {e}")
+                        
                 logger.info(
                     "Scheduler cycle %s heartbeat: urls_due=%s emails_due=%s active_urls_total=%s active_emails_total=%s",
                     cycle,
                     len(due_urls),
                     len(due_accounts),
-                    self.url_manager.get_url_count(),
+                    url_count,
                     active_emails_total,
                 )
                 started = 0
@@ -159,7 +179,9 @@ class SchedulerManager:
                     
                     # Double-check account still exists before processing
                     try:
-                        if hasattr(email_orchestrator, 'account_manager') and email_orchestrator.account_manager:
+                        if (email_orchestrator and 
+                            hasattr(email_orchestrator, 'account_manager') and 
+                            email_orchestrator.account_manager):
                             current_accounts = email_orchestrator.account_manager.list_accounts(include_password=False)
                             account_exists = any(acc.get('email_account_id') == acct_id for acc in current_accounts)
                             if not account_exists:

@@ -107,7 +107,7 @@ class PostgreSQLManager:
             chunk_count INTEGER,
             avg_chunk_chars REAL,
             median_chunk_chars REAL,
-            top_keywords TEXT[], -- PostgreSQL array of strings
+            keywords TEXT, -- Comma-separated keywords for efficient search
             processing_time_seconds REAL,
             processing_status VARCHAR(50) DEFAULT 'pending',
             file_hash VARCHAR(64) UNIQUE,
@@ -201,7 +201,6 @@ class PostgreSQLManager:
             pdf_document_id UUID, -- optional link to documents table for stored PDF artifact
             mhtml_document_id UUID, -- optional link to documents table for stored MHTML artifact
             sha256 TEXT,
-            notes TEXT,
             created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
             updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
         );
@@ -233,7 +232,10 @@ class PostgreSQLManager:
         -- Create indexes for performance
         CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(processing_status);
         CREATE INDEX IF NOT EXISTS idx_documents_created ON documents(created_at);
-        CREATE INDEX IF NOT EXISTS idx_documents_keywords ON documents USING GIN(top_keywords);
+        CREATE INDEX IF NOT EXISTS idx_documents_keywords_search ON documents 
+            USING GIN(to_tsvector('english', keywords));
+        CREATE INDEX IF NOT EXISTS idx_documents_content_search ON documents 
+            USING GIN(to_tsvector('english', title || ' ' || COALESCE(content_preview, '')));
         
         -- Email indexes
         CREATE INDEX IF NOT EXISTS idx_emails_message_id ON emails(message_id);
@@ -301,7 +303,7 @@ class PostgreSQLManager:
         search_sql = """
             SELECT id, title, content_preview, content_type, document_type,
                    page_count, chunk_count, word_count, 
-                   avg_chunk_chars, median_chunk_chars, top_keywords,
+                   avg_chunk_chars, median_chunk_chars, keywords,
                    processing_time_seconds, processing_status,
                    created_at, updated_at,
                    ts_rank(to_tsvector('english', COALESCE(title, '') || ' ' || COALESCE(content_preview, '')), 
@@ -472,9 +474,6 @@ class PostgreSQLManager:
                 cur.execute(base_query, params)
                 rows = [dict(row) for row in cur.fetchall()]
                 return rows
-
-    # Document chunk methods - MOVED TO ingestion/document/manager.py
-    # Methods moved: store_document_chunk, delete_document_chunks
 
     def close_pool(self) -> None:
         """Close the connection pool."""

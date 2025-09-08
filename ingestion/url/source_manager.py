@@ -191,27 +191,6 @@ class URLSourceManager:
             parent_url_id=parent_url_id
         )
     
-    def get_url_by_id(self, url_id: Union[str, int]) -> Optional[Dict[str, Any]]:
-        """
-        Get URL by ID with business logic validation.
-        
-        Args:
-            url_id: URL ID to search for
-            
-        Returns:
-            URL data dictionary or None if not found
-        """
-        return self.url_data.get_url_by_id(url_id)
-    
-    def get_all_urls(self) -> List[Dict[str, Any]]:
-        """
-        Get all URLs with any necessary business logic processing.
-        
-        Returns:
-            List of URL dictionaries
-        """
-        return self.url_data.get_all_urls()
-    
     def get_child_urls(self, parent_url_id: str) -> List[Dict[str, Any]]:
         """
         Get child URLs for a parent URL.
@@ -372,27 +351,6 @@ class URLSourceManager:
         """
         return self.url_data.get_due_urls()
     
-    def get_url_count(self) -> int:
-        """
-        Get total URL count.
-        
-        Returns:
-            Total number of URLs in database
-        """
-        return self.url_data.get_url_count()
-    
-    def get_robots_status(self, url_id: str) -> Dict[str, Any]:
-        """
-        Get robots.txt enforcement status for URL.
-        
-        Args:
-            url_id: URL ID to check
-            
-        Returns:
-            Dictionary with robots status information
-        """
-        return self.url_data.get_robots_status(url_id)
-    
     def update_robots_setting(self, url_id: str, ignore_robots: bool) -> Dict[str, Any]:
         """
         Update robots.txt setting for URL.
@@ -466,17 +424,6 @@ class URLSourceManager:
             Hash string or None if not found
         """
         return self.url_data.get_page_hash(page_url)
-    
-    def set_page_hash(self, parent_url_id: str, page_url: str, content_hash: str) -> None:
-        """
-        Set hash for a page URL.
-        
-        Args:
-            parent_url_id: Parent URL ID
-            page_url: Page URL
-            content_hash: Content hash to store
-        """
-        self.url_data.set_page_hash(parent_url_id, page_url, content_hash)
     
     def check_connection(self) -> Dict[str, Any]:
         """

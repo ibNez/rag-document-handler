@@ -67,7 +67,7 @@ class DocumentSourceManager:
                 'chunk_count': metadata.get('chunk_count', 0),
                 'avg_chunk_chars': metadata.get('avg_chunk_chars', 0),
                 'median_chunk_chars': metadata.get('median_chunk_chars', 0),
-                'top_keywords': metadata.get('top_keywords', []),
+                'keywords': metadata.get('keywords', []),
                 'processing_time_seconds': metadata.get('processing_time_seconds', 0),
                 'processing_status': metadata.get('processing_status', 'pending'),
                 'document_type': 'file'
@@ -176,34 +176,6 @@ class DocumentSourceManager:
             logger.exception(f"Failed to delete metadata row for {filename}")
             raise
 
-    def persist_chunks(self, document_id: str, chunks: list, trace_logger: Optional[logging.Logger] = None) -> int:
-        """
-        Persist document chunks with ingestion orchestration logic.
-        
-        Args:
-            document_id: Document identifier
-            chunks: List of LangChain Document chunks
-            trace_logger: Optional logger for detailed tracing
-            
-        Returns:
-            Number of chunks successfully stored
-        """
-        if not chunks:
-            logger.warning("persist_chunks: no chunks provided")
-            return 0
-
-        # Delegate chunk persistence to data manager
-        return self.document_data_manager.persist_chunks(document_id, chunks, trace_logger)
-
-    def get_knowledgebase_metadata(self) -> Dict[str, Any]:
-        """
-        Get aggregated knowledge base metadata for ingestion reporting.
-        
-        Returns:
-            Knowledge base statistics dictionary
-        """
-        return self.document_data_manager.get_knowledgebase_metadata()
-
     def store_document(self, file_path: str, filename: str, 
                       title: Optional[str] = None, content_preview: Optional[str] = None,
                       content_type: Optional[str] = None, file_size: Optional[int] = None,
@@ -303,28 +275,3 @@ class DocumentSourceManager:
             topics=topics,
             embedding_version=embedding_version
         )
-
-    def delete_document_chunks(self, document_id: str) -> int:
-        """
-        Delete all chunks for a document during ingestion cleanup.
-        
-        Args:
-            document_id: Document identifier
-            
-        Returns:
-            Number of chunks deleted
-        """
-        return self.document_data_manager.delete_document_chunks(document_id)
-
-    def store_document_with_metadata(self, content: str, metadata: DocumentMetadata) -> str:
-        """
-        Store document with metadata object during ingestion.
-        
-        Args:
-            content: Document content
-            metadata: DocumentMetadata object
-            
-        Returns:
-            Document identifier
-        """
-        return self.document_data_manager.store_document_with_metadata(content, metadata)

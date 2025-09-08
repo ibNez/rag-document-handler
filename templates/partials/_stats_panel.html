@@ -75,10 +75,10 @@
                             <div class="metric-tile"><div class="metric-label">Avg Chunks/Doc</div><div class="metric-value">{{ kb_meta.avg_chunks_per_doc }}</div></div>
                             <div class="metric-tile"><div class="metric-label">Median Chunk Chars</div><div class="metric-value">{{ kb_meta.median_chunk_chars }}</div></div>
                         </div>
-                        {% if kb_meta.top_keywords %}
+                        {% if kb_meta.keywords %}
                         <div class="kb-section-title mt-3">Top Keywords</div>
                         <div class="keywords-wrap">
-                            {% for k in kb_meta.top_keywords %}
+                            {% for k in kb_meta.keywords %}
                                 <span class="keyword-pill">{{ k }}</span>
                             {% endfor %}
                         </div>

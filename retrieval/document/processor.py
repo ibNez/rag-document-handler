@@ -29,7 +29,6 @@ except ImportError:
     CrossEncoderReranker = None
     RerankResult = None
 
-from .manager import DocumentManager
 
 logger = logging.getLogger(__name__)
 
@@ -68,9 +67,10 @@ class DocumentProcessor:
         self.enable_reranking = enable_reranking and RERANKING_AVAILABLE
         self.rerank_top_k = rerank_top_k
 
-        # Initialize document manager for retrieval database operations
+        # Initialize document search manager for retrieval database operations
         postgres_manager = getattr(fts_retriever, 'db_manager', None)
-        self.document_manager = DocumentManager(postgres_manager)
+        from .search_manager import DocumentSearchManager
+        self.document_search_manager = DocumentSearchManager(postgres_manager)
 
         # Initialize reranker if available and enabled
         self.reranker: Optional[Any] = None
@@ -147,7 +147,7 @@ class DocumentProcessor:
             # Enrich vector and FTS results from Postgres (batch) so metadata like
             # title, chunk_id, chunk_hash, and preview are available for UI and reranker.
             try:
-                self.document_manager.batch_enrich_documents_from_postgres(vector_docs + fts_docs)
+                self.document_search_manager.batch_enrich_documents_from_postgres(vector_docs + fts_docs)
             except Exception as e:
                 logger.debug(f"Postgres enrichment failed: {e}")
             # Log a small sample of FTS results for debugging
@@ -225,13 +225,7 @@ class DocumentProcessor:
             
         except Exception as e:
             logger.error(f"Document search failed: {e}")
-            # Fallback to vector search only
-            try:
-                logger.warning("Falling back to vector search only")
-                return self.vector_retriever.get_relevant_documents(query)[:k]
-            except Exception as e2:
-                logger.error(f"Vector search fallback also failed: {e2}")
-                return []
+            raise RuntimeError(f"Document search failed: {e}") from e
     
     def search_with_filters(self, query: str, k: int = 10, 
                            filters: Optional[Dict[str, Any]] = None) -> List[Document]:

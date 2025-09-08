@@ -81,13 +81,7 @@ class EmailProcessor:
             
         except Exception as e:
             logger.error(f"Hybrid search failed: {e}")
-            # Fallback to vector search only
-            try:
-                logger.warning("Falling back to vector search only")
-                return self.vector_retriever.get_relevant_documents(query)[:k]
-            except Exception as e2:
-                logger.error(f"Vector search fallback also failed: {e2}")
-                return []
+            raise RuntimeError(f"Email search failed: {e}") from e
     
     def _apply_rrf_fusion(
         self, 

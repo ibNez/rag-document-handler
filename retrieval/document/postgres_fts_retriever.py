@@ -188,7 +188,7 @@ class DocumentPostgresFTSRetriever:
                             dc.token_count,
                             ts_rank(to_tsvector('english', dc.chunk_text), plainto_tsquery('english', %s)) as fts_score,
                             d.title, d.content_type, d.file_path, d.created_at,
-                            d.top_keywords
+                            d.keywords
                         FROM document_chunks dc
                         JOIN documents d ON dc.document_id = d.id
                         WHERE to_tsvector('english', dc.chunk_text) @@ plainto_tsquery('english', %s)
@@ -217,8 +217,10 @@ class DocumentPostgresFTSRetriever:
                         params.extend([str(min_page), str(max_page)])
                         
                     if filters.get('keywords'):
-                        base_query += " AND d.top_keywords && %s"
-                        params.append(filters['keywords'])
+                        # Use full-text search on comma-separated keywords
+                        keyword_query = ' '.join(filters['keywords'])
+                        base_query += " AND to_tsvector('english', d.keywords) @@ plainto_tsquery('english', %s)"
+                        params.append(keyword_query)
                         
                     if filters.get('date_range'):
                         start_date, end_date = filters['date_range']
@@ -248,7 +250,10 @@ class DocumentPostgresFTSRetriever:
                         content_type = row['content_type']
                         file_path = row['file_path']
                         created_at = row['created_at']
-                        top_keywords = row['top_keywords']
+                        keywords = row['keywords']
+                        
+                        # Convert comma-separated keywords to list
+                        keywords_list = [kw.strip() for kw in keywords.split(',') if kw.strip()] if keywords else []
                         
                         doc = Document(
                             page_content=chunk_text,
@@ -266,7 +271,7 @@ class DocumentPostgresFTSRetriever:
                                 'content_type': content_type,
                                 'file_path': file_path,
                                 'created_at': created_at,
-                                'top_keywords': top_keywords or [],
+                                'keywords': keywords_list,
                                 'category': 'document',
                                 'retrieval_method': 'fts_filtered',
                                 'applied_filters': list(filters.keys())

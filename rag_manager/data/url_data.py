@@ -422,34 +422,6 @@ class URLDataManager(BaseDataManager):
             raise
     
     # =============================================================================
-    # Vector Operations (Milvus)
-    # =============================================================================
-    
-    def delete_url_vectors(self, url: str) -> bool:
-        """
-        Delete URL vectors from Milvus.
-        
-        Args:
-            url: URL string
-            
-        Returns:
-            True if successful, False otherwise
-        """
-        if not self.milvus_manager:
-            logger.warning("Milvus manager not available for vector deletion")
-            return False
-        
-        try:
-            # Implementation depends on Milvus manager interface
-            # This is a placeholder for future Milvus operations
-            logger.debug(f"Would delete vectors for URL {url}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Failed to delete vectors for URL {url}: {e}")
-            return False
-
-    # =============================================================================
     # URL Table CRUD Operations (moved from PostgreSQLURLManager)
     # =============================================================================
     

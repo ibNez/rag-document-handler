@@ -302,10 +302,14 @@ class WebRoutes:
                                     return redirect(url_for('index'))
 
                                 # === CREATE DOCUMENT RECORD ===
+                                # Determine content_type from file extension
+                                content_type = self.rag_manager._get_content_type_from_filename(filename)
+                                logger.debug(f"Determined content_type for {filename}: {content_type}")
+                                
                                 cursor.execute("""
-                                    INSERT INTO documents (title, filename, file_path, processing_status, file_hash, created_at, updated_at)
-                                    VALUES (%s, %s, %s, %s, %s, NOW(), NOW())
-                                """, (self.rag_manager._fallback_title_from_filename(filename), filename, file_path, 'pending', file_hash))
+                                    INSERT INTO documents (title, filename, file_path, content_type, processing_status, file_hash, created_at, updated_at)
+                                    VALUES (%s, %s, %s, %s, %s, %s, NOW(), NOW())
+                                """, (self.rag_manager._fallback_title_from_filename(filename), filename, file_path, content_type, 'pending', file_hash))
                                 conn.commit()
                         logger.info(f"Stored new file record for {filename} in database")
                     except Exception as e:
@@ -410,11 +414,12 @@ class WebRoutes:
                             
                             # Route based on classification
                             if classification == 'email' and hasattr(self.rag_manager, 'email_account_manager') and self.rag_manager.email_account_manager:
-                                # Email-specific search using retrieval
+                                # Email-specific search using EmailDataManager directly
                                 logger.debug("Routing to email search")
                                 try:
-                                    email_results = self.rag_manager.email_account_manager.search_emails_hybrid(query, top_k)
-                                    context_text, email_sources = self.rag_manager.email_account_manager.format_email_context(email_results)
+                                    email_data_manager = self.rag_manager.email_account_manager.email_data_manager
+                                    email_results = email_data_manager.search_emails_hybrid(query, top_k)
+                                    context_text, email_sources = email_data_manager.format_email_context(email_results)
                                     
                                     # Generate answer using email context
                                     from langchain_ollama import ChatOllama
@@ -578,7 +583,7 @@ class WebRoutes:
                 with mgr.get_connection() as conn:
                     with conn.cursor() as cursor:
                         cursor.execute(
-                            "SELECT processing_status, title, word_count, metadata FROM documents WHERE title = %s OR file_path LIKE %s",
+                            "SELECT processing_status, title, word_count, chunk_count FROM documents WHERE title = %s OR file_path LIKE %s",
                             (filename, f'%{filename}%')
                         )
                         result = cursor.fetchone()
@@ -587,12 +592,7 @@ class WebRoutes:
                             db_status = result.get('processing_status')
                             title = result.get('title')
                             word_count = result.get('word_count')
-                            metadata = result.get('metadata')
-
-                            # Get chunk count from metadata if available
-                            chunk_count = 0
-                            if metadata and isinstance(metadata, dict):
-                                chunk_count = metadata.get('chunk_count', 0)
+                            chunk_count = result.get('chunk_count', 0)
 
                             # Convert database status to response format
                             if db_status == 'completed':
@@ -786,7 +786,7 @@ class WebRoutes:
             # No in-memory status; fetch final state from DB for in-place UI update
             logger.debug(f"No active processing status, fetching URL record for ID: '{url_id_str}'")
             try:
-                rec = self.rag_manager.url_manager.get_url_by_id(url_id_str)
+                rec = self.rag_manager.url_manager.url_data.get_url_by_id(url_id_str)
                 if rec:
                     logger.debug(f"Found URL record for status update: {rec.get('url', 'N/A')}")
                     # Compute next_refresh similar to list view
@@ -985,7 +985,7 @@ class WebRoutes:
                 
             # Load the URL and any crawled pages
             logger.debug(f"Looking up URL for deletion with ID: '{url_id_str}'")
-            url_rec = self.rag_manager.url_manager.get_url_by_id(url_id_str)
+            url_rec = self.rag_manager.url_manager.url_data.get_url_by_id(url_id_str)
             if not url_rec:
                 logger.error(f"URL not found for deletion with ID: '{url_id_str}'")
                 flash('URL not found', 'error')
@@ -1051,7 +1051,7 @@ class WebRoutes:
                 return redirect(url_for('index'))
                 
             logger.info(f"Getting URL record for ID: {url_id_str}")
-            url_rec = self.rag_manager.url_manager.get_url_by_id(url_id_str)
+            url_rec = self.rag_manager.url_manager.url_data.get_url_by_id(url_id_str)
             logger.info(f"URL record retrieved: {url_rec is not None}")
             if not url_rec:
                 logger.warning(f"URL not found for ID: {url_id_str}")
@@ -1192,7 +1192,7 @@ class WebRoutes:
                 return redirect(url_for('index'))
                 
             logger.debug(f"Looking up URL with ID: '{url_id_str}'")
-            url_rec = self.rag_manager.url_manager.get_url_by_id(url_id_str)
+            url_rec = self.rag_manager.url_manager.url_data.get_url_by_id(url_id_str)
             if not url_rec:
                 logger.error(f"URL not found for ID: '{url_id_str}'")
                 flash('URL not found', 'error')
@@ -1498,8 +1498,8 @@ class WebRoutes:
                 # Get database connection via central PostgreSQLManager
                 from rag_manager.managers.postgres_manager import PostgreSQLManager
                 pg_mgr = None
-                if hasattr(self.rag_manager, 'database_manager') and hasattr(self.rag_manager.database_manager, 'postgresql_manager'):
-                    pg_mgr = self.rag_manager.database_manager.postgresql_manager
+                if hasattr(self.rag_manager, 'postgres_manager') and self.rag_manager.postgres_manager:
+                    pg_mgr = self.rag_manager.postgres_manager
                 else:
                     pg_mgr = PostgreSQLManager()
 
@@ -1660,22 +1660,13 @@ class WebRoutes:
                         # Debug what we extracted
                         logger.info(f"Extracted counts for {filename}: chunks={entry['chunks_count']}, pages={entry['page_count']}, words={entry['word_count']}")
                         
-                        # Ensure top_keywords is a list, not a string
-                        top_keywords = meta.get('top_keywords')
-                        
-                        if isinstance(top_keywords, str):
-                            # Handle JSON string or comma-separated string
-                            import json
-                            try:
-                                parsed = json.loads(top_keywords)
-                                entry['top_keywords'] = parsed
-                            except (json.JSONDecodeError, ValueError):
-                                # Fall back to comma-split
-                                entry['top_keywords'] = [kw.strip() for kw in top_keywords.split(',') if kw.strip()]
-                        elif isinstance(top_keywords, list):
-                            entry['top_keywords'] = top_keywords
+                        # keywords should already be a list from DocumentDataManager.get_document_metadata()
+                        keywords = meta.get('keywords', [])
+                        if not isinstance(keywords, list):
+                            logger.warning(f"Expected keywords as list for {filename}, got {type(keywords)}")
+                            entry['keywords'] = []
                         else:
-                            entry['top_keywords'] = []
+                            entry['keywords'] = keywords
                             
                         # Skip files marked for deletion
                         st = entry['status']
@@ -1684,7 +1675,7 @@ class WebRoutes:
                     except Exception as e:
                         logger.warning(f"Failed to get metadata for {filename}: {e}")
                         entry['title'] = self.rag_manager._fallback_title_from_filename(filename)
-                        entry['top_keywords'] = []
+                        entry['keywords'] = []
                         
                 files.append(entry)
                 
@@ -1744,8 +1735,8 @@ class WebRoutes:
     def _get_database_status(self) -> Dict[str, Any]:
         """Get PostgreSQL database connection status."""
         try:
-            if hasattr(self.rag_manager, 'database_manager') and hasattr(self.rag_manager.database_manager, 'postgresql_manager'):
-                return self.rag_manager.database_manager.postgresql_manager.get_version_info()
+            if hasattr(self.rag_manager, 'postgres_manager') and self.rag_manager.postgres_manager:
+                return self.rag_manager.postgres_manager.get_version_info()
             else:
                 # Fallback - create a temporary PostgreSQL manager to get version
                 from rag_manager.managers.postgres_manager import PostgreSQLManager
@@ -1759,7 +1750,15 @@ class WebRoutes:
     def _get_enriched_urls(self) -> list:
         """Get URLs enriched with robots.txt information."""
         try:
-            urls = self.rag_manager.url_manager.get_all_urls()
+            # Check if URL manager is available
+            if not (hasattr(self.rag_manager, 'url_manager') and 
+                    self.rag_manager.url_manager and 
+                    hasattr(self.rag_manager.url_manager, 'url_data') and
+                    self.rag_manager.url_manager.url_data):
+                logger.debug("URL manager or url_data not available")
+                return []
+                
+            urls = self.rag_manager.url_manager.url_data.get_all_urls()
             enriched_urls = []
             for u in urls:
                 try:
@@ -1786,15 +1785,8 @@ class WebRoutes:
                     u['chunk_count'] = self.rag_manager.milvus_manager.get_chunk_count_for_url(src, url_id) if src else 0
                 except Exception:
                     u['chunk_count'] = 0
-                # Placeholder metric for pages discovered (requires url_pages schema)
-                u.setdefault('pages_discovered', None)
-                # Expose a simple pages value for the UI (default to 1 until we track discovered pages)
-                try:
-                    u['pages'] = u['pages_discovered'] if u['pages_discovered'] is not None else 1
-                except Exception:
-                    u['pages'] = 1
-                    
-                    # Add child URL statistics for parent URLs
+                
+                # Add child URL statistics for parent URLs
                     try:
                         url_id = u.get('url_id')
                         if url_id:

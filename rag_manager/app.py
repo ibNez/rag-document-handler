@@ -128,7 +128,6 @@ class RAGKnowledgebaseManager:
         """Initialize PostgreSQL database managers."""
         try:
             from rag_manager.managers.postgres_manager import PostgreSQLManager, PostgreSQLConfig
-            from ingestion.core.database_manager import RAGDatabaseManager
             
             postgres_config = PostgreSQLConfig(
                 host=self.config.POSTGRES_HOST,
@@ -138,7 +137,6 @@ class RAGKnowledgebaseManager:
                 password=self.config.POSTGRES_PASSWORD
             )
             self.postgres_manager = PostgreSQLManager(postgres_config)
-            self.database_manager = RAGDatabaseManager(postgres_config)
             logger.info("PostgreSQL integration initialized successfully")
             
             # Set PostgreSQL manager on MilvusManager for document retrieval
@@ -177,25 +175,23 @@ class RAGKnowledgebaseManager:
         except ImportError as e:
             logger.error(f"Failed to import PostgreSQL managers: {e}")
             self.postgres_manager = None
-            self.database_manager = None
         except Exception as e:
             logger.error(f"Failed to initialize PostgreSQL: {e}")
             self.postgres_manager = None
-            self.database_manager = None
 
     def _initialize_document_manager(self) -> None:
-        """Initialize document manager for metadata operations."""
+        """Initialize document source manager for metadata operations."""
         try:
-            from ingestion.document.manager import DocumentManager
+            from ingestion.document.source_manager import DocumentSourceManager
             if self.postgres_manager:
-                self.document_manager = DocumentManager(self.postgres_manager)
-                logger.info("Document Manager initialized successfully")
+                self.document_source_manager = DocumentSourceManager(self.postgres_manager)
+                logger.info("Document Source Manager initialized successfully")
             else:
-                logger.error("Cannot initialize document manager: PostgreSQL manager not available")
-                self.document_manager = None
+                logger.error("Cannot initialize document source manager: PostgreSQL manager not available")
+                self.document_source_manager = None
         except ImportError as e:
-            logger.error(f"Failed to import Document Manager: {e}")
-            self.document_manager = None
+            logger.error(f"Failed to import Document Source Manager: {e}")
+            self.document_source_manager = None
 
     def _initialize_url_manager(self) -> None:
         """Initialize URL manager based on feature flags."""
@@ -309,7 +305,7 @@ class RAGKnowledgebaseManager:
             # Initialize email retrieval system (clean architecture)
             try:
                 email_vector_store = self.milvus_manager.get_email_vector_store()
-                self.email_account_manager.initialize_hybrid_retrieval(email_vector_store)
+                self.email_account_manager.email_data_manager.initialize_hybrid_retrieval(email_vector_store)
                 logger.info("Hybrid email retrieval system initialized successfully in EmailManager")
             except Exception as e:
                 logger.error(f"Failed to initialize retrieval in EmailManager: {e}")
@@ -443,14 +439,14 @@ class RAGKnowledgebaseManager:
         # Initialize processing status
         try:
             # Get URL details for status tracking
-            url_record = self.url_manager.get_url_by_id(url_id)
+            url_record = self.url_manager.url_data.get_url_by_id(url_id)
             
             if not url_record:
                 # URL might be newly added from domain crawling, give it a moment
                 logger.info(f"URL {url_id} not found, waiting briefly for potential new URL...")
                 import time
                 time.sleep(1)  # Brief pause for database consistency
-                url_record = self.url_manager.get_url_by_id(url_id)
+                url_record = self.url_manager.url_data.get_url_by_id(url_id)
                 
                 if not url_record:
                     logger.error(f"URL {url_id} not found even after retry")
@@ -541,7 +537,7 @@ class RAGKnowledgebaseManager:
             if not self.url_manager:
                 logger.error("URL manager not initialized")
                 return
-            url_record = self.url_manager.get_url_by_id(url_id)
+            url_record = self.url_manager.url_data.get_url_by_id(url_id)
             
             if not url_record:
                 logger.error(f"URL {url_id} not found for deletion")
@@ -1003,15 +999,15 @@ class RAGKnowledgebaseManager:
             status.message = "Storing chunks in PostgreSQL..."
             status.progress = 85
             
-            if self.postgres_manager and getattr(self, 'document_manager', None):
-                logger.info(f"Storing {len(chunks)} chunks in PostgreSQL for document: {filename} via DocumentManager.persist_chunks")
+            if self.postgres_manager and self.document_source_manager and self.document_source_manager.document_data_manager:
+                logger.info(f"Storing {len(chunks)} chunks in PostgreSQL for document: {filename} via DocumentDataManager.persist_chunks")
                 try:
-                    stored = self.document_manager.persist_chunks(document_id=str(document_id), chunks=chunks)
+                    stored = self.document_source_manager.document_data_manager.persist_chunks(document_id=str(document_id), chunks=chunks)
                     logger.info(f"Persisted {stored}/{len(chunks)} chunks for document {document_id}")
                 except Exception as e:
-                    logger.error(f"Failed to persist document chunks via DocumentManager: {e}")
+                    logger.error(f"Failed to persist document chunks via DocumentDataManager: {e}")
             else:
-                logger.warning("PostgreSQL manager or DocumentManager not available, skipping document chunk storage")
+                logger.error("PostgreSQL manager or DocumentSourceManager not available, skipping document chunk storage")
             
             # Move file to uploaded folder
             uploaded_path = os.path.join(self.config.UPLOADED_FOLDER, filename)
@@ -1032,7 +1028,7 @@ class RAGKnowledgebaseManager:
                             word_count = %s,
                             avg_chunk_chars = %s,
                             median_chunk_chars = %s,
-                            top_keywords = %s,
+                            keywords = %s,
                             processing_time_seconds = %s,
                             processing_status = %s,
                             updated_at = NOW()
@@ -1041,6 +1037,9 @@ class RAGKnowledgebaseManager:
                     
                     with self.postgres_manager.get_connection() as conn:
                         with conn.cursor() as cur:
+                            # Convert keywords list to comma-separated string
+                            keywords_str = ', '.join(global_keywords) if global_keywords else ''
+                            
                             cur.execute(update_query, [
                                 status.title,
                                 page_count,
@@ -1048,7 +1047,7 @@ class RAGKnowledgebaseManager:
                                 word_count,
                                 avg_len,
                                 med_len,
-                                global_keywords,
+                                keywords_str,
                                 elapsed,
                                 'completed',
                                 document_id
@@ -1071,8 +1070,8 @@ class RAGKnowledgebaseManager:
             # Also update database status to 'failed' on error
             try:
                 # Update status using ID if we have it, otherwise skip database update
-                if self.document_manager and 'document_id' in locals():
-                    self.document_manager.update_processing_status(locals()['document_id'], 'failed')
+                if self.document_source_manager and 'document_id' in locals():
+                    self.document_source_manager.update_processing_status(locals()['document_id'], 'failed')
                     logger.info(f"Updated document {locals()['document_id']} status to 'failed'")
                 else:
                     logger.warning(f"Cannot update database status to 'failed' - document not yet created in database")
@@ -1200,7 +1199,7 @@ class RAGKnowledgebaseManager:
                     deletion_result = self.milvus_manager.delete_document(document_id=document_id)
                     logger.info(f"Embedding deletion result for ID {document_id}: {deletion_result}")
                 else:
-                    # Fallback to filename-based deletion for compatibility
+                    # Use filename-based deletion when document_id is not available
                     deletion_result = self.milvus_manager.delete_document(filename=filename)
                     logger.info(f"Embedding deletion result for filename {filename}: {deletion_result}")
                 

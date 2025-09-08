@@ -132,8 +132,7 @@ class CrossEncoderReranker:
             List of reranked results ordered by relevance
         """
         if not self.is_available():
-            logger.warning("Cross-encoder not available, returning original ranking")
-            return self._fallback_ranking(candidates)
+            raise RuntimeError("Cross-encoder model not available - ensure model is properly loaded before attempting reranking")
         
         if not candidates:
             return []
@@ -201,38 +200,8 @@ class CrossEncoderReranker:
             
         except Exception as e:
             logger.error(f"Error during reranking: {e}")
-            return self._fallback_ranking(candidates)
-    
-    def _fallback_ranking(self, candidates: List[Dict[str, Any]]) -> List[RerankResult]:
-        """
-        Fallback ranking using original scores when reranker is unavailable.
-        
-        Args:
-            candidates: List of candidate documents/chunks
-        
-        Returns:
-            List of results ordered by original scores
-        """
-        results = []
-        
-        for i, candidate in enumerate(candidates):
-            # Enforce canonical id usage in fallback as well (no legacy fallbacks)
-            chunk_id = self._get_canonical_chunk_id(candidate)
-            text = candidate.get('text', '')
-            original_score = candidate.get('score', candidate.get('similarity_score', 0.0))
-            
-            result = RerankResult(
-                chunk_id=chunk_id,
-                text=text,
-                original_score=original_score,
-                rerank_score=original_score,  # Use original score as rerank score
-                final_rank=i + 1,
-                metadata=candidate
-            )
-            results.append(result)
-        
-        return results
-    
+            raise RuntimeError(f"Cross-encoder reranking failed: {e}") from e
+
     def batch_rerank(
         self,
         queries: List[str],

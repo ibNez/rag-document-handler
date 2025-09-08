@@ -217,7 +217,7 @@ class DomainCrawler:
             Set of URLs already tracked for this domain
         """
         try:
-            all_urls = self.url_manager.get_all_urls()
+            all_urls = self.url_manager.url_data.get_all_urls()
             domain_urls = set()
             
             for url_record in all_urls:

@@ -49,21 +49,6 @@ class EmailSearchManager:
     # =============================================================================
     # Search Orchestration Methods
     # =============================================================================
-    
-    def initialize_hybrid_retrieval(self, email_vector_store: Any) -> None:
-        """
-        Initialize retrieval system combining vector search and PostgreSQL FTS.
-        
-        Args:
-            email_vector_store: Milvus email vector store from MilvusManager
-        """
-        self.email_data_manager.initialize_hybrid_retrieval(email_vector_store)
-        
-        # Copy references for compatibility
-        self.postgres_fts_retriever = getattr(self.email_data_manager, 'postgres_fts_retriever', None)
-        self.hybrid_retriever = getattr(self.email_data_manager, 'hybrid_retriever', None)
-        
-        logger.info("Email search system initialized successfully")
 
     def search_emails_hybrid(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
         """
@@ -148,46 +133,6 @@ class EmailSearchManager:
             logger.error(f"FTS search failed: {e}")
             raise
 
-    # =============================================================================
-    # Email Data Operations (Delegated)
-    # =============================================================================
-    
-    def get_email_statistics(self, email_address: str) -> Dict[str, int]:
-        """Get email statistics for a specific account."""
-        return self.email_data_manager.get_email_statistics(email_address)
-    
-    def get_global_email_statistics(self) -> Dict[str, int]:
-        """Get global email statistics."""
-        return self.email_data_manager.get_global_email_statistics()
-    
-    def upsert_email(self, record: Dict[str, Any]) -> None:
-        """Upsert an email record."""
-        self.email_data_manager.upsert_email(record)
-    
-    def update_total_emails_in_mailbox(self, account_id: int, total_emails: int) -> None:
-        """Update total emails in mailbox for an account."""
-        self.email_data_manager.update_total_emails_in_mailbox(account_id, total_emails)
-    
-    def update_account_sync_status(self, account_id: int, last_synced = None, 
-                                  last_update_status: Optional[str] = None, 
-                                  current_offset: Optional[int] = None) -> None:
-        """Update email account sync status and position."""
-        self.email_data_manager.update_account_sync_status(
-            account_id, last_synced, last_update_status, current_offset
-        )
-    
-    def search_chunks_for_email(self, email_id: str) -> List[Dict[str, Any]]:
-        """Get all chunks for a specific email."""
-        return self.email_data_manager.search_chunks_for_email(email_id)
-    
-    def get_chunk_statistics(self) -> Dict[str, Any]:
-        """Get email chunk statistics."""
-        return self.email_data_manager.get_chunk_statistics()
-    
-    def delete_email_vectors(self, email_id: str) -> bool:
-        """Delete email vectors from Milvus."""
-        return self.email_data_manager.delete_email_vectors(email_id)
-    
     # =============================================================================
     # Search Analytics and Monitoring
     # =============================================================================
