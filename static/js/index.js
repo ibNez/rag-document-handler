@@ -155,6 +155,11 @@
     if (addForm) {
       addForm.addEventListener('submit', function(e) {
         e.preventDefault();
+        // Check if button is disabled to prevent multiple submissions
+        const submitBtn = document.getElementById('addEmailAccountSubmit');
+        if (submitBtn && submitBtn.disabled) {
+          return false;
+        }
         handleEmailAccountSubmission(addForm, 'addEmailAccountError', 'addEmailAccountSuccess', 'addEmailAccountSubmit');
       });
     }
@@ -164,6 +169,11 @@
     if (editForm) {
       editForm.addEventListener('submit', function(e) {
         e.preventDefault();
+        // Check if button is disabled to prevent multiple submissions
+        const submitBtn = document.getElementById('editEmailAccountSubmit');
+        if (submitBtn && submitBtn.disabled) {
+          return false;
+        }
         handleEmailAccountSubmission(editForm, 'editEmailAccountError', 'editEmailAccountSuccess', 'editEmailAccountSubmit');
       });
     }
@@ -176,8 +186,17 @@
       addModal.addEventListener('show.bs.modal', function() {
         const errorDiv = document.getElementById('addEmailAccountError');
         const successDiv = document.getElementById('addEmailAccountSuccess');
+        const submitBtn = document.getElementById('addEmailAccountSubmit');
+        
         if (errorDiv) errorDiv.classList.add('d-none');
         if (successDiv) successDiv.classList.add('d-none');
+        
+        // Reset button state when modal opens
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.style.pointerEvents = 'auto';
+          submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm d-none" role="status" aria-hidden="true"></span> Save';
+        }
       });
     }
     
@@ -185,8 +204,17 @@
       editModal.addEventListener('show.bs.modal', function() {
         const errorDiv = document.getElementById('editEmailAccountError');
         const successDiv = document.getElementById('editEmailAccountSuccess');
+        const submitBtn = document.getElementById('editEmailAccountSubmit');
+        
         if (errorDiv) errorDiv.classList.add('d-none');
         if (successDiv) successDiv.classList.add('d-none');
+        
+        // Reset button state when modal opens
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.style.pointerEvents = 'auto';
+          submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm d-none" role="status" aria-hidden="true"></span> Save changes';
+        }
       });
     }
   }
@@ -198,13 +226,23 @@
     const submitBtn = document.getElementById(submitId);
     const spinner = submitBtn.querySelector('.spinner-border');
 
+    // Prevent multiple submissions if already processing
+    if (submitBtn.disabled) {
+      return;
+    }
+
     // Hide previous messages
     errorDiv.classList.add('d-none');
     successDiv.classList.add('d-none');
 
-    // Show loading state
+    // Show loading state and disable button to prevent double clicks
     submitBtn.disabled = true;
+    submitBtn.style.pointerEvents = 'none'; // Extra protection against clicks
     spinner.classList.remove('d-none');
+    
+    // Update button text to show validation in progress
+    const originalText = submitBtn.textContent.trim();
+    submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Validating...';
 
     // Prepare form data
     const formData = new FormData(form);
@@ -226,6 +264,9 @@
         successDiv.textContent = data.message;
         successDiv.classList.remove('d-none');
         
+        // Update button to show success state
+        submitBtn.innerHTML = '<i class="fas fa-check"></i> Success!';
+        
         // Reset form and close modal after a brief delay
         setTimeout(() => {
           form.reset();
@@ -245,6 +286,9 @@
         
         errorDiv.textContent = data.error || 'An error occurred';
         errorDiv.classList.remove('d-none');
+        
+        // Re-enable button for retry after validation failure
+        resetButtonState();
       }
     })
     .catch(error => {
@@ -253,12 +297,18 @@
       
       errorDiv.textContent = 'Network error: ' + error.message;
       errorDiv.classList.remove('d-none');
-    })
-    .finally(() => {
-      // Reset loading state
-      submitBtn.disabled = false;
-      spinner.classList.add('d-none');
+      
+      // Re-enable button for retry after network error
+      resetButtonState();
     });
+    
+    // Helper function to reset button state for retry
+    function resetButtonState() {
+      submitBtn.disabled = false;
+      submitBtn.style.pointerEvents = 'auto';
+      spinner.classList.add('d-none');
+      submitBtn.innerHTML = originalText;
+    }
   }
 
   // === Stats & Section Partial Refreshers ===
@@ -384,11 +434,34 @@
     }); 
   }
 
+  // resetEmailAccountButtonStates: Reset button states for all email account forms on page load
+  function resetEmailAccountButtonStates() {
+    const buttons = ['addEmailAccountSubmit', 'editEmailAccountSubmit'];
+    buttons.forEach(buttonId => {
+      const button = document.getElementById(buttonId);
+      if (button) {
+        button.disabled = false;
+        button.style.pointerEvents = 'auto';
+        
+        // Reset to original text content based on button ID
+        if (buttonId === 'addEmailAccountSubmit') {
+          button.innerHTML = '<span class="spinner-border spinner-border-sm d-none" role="status" aria-hidden="true"></span> Save';
+        } else if (buttonId === 'editEmailAccountSubmit') {
+          button.innerHTML = '<span class="spinner-border spinner-border-sm d-none" role="status" aria-hidden="true"></span> Save changes';
+        }
+      }
+    });
+  }
+
   // === Bootstrap: attach listeners & schedule pollers ===
   document.addEventListener('DOMContentLoaded', () => {
     applyLocalTimes();
     attachEmailAccountListeners();
     setupEmailAccountFormHandlers();
+    
+    // Reset any email account form button states on page load
+    resetEmailAccountButtonStates();
+    
     document.addEventListener('click', globalClickHandler);
     setInterval(refreshProcessingStatus, 2000);
     setInterval(refreshUrlStatuses, 1500);

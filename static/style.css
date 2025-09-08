@@ -177,3 +177,21 @@ body {
     font-size: 0.65rem;
     line-height: 1.2;
 }
+
+/* ===== Email Account Form Button States ===== */
+.btn:disabled[style*="pointer-events: none"] {
+    opacity: 0.65 !important;
+    cursor: not-allowed !important;
+    filter: grayscale(30%);
+}
+
+.btn:disabled[style*="pointer-events: none"]:hover {
+    opacity: 0.65 !important;
+    transform: none !important;
+    box-shadow: none !important;
+}
+
+/* Button validation state indicator */
+.btn .spinner-border {
+    margin-right: 0.5rem;
+}
