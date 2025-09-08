@@ -49,7 +49,8 @@ CREATE TABLE documents (
     document_type VARCHAR(50) NOT NULL DEFAULT 'file', -- 'file' or 'url'
     title TEXT,
     content_preview TEXT,
-    file_path TEXT, -- filename for files, URL for URLs
+    file_path TEXT, -- Full path to file for files, URL for URLs
+    filename TEXT UNIQUE, -- Just the filename (e.g., 'document.pdf') for files and snapshot pdf filename for URLs
     content_type VARCHAR(100),
     file_size BIGINT,
     word_count INTEGER,
@@ -57,10 +58,10 @@ CREATE TABLE documents (
     chunk_count INTEGER,
     avg_chunk_chars REAL,
     median_chunk_chars REAL,
-    top_keywords TEXT[],
+    keywords TEXT, -- Comma-separated keywords for efficient search: "keyword1, keyword2, keyword3"
     processing_time_seconds REAL,
     processing_status VARCHAR(50) DEFAULT 'pending',
-    file_hash VARCHAR(64),
+    file_hash VARCHAR(64) UNIQUE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     indexed_at TIMESTAMP WITH TIME ZONE
@@ -75,7 +76,22 @@ CREATE TABLE documents (
 | `document_type` | VARCHAR(50) | Type of document: 'file' or 'url' | NOT NULL, DEFAULT 'file' |
 | `title` | TEXT | Document title or page title | Optional |
 | `content_preview` | TEXT | Preview of document content | Optional |
-| `file_path` | TEXT | Filename for files, URL for web pages | Optional |
+| `file_path` | TEXT | Full path to file for files, URL for URLs | Optional |
+| `filename` | TEXT | Just the filename for files, snapshot pdf filename for URLs | UNIQUE |
+| `content_type` | VARCHAR(100) | MIME type (e.g., 'application/pdf') | Optional |
+| `file_size` | BIGINT | File size in bytes | Optional |
+| `word_count` | INTEGER | Total word count | Optional |
+| `page_count` | INTEGER | Number of pages | Optional |
+| `chunk_count` | INTEGER | Number of text chunks | Optional |
+| `avg_chunk_chars` | REAL | Average characters per chunk | Optional |
+| `median_chunk_chars` | REAL | Median characters per chunk | Optional |
+| `keywords` | TEXT | Comma-separated top keywords for search | Optional |
+| `processing_time_seconds` | REAL | Time taken to process document | Optional |
+| `processing_status` | VARCHAR(50) | Processing state: 'pending', 'completed', 'failed' | DEFAULT 'pending' |
+| `file_hash` | VARCHAR(64) | Hash of file content for deduplication | UNIQUE |
+| `created_at` | TIMESTAMP | Record creation time | DEFAULT NOW() |
+| `updated_at` | TIMESTAMP | Last record update | DEFAULT NOW() |
+| `indexed_at` | TIMESTAMP | When document was indexed | Optional |
 
 > **Architecture Note:** PostgreSQL is the single source of truth for all document metadata. Milvus stores only minimal fields needed for vector operations (document_id, page, content_hash). All metadata queries should use PostgreSQL with UUID relationships.
 
@@ -138,21 +154,26 @@ Stores URL-specific metadata and crawling configuration separate from the unifie
 
 ```sql
 CREATE TABLE urls (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    url TEXT NOT NULL UNIQUE,
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    url TEXT UNIQUE NOT NULL,
     title TEXT,
     description TEXT,
-    status VARCHAR(50) DEFAULT 'active',
-    refresh_interval_minutes INTEGER,
+    status VARCHAR(50) DEFAULT 'pending',
+    content_type VARCHAR(100),
+    content_length BIGINT,
     last_crawled TIMESTAMP WITH TIME ZONE,
-    last_update_status VARCHAR(50),
-    last_refresh_started TIMESTAMP WITH TIME ZONE,
-    is_refreshing BOOLEAN DEFAULT FALSE,
+    crawl_depth INTEGER DEFAULT 0,
+    refresh_interval_minutes INTEGER DEFAULT 1440,
     crawl_domain BOOLEAN DEFAULT FALSE,
     ignore_robots BOOLEAN DEFAULT FALSE,
-    snapshot_retention_days INTEGER DEFAULT 30,
-    snapshot_max_snapshots INTEGER DEFAULT 10,
+    snapshot_retention_days INTEGER DEFAULT 0,
+    snapshot_max_snapshots INTEGER DEFAULT 0,
+    is_refreshing BOOLEAN DEFAULT FALSE,
+    last_refresh_started TIMESTAMP WITH TIME ZONE,
+    last_content_hash TEXT,
+    last_update_status VARCHAR(50),
     parent_url_id UUID REFERENCES urls(id) ON DELETE CASCADE,
+    child_url_count INTEGER DEFAULT 0,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -162,21 +183,26 @@ CREATE TABLE urls (
 
 | Field | Type | Description | Constraints |
 |-------|------|-------------|-------------|
-| `id` | UUID | Unique identifier for the URL | PRIMARY KEY, DEFAULT gen_random_uuid() |
+| `id` | UUID | Unique identifier for the URL | PRIMARY KEY, DEFAULT uuid_generate_v4() |
 | `url` | TEXT | The actual URL to crawl | NOT NULL, UNIQUE |
 | `title` | TEXT | Page title extracted from crawl | Optional |
 | `description` | TEXT | Description or metadata about URL | Optional |
-| `status` | VARCHAR(50) | URL status: 'active', 'inactive' | DEFAULT 'active' |
-| `refresh_interval_minutes` | INTEGER | Minutes between crawls | Optional (null = no scheduling) |
+| `status` | VARCHAR(50) | URL status: 'pending', 'active', 'inactive' | DEFAULT 'pending' |
+| `content_type` | VARCHAR(100) | MIME type of the URL content | Optional |
+| `content_length` | BIGINT | Content length in bytes | Optional |
 | `last_crawled` | TIMESTAMP | When URL was last successfully crawled | Optional |
-| `last_update_status` | VARCHAR(50) | Result of last crawl attempt | Optional |
-| `last_refresh_started` | TIMESTAMP | When current/last refresh started | Optional |
-| `is_refreshing` | BOOLEAN | Whether URL is currently being processed | DEFAULT FALSE |
+| `crawl_depth` | INTEGER | Depth level for domain crawling | DEFAULT 0 |
+| `refresh_interval_minutes` | INTEGER | Minutes between crawls | DEFAULT 1440 |
 | `crawl_domain` | BOOLEAN | Whether to discover child URLs | DEFAULT FALSE |
 | `ignore_robots` | BOOLEAN | Whether to ignore robots.txt rules | DEFAULT FALSE |
-| `snapshot_retention_days` | INTEGER | Days to keep snapshots (0 = forever) | DEFAULT 30 |
-| `snapshot_max_snapshots` | INTEGER | Max snapshots to keep (0 = unlimited) | DEFAULT 10 |
+| `snapshot_retention_days` | INTEGER | Days to keep snapshots (0 = forever) | DEFAULT 0 |
+| `snapshot_max_snapshots` | INTEGER | Max snapshots to keep (0 = unlimited) | DEFAULT 0 |
+| `is_refreshing` | BOOLEAN | Whether URL is currently being processed | DEFAULT FALSE |
+| `last_refresh_started` | TIMESTAMP | When current/last refresh started | Optional |
+| `last_content_hash` | TEXT | Hash of last crawled content | Optional |
+| `last_update_status` | VARCHAR(50) | Result of last crawl attempt | Optional |
 | `parent_url_id` | UUID | Reference to parent URL for discovered children | REFERENCES urls(id) |
+| `child_url_count` | INTEGER | Number of child URLs discovered | DEFAULT 0 |
 | `created_at` | TIMESTAMP | Record creation time | DEFAULT NOW() |
 | `updated_at` | TIMESTAMP | Last record update | DEFAULT NOW() |
 
@@ -196,13 +222,15 @@ Stores point-in-time captures for crawled URLs and links to stored artifacts.
 
 ```sql
 CREATE TABLE url_snapshots (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-    snapshot_ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    pdf_document_id VARCHAR,
-    mhtml_document_id VARCHAR,
+    url_id UUID REFERENCES urls(id) ON DELETE CASCADE,
+    snapshot_ts TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    pdf_document_id UUID, -- optional link to documents table for stored PDF artifact
+    mhtml_document_id UUID, -- optional link to documents table for stored MHTML artifact
     sha256 TEXT,
-    notes TEXT
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 ```
 
@@ -210,13 +238,15 @@ CREATE TABLE url_snapshots (
 
 | Field | Type | Description | Constraints |
 |-------|------|-------------|-------------|
-| `id` | UUID | Snapshot identifier | PRIMARY KEY, DEFAULT gen_random_uuid() |
+| `id` | UUID | Snapshot identifier | PRIMARY KEY, DEFAULT uuid_generate_v4() |
 | `document_id` | UUID | Associated document (URL type) | NOT NULL, FK → documents.id |
-| `snapshot_ts` | TIMESTAMP | Capture timestamp (UTC) | DEFAULT CURRENT_TIMESTAMP |
-| `pdf_document_id` | VARCHAR | Reference to PDF in documents | Optional |
-| `mhtml_document_id` | VARCHAR | Reference to MHTML in documents | Optional |
+| `url_id` | UUID | Reference to the source URL | FK → urls.id |
+| `snapshot_ts` | TIMESTAMP | Capture timestamp (UTC) | NOT NULL, DEFAULT NOW() |
+| `pdf_document_id` | UUID | Optional link to PDF document in documents table | Optional |
+| `mhtml_document_id` | UUID | Optional link to MHTML document in documents table | Optional |
 | `sha256` | TEXT | Hash of canonical page text used for embeddings | Optional |
-| `notes` | TEXT | Additional capture details | Optional |
+| `created_at` | TIMESTAMP | Record creation time | DEFAULT NOW() |
+| `updated_at` | TIMESTAMP | Last record update | DEFAULT NOW() |
 
 Notes:
 - Artifact binaries (PDF/MHTML) are stored on disk; `documents` table tracks metadata and paths.
@@ -229,23 +259,21 @@ Stores email account configuration and authentication.
 
 ```sql
 CREATE TABLE email_accounts (
-    id SERIAL PRIMARY KEY,
-    account_name VARCHAR NOT NULL,
-    server_type VARCHAR NOT NULL,
-    server VARCHAR NOT NULL,
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    account_name TEXT UNIQUE NOT NULL,
+    server_type TEXT NOT NULL,
+    server TEXT NOT NULL,
     port INTEGER NOT NULL,
-    email_address VARCHAR NOT NULL,
-    encrypted_password BYTEA NOT NULL,
-    mailbox VARCHAR DEFAULT 'INBOX',
-    batch_limit INTEGER DEFAULT 50,
-    use_ssl BOOLEAN DEFAULT TRUE,
-    refresh_interval_minutes INTEGER DEFAULT 60,
-    offset_position INTEGER DEFAULT 0,
+    email_address TEXT NOT NULL,
+    password TEXT NOT NULL,
+    mailbox TEXT,
+    batch_limit INTEGER,
+    use_ssl INTEGER,
+    refresh_interval_minutes INTEGER,
     last_synced TIMESTAMP,
-    last_update_status VARCHAR,
-    next_run TIMESTAMP,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    last_update_status TEXT,
+    last_synced_offset INTEGER DEFAULT 0,
+    total_emails_in_mailbox INTEGER DEFAULT 0
 );
 ```
 

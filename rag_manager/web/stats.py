@@ -35,24 +35,8 @@ class StatsProvider:
             Dictionary containing all stats organized by panel
         """
         return {
-            'knowledgebase': self.get_knowledgebase_stats(),
-            'email': self.get_email_stats(),
-            'url': self.get_url_stats(),
-            'system': self.get_system_stats()
+            'knowledgebase': self.knowledgebase_panel.get_stats(),
+            'email': self.email_panel.get_stats(),
+            'url': self.url_panel.get_stats(),
+            'system': self.system_panel.get_stats()
         }
-    
-    def get_knowledgebase_stats(self) -> Dict[str, Any]:
-        """Get knowledgebase statistics from dedicated panel provider."""
-        return self.knowledgebase_panel.get_stats()
-    
-    def get_email_stats(self) -> Dict[str, Any]:
-        """Get email statistics from dedicated panel provider."""
-        return self.email_panel.get_stats()
-    
-    def get_url_stats(self) -> Dict[str, Any]:
-        """Get URL statistics from dedicated panel provider."""
-        return self.url_panel.get_stats()
-    
-    def get_system_stats(self) -> Dict[str, Any]:
-        """Get system statistics from dedicated panel provider."""
-        return self.system_panel.get_stats()

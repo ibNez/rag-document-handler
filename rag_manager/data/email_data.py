@@ -51,8 +51,8 @@ class EmailDataManager(BaseDataManager):
         Returns:
             The UUID of the upserted email record
         """
-        required_fields = ["message_id", "subject", "content"]
-        missing_fields = [field for field in required_fields if not record.get(field)]
+        required_fields = ["message_id"]  # Only message_id is truly required
+        missing_fields = [field for field in required_fields if field not in record or record.get(field) is None]
         
         if missing_fields:
             raise ValueError(f"Email record missing required fields: {missing_fields}")
@@ -245,12 +245,12 @@ class EmailDataManager(BaseDataManager):
     # Email Account Operations
     # =============================================================================
     
-    def update_total_emails_in_mailbox(self, account_id: int, total_emails: int) -> None:
+    def update_total_emails_in_mailbox(self, account_id: str, total_emails: int) -> None:
         """
         Update the total number of emails in the mailbox for an account.
         
         Args:
-            account_id: Email account ID
+            account_id: Email account ID (UUID string)
             total_emails: Total number of emails found in the mailbox
         """
         try:
@@ -483,7 +483,7 @@ class EmailDataManager(BaseDataManager):
             from retrieval.email.processor import EmailProcessor
             
             # Initialize PostgreSQL FTS retriever
-            self.postgres_fts_retriever = PostgresFTSRetriever(self.postgres_manager.pool)
+            self.postgres_fts_retriever = PostgresFTSRetriever(self.postgres_manager)
             
             # Initialize retriever combining vector + FTS
             self.hybrid_retriever = EmailProcessor(
@@ -604,30 +604,3 @@ Email ID: {email_id}"""
         context_text = "\n\n".join(context_parts)
         return context_text, sources
     
-    # =============================================================================
-    # Vector Operations (Milvus)
-    # =============================================================================
-    
-    def delete_email_vectors(self, email_id: str) -> bool:
-        """
-        Delete email vectors from Milvus.
-        
-        Args:
-            email_id: Email message ID
-            
-        Returns:
-            True if successful, False otherwise
-        """
-        if not self.milvus_manager:
-            logger.warning("Milvus manager not available for vector deletion")
-            return False
-        
-        try:
-            # Implementation depends on Milvus manager interface
-            # This is a placeholder for future Milvus operations
-            logger.debug(f"Would delete vectors for email {email_id}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Failed to delete vectors for email {email_id}: {e}")
-            return False

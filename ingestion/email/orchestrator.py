@@ -18,7 +18,6 @@ from google.oauth2.credentials import Credentials
 from .connectors import IMAPConnector, GmailConnector, ExchangeConnector
 from .account_manager import EmailAccountManager
 from .processor import EmailProcessor
-from .ingest import _normalize
 
 logger = logging.getLogger(__name__)
 

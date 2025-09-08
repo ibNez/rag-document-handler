@@ -19,7 +19,7 @@ from pathlib import Path
 # Playwright imports (no fallback as per requirements)
 from playwright.async_api import async_playwright
 
-from ingestion.document.manager import DocumentManager
+from ingestion.document.source_manager import DocumentSourceManager
 from playwright.sync_api import sync_playwright, Browser, Page, Response
 
 logger = logging.getLogger(__name__)
@@ -42,7 +42,7 @@ class URLSnapshotService:
     def __init__(self, postgres_manager, config, url_manager=None):
         """Initialize snapshot service with database and configuration."""
         self.postgres_manager = postgres_manager
-        self.document_manager = DocumentManager(postgres_manager) if postgres_manager else None
+        self.document_source_manager = DocumentSourceManager(postgres_manager) if postgres_manager else None
         self.url_manager = url_manager
         self.config = config
         self.snapshot_dir = getattr(config, 'SNAPSHOT_DIR', os.path.join('uploaded', 'snapshots'))
@@ -361,8 +361,8 @@ class URLSnapshotService:
             
             # Use the original URL title or generate one
             url_record = None
-            if self.url_manager:
-                url_record = self.url_manager.get_url_by_id(url_id)
+            if self.url_manager and hasattr(self.url_manager, 'url_data') and self.url_manager.url_data:
+                url_record = self.url_manager.url_data.get_url_by_id(url_id)
             original_title = url_record.get("title", domain) if url_record else domain
             
             # Snapshot linkage is authoritative and stored in url_snapshots table.
@@ -370,8 +370,8 @@ class URLSnapshotService:
             filename = os.path.basename(pdf_path)  # Extract just the PDF filename
             
             # Store in documents table
-            if self.document_manager:
-                document_id = self.document_manager.store_document(
+            if self.document_source_manager:
+                document_id = self.document_source_manager.store_document(
                     file_path=pdf_path,
                     filename=filename,
                     title=snapshot_title,
@@ -381,7 +381,7 @@ class URLSnapshotService:
                 )
                 logger.info(f"Stored snapshot document {document_id} for URL {url_id}")
             else:
-                logger.error("Document manager not available - cannot store snapshot document")
+                logger.error("Document source manager not available - cannot store snapshot document")
                 return None
 
             # Ensure a url_snapshots row exists linking this URL and the stored document.

@@ -225,7 +225,7 @@ class IMAPConnector(EmailConnector):
 
     # ------------------------------------------------------------------
     def _parse_email(self, msg: Message) -> Dict[str, Any]:
-        """Parse email without offset information (for backward compatibility)."""
+        """Parse email message into canonical record format."""
         return self._parse_email_with_offset(msg, None)
     
     def _parse_email_with_offset(self, msg: Message, offset: Optional[int] = None) -> Dict[str, Any]:
@@ -256,7 +256,7 @@ class IMAPConnector(EmailConnector):
                 date_utc = dt.astimezone(timezone.utc).isoformat()
             except Exception:
                 date_utc = None
-        received_utc = date_utc  # placeholder
+        received_utc = date_utc 
 
         raw_from = msg.get("From")
         from_addr = None
@@ -535,7 +535,8 @@ class IMAPConnector(EmailConnector):
                             rec["server_type"] = "imap"
                             
                             # Generate header hash for duplicate detection
-                            header_hash = self._generate_header_hash(rec)
+                            from ..utils import compute_header_hash
+                            header_hash = compute_header_hash(rec)
                             rec["header_hash"] = header_hash
                             
                             # In-memory dedupe only; rely on DB upsert for idempotency
@@ -631,19 +632,3 @@ class IMAPConnector(EmailConnector):
             return False
 
     # ------------------------------------------------------------------
-    def _generate_header_hash(self, record: Dict[str, Any]) -> str:
-        """Generate consistent SHA256 hash from email headers for duplicate detection.
-        
-        Parameters
-        ----------
-        record:
-            Email record dictionary
-            
-        Returns
-        -------
-        str:
-            SHA256 hash of normalized email headers
-        """
-        # Import compute_header_hash from utils to maintain consistency
-        from ..utils import compute_header_hash
-        return compute_header_hash(record)

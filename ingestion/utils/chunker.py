@@ -316,8 +316,8 @@ class TextChunker:
         if subject:
             text_parts.append(f"Subject: {subject}")
         
-        # Add body content - check both possible field names
-        body = email_content.get('content', '').strip() or email_content.get('body_text', '').strip()
+        # Add body content - using the standardized 'content' field
+        body = email_content.get('content', '').strip()
         if body:
             text_parts.append(body)
         

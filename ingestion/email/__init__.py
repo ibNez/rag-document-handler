@@ -10,7 +10,6 @@ Modern email processing architecture:
 from .connectors import EmailConnector, IMAPConnector, GmailConnector, ExchangeConnector
 from .orchestrator import EmailOrchestrator
 from .processor import EmailProcessor
-from .ingest import run_email_ingestion
 from .account_manager import EmailAccountManager
 
 __all__ = [
@@ -21,5 +20,4 @@ __all__ = [
     "EmailOrchestrator",
     "EmailProcessor",
     "EmailAccountManager",
-    "run_email_ingestion",
 ]

@@ -44,7 +44,7 @@ class KnowledgebasePanelStats:
                 'avg_words_per_doc': metadata_stats.get('avg_words_per_doc', 0),
                 'avg_chunks_per_doc': metadata_stats.get('avg_chunks_per_doc', 0),
                 'median_chunk_chars': metadata_stats.get('median_chunk_chars', 0),
-                'top_keywords': metadata_stats.get('top_keywords', [])
+                'keywords': metadata_stats.get('keywords', [])
             }
             
         except Exception as e:
@@ -66,10 +66,10 @@ class KnowledgebasePanelStats:
     def _get_metadata_stats(self) -> Dict[str, Any]:
         """Get document metadata statistics from PostgreSQL."""
         try:
-            if not self.rag_manager.document_manager:
+            if not self.rag_manager.document_source_manager:
                 return {}
                 
-            return self.rag_manager.document_manager.get_knowledgebase_metadata() or {}
+            return self.rag_manager.document_source_manager.document_data_manager.get_knowledgebase_metadata() or {}
             
         except Exception as e:
             logger.warning(f"Failed to get metadata stats: {e}")
@@ -85,5 +85,5 @@ class KnowledgebasePanelStats:
             'avg_words_per_doc': 0,
             'avg_chunks_per_doc': 0,
             'median_chunk_chars': 0,
-            'top_keywords': []
+            'keywords': []
         }

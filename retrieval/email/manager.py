@@ -13,7 +13,6 @@ from datetime import datetime, UTC
 from typing import Any, Dict, List, Optional
 
 from langchain_core.documents import Document
-from rag_manager.managers.postgres_manager import PostgreSQLManager
 
 logger = logging.getLogger(__name__)
 
@@ -34,9 +33,8 @@ class EmailManager:
             postgres_manager: PostgreSQL manager instance with connection pool
             milvus_manager: Optional Milvus manager for vector operations
         """
-        self.db_manager = PostgreSQLManager()
-        self.postgres_pool = postgres_manager.pool
-        self.pool = postgres_manager.pool  # Compatibility alias
+        self.db_manager = postgres_manager
+        logger.info("Email Manager initialized for retrieval operations")
         self.milvus_manager = milvus_manager
         
         # Hybrid retrieval components (initialized on demand)
@@ -59,8 +57,8 @@ class EmailManager:
         Returns:
             The database-generated UUID id for the stored email
         """
-        required_fields = ["message_id", "subject", "content"]
-        missing_fields = [field for field in required_fields if not record.get(field)]
+        required_fields = ["message_id"]  # Only message_id is truly required - content can be empty
+        missing_fields = [field for field in required_fields if field not in record or record.get(field) is None]
         
         if missing_fields:
             raise ValueError(f"Email record missing required fields: {missing_fields}")
@@ -69,56 +67,16 @@ class EmailManager:
         logger.info(f"Upserting email record for message_id: {message_id}")
         
         try:
-            with self.db_manager.get_connection() as conn:
-                with conn.cursor() as cur:
-                    # Convert to_addrs to JSON if it's a list or string
-                    to_addrs = record.get("to_addrs", [])
-                    if isinstance(to_addrs, str):
-                        to_addrs = [to_addrs]
-                    
-                    # Upsert email record using correct schema and return the ID
-                    cur.execute("""
-                        INSERT INTO emails (
-                            message_id, from_addr, to_addrs, subject, date_utc, 
-                            header_hash, content_hash, content, attachments, headers
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        ON CONFLICT (message_id) 
-                        DO UPDATE SET
-                            from_addr = EXCLUDED.from_addr,
-                            to_addrs = EXCLUDED.to_addrs,
-                            subject = EXCLUDED.subject,
-                            date_utc = EXCLUDED.date_utc,
-                            header_hash = EXCLUDED.header_hash,
-                            content_hash = EXCLUDED.content_hash,
-                            content = EXCLUDED.content,
-                            attachments = EXCLUDED.attachments,
-                            headers = EXCLUDED.headers,
-                            updated_at = CURRENT_TIMESTAMP
-                        RETURNING id
-                    """, (
-                        message_id,
-                        record.get("from_addr", ""),
-                        json.dumps(to_addrs) if to_addrs else None,
-                        record.get("subject", ""),
-                        record.get("date_utc"),
-                        record.get("header_hash", ""),
-                        record.get("content_hash", ""),
-                        record.get("content", ""),
-                        json.dumps(record.get("attachments", [])) if record.get("attachments") else None,
-                        json.dumps(record.get("headers", {})) if record.get("headers") else None
-                    ))
-                    
-                    result = cur.fetchone()
-                    if not result:
-                        raise ValueError(f"Failed to retrieve ID for upserted email: {message_id}")
-                    
-                    email_id = str(result['id'])
-                conn.commit()
-                logger.info(f"Successfully upserted email record: {message_id} with ID: {email_id}")
-                return email_id
-                
+            # Use the email data manager for the actual database operation
+            from rag_manager.data.email_data import EmailDataManager
+            email_data_manager = EmailDataManager(self.db_manager)
+            email_id = email_data_manager.upsert_email(record)
+            
+            logger.debug(f"Successfully upserted email {message_id} with ID: {email_id}")
+            return email_id
+            
         except Exception as e:
-            logger.error(f"Failed to upsert email record {message_id}: {e}")
+            logger.error(f"Failed to upsert email {message_id}: {e}")
             raise
 
     def get_email_statistics(self, email_address: str) -> Dict[str, int]:
@@ -173,12 +131,12 @@ class EmailManager:
                 'total_chunks': 0
             }
 
-    def update_total_emails_in_mailbox(self, account_id: int, total_emails: int) -> None:
+    def update_total_emails_in_mailbox(self, account_id: str, total_emails: int) -> None:
         """
         Update the total number of emails in the mailbox for an account.
         
         Args:
-            account_id: Email account ID
+            account_id: Email account ID (UUID string)
             total_emails: Total number of emails found in the mailbox
         """
         try:
@@ -413,7 +371,7 @@ class EmailManager:
             from retrieval.email.processor import EmailProcessor
             
             # Initialize PostgreSQL FTS retriever
-            self.postgres_fts_retriever = PostgresFTSRetriever(self.postgres_pool)
+            self.postgres_fts_retriever = PostgresFTSRetriever(self.db_manager)
             
             # Initialize retriever combining vector + FTS
             self.hybrid_retriever = EmailProcessor(
@@ -533,31 +491,3 @@ Email ID: {email_id}"""
         
         context_text = "\n\n".join(context_parts)
         return context_text, sources
-
-    # =============================================================================
-    # Milvus Vector Operations (if needed for future email vector operations)
-    # =============================================================================
-    
-    def delete_email_vectors(self, email_id: str) -> bool:
-        """
-        Delete email vectors from Milvus (if Milvus manager is available).
-        
-        Args:
-            email_id: Email message ID to delete vectors for
-            
-        Returns:
-            True if successful, False otherwise
-        """
-        if not self.milvus_manager:
-            logger.warning("Milvus manager not available for vector deletion")
-            return False
-        
-        try:
-            # Use Milvus manager's email deletion functionality if available
-            # This would be implemented when email-specific vector operations are needed
-            logger.info(f"Would delete email vectors for email_id: {email_id}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Failed to delete email vectors for {email_id}: {e}")
-            return False

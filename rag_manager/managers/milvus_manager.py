@@ -896,34 +896,85 @@ class MilvusManager:
             return 0
 
     def get_chunk_count_for_url(self, url: str, url_id: Optional[str] = None) -> int:
-        """Count chunks for a URL using document_id (UUID). URL parameter is ignored since we use clean schema."""
+        """Count chunks for a URL by finding associated documents first."""
         try:
             if not utility.has_collection(self.collection_name):
                 return 0
+            
+            # Find document IDs associated with this URL
+            document_ids = []
+            
+            if self.postgres_manager:
+                try:
+                    # Get documents created from snapshots of this URL
+                    # Documents have file_path that contains the URL domain
+                    from urllib.parse import urlparse
+                    if url:
+                        parsed = urlparse(url)
+                        domain = parsed.netloc
+                        
+                        cursor = self.postgres_manager.get_cursor()
+                        cursor.execute("""
+                            SELECT id AS document_id FROM documents 
+                            WHERE document_type = 'url' 
+                            AND file_path LIKE %s
+                        """, (f'%{domain}%',))
+                        
+                        rows = cursor.fetchall()
+                        document_ids = [row[0] for row in rows]
+                        
+                        # Also check by URL ID in filename if available
+                        if url_id:
+                            cursor.execute("""
+                                SELECT id AS document_id FROM documents 
+                                WHERE document_type = 'url' 
+                                AND (file_path LIKE %s OR filename LIKE %s)
+                            """, (f'%{url_id}%', f'%{url_id}%'))
+                            
+                            id_rows = cursor.fetchall()
+                            url_id_docs = [row[0] for row in id_rows]
+                            document_ids.extend(url_id_docs)
+                            
+                        # Remove duplicates
+                        document_ids = list(set(document_ids))
+                        cursor.close()
+                        
+                except Exception as e:
+                    logger.warning(f"Failed to query documents for URL {url}: {e}")
+                    document_ids = []
+            
+            if not document_ids:
+                logger.debug(f"No documents found for URL {url} (url_id: {url_id})")
+                return 0
+            
+            # Count chunks for all associated documents
+            total_chunks = 0
             col = Collection(self.collection_name)
             try:
                 col.load()
             except Exception:
                 pass
-
-            # Only use document_id (UUID) for counting since we eliminated the source field
-            if url_id:
-                expr = f'document_id == "{self._escape_literal(url_id)}"'
-            else:
-                logger.warning("No url_id provided for URL chunk count - clean schema requires UUID")
-                return 0
-            try:
-                # Simple count using document_id UUID
-                res = col.query(
-                    expr=expr,
-                    output_fields=["content_hash"],  # Use content_hash for counting unique chunks
-                    limit=16384
-                )
-                return len(res) if isinstance(res, list) else 0
-            except Exception as e:
-                logger.error(f"Failed to count URL chunks for {url_id}: {e}")
-                return 0
-        except Exception:
+                
+            for doc_id in document_ids:
+                try:
+                    expr = f'document_id == "{self._escape_literal(str(doc_id))}"'
+                    res = col.query(
+                        expr=expr,
+                        output_fields=["content_hash"],
+                        limit=16384
+                    )
+                    chunk_count = len(res) if isinstance(res, list) else 0
+                    total_chunks += chunk_count
+                    logger.debug(f"Document {doc_id}: {chunk_count} chunks")
+                except Exception as e:
+                    logger.error(f"Failed to count chunks for document {doc_id}: {e}")
+                    continue
+            
+            logger.debug(f"Total chunks for URL {url}: {total_chunks} (from {len(document_ids)} documents)")
+            return total_chunks
+            
+        except Exception as e:
+            logger.error(f"Failed to count URL chunks for {url}: {e}")
             return 0
 
     def check_connection(self) -> Dict[str, Any]:
@@ -1078,7 +1129,17 @@ Now, answer ONLY the following user question using the Context and following the
                         }
                     }
             
-            # Format document context
+            # Enrich documents with metadata from PostgreSQL before formatting context
+            try:
+                if hasattr(self, 'document_data_manager') and self.document_data_manager:
+                    self.document_data_manager.batch_enrich_documents_from_postgres(documents)
+                    logger.debug("Documents enriched with PostgreSQL metadata")
+                else:
+                    logger.warning("DocumentDataManager not available for enrichment - using Milvus metadata only")
+            except Exception as e:
+                logger.warning(f"Document enrichment failed: {e} - continuing with Milvus metadata only")
+            
+            # Format document context using enriched metadata
             context_text, sources = self._format_document_context(documents)
             system_prompt = self._get_standard_system_prompt()
             
@@ -1298,7 +1359,7 @@ Now, answer ONLY the following user question using the Context and following the
                     query = """
                         SELECT 
                             id, filename, title, content_type, file_path,
-                            created_at, top_keywords
+                            created_at, keywords
                         FROM documents 
                         WHERE id = ANY(%s::uuid[])
                     """
@@ -1317,7 +1378,7 @@ Now, answer ONLY the following user question using the Context and following the
                             'content_type': row.get('content_type'),
                             'file_path': row.get('file_path'),
                             'category': row.get('category'),
-                            'keywords': row.get('top_keywords') or []
+                            'keywords': row.get('keywords') or []
                         }
 
                     logger.debug(f"Retrieved metadata for {len(document_metadata)} documents from PostgreSQL")
@@ -1360,8 +1421,8 @@ Now, answer ONLY the following user question using the Context and following the
                         'title': title,
                         'content_type': content_type,
                         'category_type': category_type,
-                        'topics': postgres_meta.get('topics', ''),
-                        'keywords': postgres_meta.get('keywords', [])
+                        'topics': doc.metadata.get('topics', ''),
+                        'keywords': doc.metadata.get('keywords', [])
                     }
                     source_counter += 1
             
@@ -1379,7 +1440,7 @@ Now, answer ONLY the following user question using the Context and following the
                 ref_num = source_info['ref_num']
                 filename = source_info['filename']
                 category_type = source_info['category_type']
-                page_info = doc.metadata.get('page')  # Direct access to page from document metadata
+                page_info = doc.metadata.get('page')
                 
                 # Get similarity score from document metadata
                 similarity_score = doc.metadata.get('combined_score', 0.0)
@@ -1390,13 +1451,10 @@ Now, answer ONLY the following user question using the Context and following the
                     # For documents, create download link
                     source_link = f"Download: /download/{filename}"
                 elif category_type == 'url':
-                    # For URLs, try to get original URL or use filename
                     source_link = f"URL: {filename}"
                 elif category_type == 'email':
-                    # For emails, indicate it's an email source
                     source_link = f"Email: {filename}"
                 else:
-                    # For other types
                     source_link = f"Source: {filename}"
                 
                 # Get text content from document

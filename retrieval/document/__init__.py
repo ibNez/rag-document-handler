@@ -1,19 +1,14 @@
-"""
-Document Retrieval Module
-Following DEVELOPMENT_RULES.md for all development requirements
+"""Document retrieval module for search and metadata operations.
 
-This module provides document-specific retrieval capabilities including:
-- PostgreSQL Full-Text Search (FTS) retrieval
-- Hybrid retrieval combining vector similarity and FTS
-- Advanced filtering and search options
+Modern document retrieval architecture:
+- DocumentSearchManager: Search orchestration and metadata enrichment
+- DocumentProcessor: Hybrid search combining vector similarity and PostgreSQL FTS
 """
 
-from .postgres_fts_retriever import DocumentPostgresFTSRetriever
+from .search_manager import DocumentSearchManager
 from .processor import DocumentProcessor
-from .manager import DocumentManager
 
 __all__ = [
-    'DocumentPostgresFTSRetriever',
-    'DocumentProcessor',
-    'DocumentManager'
+    'DocumentSearchManager',
+    'DocumentProcessor'
 ]

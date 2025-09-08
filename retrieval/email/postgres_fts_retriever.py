@@ -69,7 +69,7 @@ class PostgresFTSRetriever:
                             e.date_utc,
                             e.message_id
                         FROM email_chunks ec
-                        JOIN emails e ON ec.email_id = e.message_id
+                        JOIN emails e ON ec.email_id = e.id
                         WHERE to_tsvector('english', ec.chunk_text) @@ plainto_tsquery('english', %s)
                         ORDER BY fts_score DESC
                         LIMIT %s

@@ -12,7 +12,6 @@ from datetime import datetime
 from typing import Dict, List, Optional, Any
 
 from .source_manager import URLSourceManager
-from ingestion.document.manager import DocumentManager
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +36,13 @@ class URLOrchestrator:
         self.snapshot_service = snapshot_service
         # Prefer explicit postgres_manager if provided; otherwise try to infer from milvus_manager
         self.postgres_manager = postgres_manager or (getattr(self.milvus_manager, 'postgres_manager', None) if self.milvus_manager else None)
-        self.document_manager = DocumentManager(self.postgres_manager) if self.postgres_manager else None
+        
+        # Use DocumentSourceManager directly instead of wrapper
+        if self.postgres_manager:
+            from ingestion.document.source_manager import DocumentSourceManager
+            self.document_source_manager = DocumentSourceManager(self.postgres_manager)
+        else:
+            self.document_source_manager = None
         self.urls: List[Dict[str, Any]] = []
 
         # Initialize domain crawler for discovering new URLs with robots.txt support
@@ -81,7 +86,7 @@ class URLOrchestrator:
             return 0
         
         try:
-            return self.url_manager.get_url_count()
+            return self.url_manager.url_data.get_url_count()
         except Exception as exc:
             logger.error(f"Failed to get URL count: {exc}")
             return 0
@@ -213,10 +218,22 @@ class URLOrchestrator:
                     if trace_logger:
                         trace_logger.info(f"Chunking result count={len(chunks)}")
                     
+                    # CRITICAL: Snapshots are always required - fail fast if not created
+                    if not snapshot_created or not doc_id:
+                        error_msg = (f"CRITICAL FAILURE: Snapshot creation failed for URL {url_id}. "
+                                   f"snapshot_created={snapshot_created}, doc_id={doc_id}. "
+                                   f"Cannot proceed with chunk storage without a valid document ID. "
+                                   f"This indicates an upstream issue with snapshot creation that must be fixed.")
+                        logger.error(error_msg)
+                        if trace_logger:
+                            trace_logger.error(error_msg)
+                        raise RuntimeError(error_msg)
+                    
                     # Store chunks in Milvus if available
                     if self.milvus_manager and chunks:
                         try:
-                            milvus_id = doc_id if snapshot_created and doc_id else str(url_id)
+                            # Use doc_id from successful snapshot creation
+                            milvus_id = doc_id
                             if trace_logger:
                                 trace_logger.info(f"Using milvus_id={milvus_id} for insert_documents (snapshot_created={snapshot_created})")
 
@@ -232,21 +249,34 @@ class URLOrchestrator:
                     elif not self.milvus_manager:
                         logger.warning(f"URL {url_id}: Extracted {len(chunks)} chunks but no MilvusManager available for storage")
 
-                    # Persist chunk rows to Postgres using DocumentManager
-                    if not self.document_manager:
-                        err = "No document_manager available on URLOrchestrator; cannot persist chunks"
+                    # Persist chunk rows to Postgres using DocumentSourceManager
+                    if not self.document_source_manager:
+                        err = "No document_source_manager available on URLOrchestrator; cannot persist chunks"
                         logger.error(err)
                         if trace_logger:
                             trace_logger.error(err)
                         raise RuntimeError(err)
 
-                    doc_identifier = doc_id if snapshot_created and doc_id else str(url_id)
+                    # Use doc_id from successful snapshot creation
+                    doc_identifier = doc_id
+                    
                     if trace_logger:
-                        trace_logger.info(f"Persisting {len(chunks)} chunks to Postgres for document_id={doc_identifier} via DocumentManager")
+                        trace_logger.info(f"Persisting {len(chunks)} chunks to Postgres for document_id={doc_identifier} via DocumentDataManager")
 
-                    stored = self.document_manager.persist_chunks(doc_identifier, chunks, trace_logger=trace_logger)
-                    if trace_logger:
-                        trace_logger.info(f"Persisted {stored}/{len(chunks)} chunks to Postgres for document_id={doc_identifier} via DocumentManager")
+                    try:
+                        stored = self.document_source_manager.document_data_manager.persist_chunks(doc_identifier, chunks, trace_logger=trace_logger)
+                        if trace_logger:
+                            trace_logger.info(f"Persisted {stored}/{len(chunks)} chunks to Postgres for document_id={doc_identifier} via DocumentDataManager")
+                    except Exception as e:
+                        logger.error(f"CHUNK PERSISTENCE FAILED for URL {url_id}: {e}")
+                        logger.error(f"Failed while persisting chunks with doc_identifier={doc_identifier}")
+                        logger.error(f"Context: snapshot_created={snapshot_created}, doc_id={doc_id}, url_id={url_id}")
+                        if "foreign key constraint" in str(e).lower():
+                            logger.error(f"FOREIGN KEY VIOLATION: Document {doc_identifier} does not exist in 'documents' table!")
+                            logger.error(f"This indicates snapshot creation failed but chunk persistence was still attempted")
+                        if trace_logger:
+                            trace_logger.exception(f"Chunk persistence failed: {e}")
+                        raise  # Re-raise to surface the error immediately
                     
                 except Exception as e:
                     logger.error(f"Failed to process URL content for {url_id}: {e}")

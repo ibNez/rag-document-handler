@@ -36,7 +36,7 @@ class URLPanelStats:
                 return self._empty_stats()
                 
             # Get all URLs for analysis
-            urls = self.rag_manager.url_manager.get_all_urls()
+            urls = self.rag_manager.url_manager.url_data.get_all_urls()
             
             # Calculate basic counts
             total_urls = len(urls)

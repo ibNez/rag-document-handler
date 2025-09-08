@@ -34,13 +34,13 @@
                                                     <button class="btn btn-xs btn-outline-secondary btn-sm py-0 px-1" data-bs-toggle="modal" data-bs-target="#editDocModal-{{ file.name|replace('.', '_') }}" title="Edit title"><i class="fas fa-pen small"></i></button>
                                                 </div>
                                                 <div class="text-muted small">{{ file.name }}</div>
-                                                {% if file.top_keywords %}
-                                                    <div class="small mt-1 text-truncate" style="max-width:300px;" title="Keywords: {{ file.top_keywords|join(', ') }}">
+                                                {% if file.keywords %}
+                                                    <div class="small mt-1 text-truncate" style="max-width:300px;" title="Keywords: {{ file.keywords|join(', ') }}">
                                                         <i class="fas fa-tags text-muted"></i>
-                                                        {% for kw in file.top_keywords[:6] %}
+                                                        {% for kw in file.keywords[:6] %}
                                                             <span class="badge bg-light text-dark border">{{ kw }}</span>
                                                         {% endfor %}
-                                                        {% if file.top_keywords|length > 6 %}<span class="badge bg-secondary">+{{ file.top_keywords|length - 6 }}</span>{% endif %}
+                                                        {% if file.keywords|length > 6 %}<span class="badge bg-secondary">+{{ file.keywords|length - 6 }}</span>{% endif %}
                                                     </div>
                                                 {% endif %}
                                             </div>
