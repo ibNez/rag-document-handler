@@ -9,6 +9,7 @@ No business logic - only database operations.
 
 import logging
 import os
+import os
 import uuid
 import urllib.parse
 from datetime import datetime
@@ -754,60 +755,96 @@ class URLDataManager(BaseDataManager):
             url_string = existing_url['url']
             logger.info(f"Found URL to delete - ID: {url_id}, URL: {url_string}, Title: {existing_url['title']}")
             
-            # Step 1: Find and delete associated documents
-            logger.info(f"Cleaning up documents for URL: {url_string}")
-            documents_query = "SELECT id, file_path FROM documents WHERE document_type = 'url' AND file_path LIKE %s"
-            url_documents = self.execute_query(documents_query, (f"%{url_string}%",), fetch_all=True)
+            # Step 1: Clean up snapshots using snapshot service
+            logger.info(f"Cleaning up snapshots for URL ID: {url_id}")
+            snapshot_cleanup_result = {"deleted": 0}
+            try:
+                # Import snapshot service to handle proper cleanup
+                from ingestion.url.utils.snapshot_service import URLSnapshotService
+                from rag_manager.core.config import Config
+                
+                config = Config()
+                snapshot_service = URLSnapshotService(self.postgres_manager, config)
+                
+                # Use the comprehensive snapshot cleanup
+                snapshot_cleanup_result = snapshot_service.cleanup_all_snapshots(url_id)
+                if snapshot_cleanup_result.get("success"):
+                    logger.info(f"Successfully cleaned up {snapshot_cleanup_result.get('deleted', 0)} snapshots")
+                else:
+                    logger.warning(f"Snapshot cleanup warning: {snapshot_cleanup_result.get('error', 'Unknown error')}")
+            except Exception as snapshot_error:
+                logger.warning(f"Failed to use snapshot service for cleanup: {snapshot_error}")
+                # Fall back to basic cleanup
+                snapshot_cleanup_result = {"deleted": 0, "error": str(snapshot_error)}
+
+            # Step 2: Find and delete any remaining documents (fallback)
+            logger.info(f"Cleaning up any remaining documents for URL: {url_string}")
+            documents_query = """
+                SELECT d.id, d.file_path 
+                FROM documents d 
+                LEFT JOIN url_snapshots us ON d.id = us.document_id 
+                WHERE us.url_id = %s OR (d.document_type = 'url' AND d.file_path LIKE %s)
+            """
+            url_documents = self.execute_query(documents_query, (url_id, f"%{url_string}%"), fetch_all=True)
             
             if url_documents:
                 document_ids = [doc['id'] for doc in url_documents]
-                snapshot_files = [doc['file_path'] for doc in url_documents]
+                remaining_files = [doc['file_path'] for doc in url_documents]
                 
-                logger.info(f"Found {len(url_documents)} documents to clean up")
+                logger.info(f"Found {len(url_documents)} remaining documents to clean up")
                 
-                # Step 2: Delete document chunks first (foreign key constraint)
+                # Step 3: Delete document chunks first (foreign key constraint)
                 chunk_delete_query = "DELETE FROM document_chunks WHERE document_id = ANY(%s)"
                 self.execute_query(chunk_delete_query, (document_ids,))
                 logger.info(f"Deleted document chunks for {len(document_ids)} documents")
                 
-                # Step 3: Delete documents
+                # Step 4: Delete remaining documents
                 doc_delete_query = "DELETE FROM documents WHERE id = ANY(%s)"
                 self.execute_query(doc_delete_query, (document_ids,))
-                logger.info(f"Deleted {len(document_ids)} documents")
+                logger.info(f"Deleted {len(document_ids)} remaining documents")
+                
+                # Step 5: Clean up any remaining files on disk
+                files_deleted = 0
+                for file_path in remaining_files:
+                    try:
+                        if file_path and os.path.exists(file_path):
+                            os.remove(file_path)
+                            files_deleted += 1
+                            logger.debug(f"Deleted remaining file: {file_path}")
+                            # Also delete JSON sidecar if it exists
+                            json_path = file_path.replace(".pdf", ".json")
+                            if os.path.exists(json_path):
+                                os.remove(json_path)
+                                logger.debug(f"Deleted remaining JSON file: {json_path}")
+                    except Exception as file_error:
+                        logger.warning(f"Failed to delete remaining file {file_path}: {file_error}")
             else:
                 document_ids = []
-                snapshot_files = []
-                logger.info("No documents found to clean up")
+                files_deleted = 0
+                logger.info("No remaining documents found to clean up")
             
-            # Step 4: Delete child URLs first (if any)
+            # Step 6: Delete child URLs first (if any)
             child_delete_query = "DELETE FROM urls WHERE parent_url_id = %s"
             self.execute_query(child_delete_query, (url_id,))
             logger.info(f"Deleted child URLs for parent {url_id}")
             
-            # Step 5: Delete the main URL
+            # Step 7: Delete the main URL
             url_delete_query = "DELETE FROM urls WHERE id = %s"
             self.execute_query(url_delete_query, (url_id,))
             
-            # Step 6: Clean up snapshot files
-            import os
-            files_deleted = 0
-            for file_path in snapshot_files:
-                try:
-                    if file_path and os.path.exists(file_path):
-                        os.remove(file_path)
-                        files_deleted += 1
-                        logger.debug(f"Deleted snapshot file: {file_path}")
-                except Exception as file_error:
-                    logger.warning(f"Failed to delete snapshot file {file_path}: {file_error}")
+            # Calculate total files deleted (snapshots + remaining files)
+            total_files_deleted = snapshot_cleanup_result.get("deleted", 0) + files_deleted
             
-            logger.info(f"URL deletion completed successfully - ID: {url_id}, URL: {url_string}, Files cleaned: {files_deleted}")
+            logger.info(f"URL deletion completed successfully - ID: {url_id}, URL: {url_string}, Total files cleaned: {total_files_deleted}")
             return {
                 "success": True, 
                 "message": "URL and associated data deleted successfully",
                 "details": {
                     "url": url_string,
                     "documents_deleted": len(document_ids),
-                    "files_deleted": files_deleted
+                    "snapshot_files_deleted": snapshot_cleanup_result.get("deleted", 0),
+                    "remaining_files_deleted": files_deleted,
+                    "total_files_deleted": total_files_deleted
                 }
             }
             
