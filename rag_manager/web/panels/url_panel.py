@@ -146,6 +146,116 @@ class URLPanelStats:
             logger.error(f"Failed to calculate snapshot disk usage: {e}")
             return "0 B"
     
+    def get_url_pages_count(self, url_id: str) -> int:
+        """
+        Get the count of documents (pages) for a specific URL.
+        
+        Args:
+            url_id: The UUID of the URL
+            
+        Returns:
+            Number of documents/pages for this URL
+        """
+        try:
+            if not self.rag_manager.url_manager:
+                return 0
+                
+            url_data_manager = self.rag_manager.url_manager.url_data
+            if not url_data_manager:
+                return 0
+                
+            query = """
+                SELECT COUNT(DISTINCT d.id) as page_count
+                FROM documents d
+                JOIN url_snapshots us ON d.id = us.document_id
+                WHERE us.url_id = %s
+            """
+            result = url_data_manager.execute_query(query, (url_id,), fetch_one=True)
+            return result['page_count'] if result else 0
+        except Exception as e:
+            logger.error(f"Error getting pages count for URL {url_id}: {e}")
+            return 0
+
+    def get_url_snapshot_size(self, url_id: str) -> str:
+        """
+        Get the total size of all snapshots for a specific URL.
+        
+        Args:
+            url_id: The UUID of the URL
+            
+        Returns:
+            Human-readable size string (e.g., "1.2 MB")
+        """
+        try:
+            if not self.rag_manager.url_manager:
+                return "—"
+                
+            url_data_manager = self.rag_manager.url_manager.url_data
+            if not url_data_manager:
+                return "—"
+                
+            # Get all document IDs related to this URL through snapshots
+            query = """
+                SELECT d.file_path, d.file_size
+                FROM documents d
+                JOIN url_snapshots us ON d.id = us.document_id
+                WHERE us.url_id = %s AND d.file_path IS NOT NULL
+            """
+            result = url_data_manager.execute_query(query, (url_id,), fetch_all=True)
+            
+            if not result:
+                return "—"
+            
+            total_size = 0
+            
+            for row in result:
+                file_path = row['file_path']
+                file_size = row['file_size']
+                
+                # Use file_size from database if available, otherwise check filesystem
+                if file_size:
+                    total_size += file_size
+                elif file_path and os.path.exists(file_path):
+                    try:
+                        total_size += os.path.getsize(file_path)
+                    except Exception:
+                        continue
+            
+            if total_size == 0:
+                return "—"
+            
+            # Convert to human-readable format using existing method
+            return self._format_bytes(total_size)
+                
+        except Exception as e:
+            logger.error(f"Error getting snapshot size for URL {url_id}: {e}")
+            return "—"
+
+    def get_url_snapshot_count(self, url_id: str) -> int:
+        """
+        Get the count of snapshots for a specific URL.
+        
+        Args:
+            url_id: The UUID of the URL
+            
+        Returns:
+            Number of snapshots for this URL
+        """
+        try:
+            if not self.rag_manager.url_manager:
+                return 0
+                
+            url_data_manager = self.rag_manager.url_manager.url_data
+            if not url_data_manager:
+                return 0
+                
+            query = "SELECT COUNT(*) as snapshot_count FROM url_snapshots WHERE url_id = %s"
+            result = url_data_manager.execute_query(query, (url_id,), fetch_one=True)
+            return result['snapshot_count'] if result else 0
+        except Exception as e:
+            logger.error(f"Error getting snapshot count for URL {url_id}: {e}")
+            return 0
+    
     def _format_bytes(self, bytes_count: int) -> str:
         """
         Convert bytes to human-readable format.

@@ -37,12 +37,12 @@ class URLOrchestrator:
         # Prefer explicit postgres_manager if provided; otherwise try to infer from milvus_manager
         self.postgres_manager = postgres_manager or (getattr(self.milvus_manager, 'postgres_manager', None) if self.milvus_manager else None)
         
-        # Use DocumentSourceManager directly instead of wrapper
+        # Initialize document data manager directly for chunk persistence
         if self.postgres_manager:
-            from ingestion.document.source_manager import DocumentSourceManager
-            self.document_source_manager = DocumentSourceManager(self.postgres_manager, config=self.config)
+            from rag_manager.data.document_data import DocumentDataManager
+            self.document_data_manager = DocumentDataManager(self.postgres_manager, config=self.config)
         else:
-            self.document_source_manager = None
+            self.document_data_manager = None
         self.urls: List[Dict[str, Any]] = []
 
         # Initialize domain crawler for discovering new URLs with robots.txt support
@@ -252,9 +252,9 @@ class URLOrchestrator:
                     elif not self.milvus_manager:
                         logger.warning(f"URL {url_id}: Extracted {len(chunks)} chunks but no MilvusManager available for storage")
 
-                    # Persist chunk rows to Postgres using DocumentSourceManager
-                    if not self.document_source_manager:
-                        err = "No document_source_manager available on URLOrchestrator; cannot persist chunks"
+                    # Persist chunk rows to Postgres using DocumentDataManager directly
+                    if not self.document_data_manager:
+                        err = "No document_data_manager available on URLOrchestrator; cannot persist chunks"
                         logger.error(err)
                         if trace_logger:
                             trace_logger.error(err)
@@ -274,7 +274,7 @@ class URLOrchestrator:
                         trace_logger.info(f"Persisting {len(chunks)} chunks to Postgres for document_id={doc_identifier} snapshot_id={snapshot_id} via DocumentDataManager")
 
                     try:
-                        stored = self.document_source_manager.document_data_manager.persist_chunks(doc_identifier, chunks, trace_logger=trace_logger)
+                        stored = self.document_data_manager.persist_chunks(doc_identifier, chunks, trace_logger=trace_logger)
                         if trace_logger:
                             trace_logger.info(f"Persisted {stored}/{len(chunks)} chunks to Postgres for document_id={doc_identifier} via DocumentDataManager")
                     except Exception as e:
