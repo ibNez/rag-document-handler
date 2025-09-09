@@ -93,7 +93,7 @@ class RAGKnowledgebaseManager:
         self.email_processing_status: Dict[str, EmailProcessingStatus] = {}  # Changed to str for UUID keys
         
         # Initialize the SchedulerManager (but don't start it yet)
-        self.scheduler_manager = SchedulerManager(self.url_manager, self.config)
+        self.scheduler_manager = SchedulerManager(self.url_data_manager, self.config)
         
         # Configure scheduler with processing status dictionaries and background methods
         self.scheduler_manager.set_processing_status(
@@ -194,19 +194,19 @@ class RAGKnowledgebaseManager:
             self.document_source_manager = None
 
     def _initialize_url_manager(self) -> None:
-        """Initialize URL manager based on feature flags."""
-        logger.info("Initializing URL Source Manager")
+        """Initialize URL data manager based on feature flags."""
+        logger.info("Initializing URL Data Manager")
         try:
-            from ingestion.url.source_manager import URLSourceManager
+            from rag_manager.data.url_data import URLDataManager
             if self.postgres_manager:
-                self.url_manager = URLSourceManager(self.postgres_manager, self.milvus_manager)
-                logger.info("URL Source Manager initialized successfully")
+                self.url_data_manager = URLDataManager(self.postgres_manager, self.milvus_manager)
+                logger.info("URL Data Manager initialized successfully")
             else:
-                logger.error("Cannot initialize URL manager: PostgreSQL manager not available")
-                self.url_manager = None
+                logger.error("Cannot initialize URL data manager: PostgreSQL manager not available")
+                self.url_data_manager = None
         except ImportError as e:
-            logger.error(f"Failed to import URL Source Manager: {e}")
-            self.url_manager = None
+            logger.error(f"Failed to import URL Data Manager: {e}")
+            self.url_data_manager = None
 
     def _initialize_url_orchestrator(self) -> None:
         """Initialize URL orchestrator for managing URL processing tasks."""
@@ -214,9 +214,9 @@ class RAGKnowledgebaseManager:
             logger.info("Initializing URL orchestrator")
             
             # Validate prerequisites
-            if not self.url_manager:
-                logger.error("Cannot initialize URL orchestrator: URL manager not available")
-                logger.error(f"URL manager state: {self.url_manager}")
+            if not self.url_data_manager:
+                logger.error("Cannot initialize URL orchestrator: URL data manager not available")
+                logger.error(f"URL data manager state: {self.url_data_manager}")
                 logger.error(f"PostgreSQL manager state: {self.postgres_manager}")
                 self.url_orchestrator = None
                 return
@@ -227,7 +227,7 @@ class RAGKnowledgebaseManager:
             snapshot_service = None
             try:
                 from ingestion.url.utils.snapshot_service import URLSnapshotService
-                snapshot_service = URLSnapshotService(self.postgres_manager, self.config, self.url_manager)
+                snapshot_service = URLSnapshotService(self.postgres_manager, self.config, self.url_data_manager)
                 logger.info("URL snapshot service initialized successfully")
             except Exception as e:
                 logger.warning(f"Failed to initialize snapshot service: {e}")
@@ -239,7 +239,7 @@ class RAGKnowledgebaseManager:
             logger.info("Creating URLOrchestrator instance")
             self.url_orchestrator = URLOrchestrator(
                 config=self.config,
-                url_manager=self.url_manager,
+                url_manager=self.url_data_manager,
                 processor=self.document_processor,  # Use existing document processor for URL content
                 milvus_manager=self.milvus_manager,  # Add MilvusManager for vector storage
                 snapshot_service=snapshot_service,  # Add snapshot service for PDF generation
@@ -432,21 +432,21 @@ class RAGKnowledgebaseManager:
             logger.error("URL orchestrator not initialized")
             return
             
-        if not self.url_manager:
-            logger.error("URL manager not initialized")
+        if not self.url_data_manager:
+            logger.error("URL data manager not initialized")
             return
             
         # Initialize processing status
         try:
             # Get URL details for status tracking
-            url_record = self.url_manager.url_data.get_url_by_id(url_id)
+            url_record = self.url_data_manager.get_url_by_id(url_id)
             
             if not url_record:
                 # URL might be newly added from domain crawling, give it a moment
                 logger.info(f"URL {url_id} not found, waiting briefly for potential new URL...")
                 import time
                 time.sleep(1)  # Brief pause for database consistency
-                url_record = self.url_manager.url_data.get_url_by_id(url_id)
+                url_record = self.url_data_manager.get_url_by_id(url_id)
                 
                 if not url_record:
                     logger.error(f"URL {url_id} not found even after retry")
@@ -534,10 +534,10 @@ class RAGKnowledgebaseManager:
         # Initialize processing status
         try:
             # Get URL details for status tracking
-            if not self.url_manager:
-                logger.error("URL manager not initialized")
+            if not self.url_data_manager:
+                logger.error("URL data manager not initialized")
                 return
-            url_record = self.url_manager.url_data.get_url_by_id(url_id)
+            url_record = self.url_data_manager.get_url_by_id(url_id)
             
             if not url_record:
                 logger.error(f"URL {url_id} not found for deletion")
@@ -561,7 +561,7 @@ class RAGKnowledgebaseManager:
             status.message = "Deleting URL and associated data..."
             status.progress = 50
             
-            result = self.url_manager.delete_url(url_id)
+            result = self.url_data_manager.delete_url(url_id)
             
             # Additional Milvus cleanup since URL manager can't access it directly
             if result.get("success"):

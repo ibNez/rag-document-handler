@@ -32,11 +32,11 @@ class URLPanelStats:
             and snapshot disk usage
         """
         try:
-            if not self.rag_manager.url_manager:
+            if not self.rag_manager.url_data_manager:
                 return self._empty_stats()
                 
             # Get all URLs for analysis
-            urls = self.rag_manager.url_manager.url_data.get_all_urls()
+            urls = self.rag_manager.url_data_manager.get_all_urls()
             
             # Calculate basic counts
             total_urls = len(urls)
@@ -157,10 +157,10 @@ class URLPanelStats:
             Number of documents/pages for this URL
         """
         try:
-            if not self.rag_manager.url_manager:
+            if not self.rag_manager.url_data_manager:
                 return 0
                 
-            url_data_manager = self.rag_manager.url_manager.url_data
+            url_data_manager = self.rag_manager.url_data_manager
             if not url_data_manager:
                 return 0
                 
@@ -187,10 +187,10 @@ class URLPanelStats:
             Human-readable size string (e.g., "1.2 MB")
         """
         try:
-            if not self.rag_manager.url_manager:
+            if not self.rag_manager.url_data_manager:
                 return "—"
                 
-            url_data_manager = self.rag_manager.url_manager.url_data
+            url_data_manager = self.rag_manager.url_data_manager
             if not url_data_manager:
                 return "—"
                 
@@ -242,10 +242,10 @@ class URLPanelStats:
             Number of snapshots for this URL
         """
         try:
-            if not self.rag_manager.url_manager:
+            if not self.rag_manager.url_data_manager:
                 return 0
                 
-            url_data_manager = self.rag_manager.url_manager.url_data
+            url_data_manager = self.rag_manager.url_data_manager
             if not url_data_manager:
                 return 0
                 
@@ -321,11 +321,11 @@ class URLPanelStats:
             Number of URLs that have a parent_url_id (i.e., child URLs discovered via domain crawling)
         """
         try:
-            if not self.rag_manager.url_manager:
+            if not self.rag_manager.url_data_manager:
                 return 0
                 
-            # Use URLSourceManager's url_data (URLDataManager) to access database
-            url_data_manager = self.rag_manager.url_manager.url_data
+            # Use URLDataManager to access database
+            url_data_manager = self.rag_manager.url_data_manager
             if not url_data_manager:
                 return 0
                 

@@ -12,18 +12,15 @@ import os
 import os
 import uuid
 import urllib.parse
+import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from .base_data import BaseDataManager
 
-# Import external dependencies
-try:
-    import requests
-    from bs4 import BeautifulSoup
-    EXTERNAL_DEPS_AVAILABLE = True
-except ImportError:
-    EXTERNAL_DEPS_AVAILABLE = False
+import requests
+from bs4 import BeautifulSoup
+EXTERNAL_DEPS_AVAILABLE = True
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +43,68 @@ class URLDataManager(BaseDataManager):
         """
         super().__init__(postgres_manager, milvus_manager)
         logger.info("URLDataManager initialized for pure data operations")
+    
+    # =============================================================================
+    # URL Title Extraction Helper
+    # =============================================================================
+    
+    def extract_title_from_url(self, url: str) -> str:
+        """
+        Extract the title from a web page by scraping the <title> tag.
+        
+        Args:
+            url: URL to extract title from
+            
+        Returns:
+            Extracted title or fallback title
+        """
+        if not EXTERNAL_DEPS_AVAILABLE:
+            logger.warning("External dependencies not available for title extraction")
+            try:
+                parsed = urllib.parse.urlparse(url)
+                return f"Page from {parsed.netloc}"
+            except:
+                return "Unknown Page"
+        
+        try:
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+                'Accept-Encoding': 'gzip, deflate',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1',
+            }
+            
+            response = requests.get(url, headers=headers, timeout=10)
+            response.raise_for_status()
+            
+            # Parse HTML content
+            soup = BeautifulSoup(response.content, 'html.parser')
+            title_tag = soup.find('title')
+            
+            if title_tag and title_tag.string:
+                title = title_tag.string.strip()
+                # Clean up title
+                title = re.sub(r'\s+', ' ', title)
+                title = title[:255]  # Limit length
+                return title
+            else:
+                # Fallback to URL parsing
+                parsed = urllib.parse.urlparse(url)
+                return f"Page from {parsed.netloc}"
+                
+        except requests.RequestException as e:
+            logger.warning(f"Failed to fetch title from {url}: {e}")
+            # Return a fallback title based on URL
+            try:
+                parsed = urllib.parse.urlparse(url)
+                return f"Page from {parsed.netloc}"
+            except:
+                return "Unknown Page"
+        except Exception as e:
+            logger.error(f"Error extracting title from {url}: {e}")
+            return "Error Loading Page"
     
     # =============================================================================
     # URL Metadata Operations
@@ -431,11 +490,11 @@ class URLDataManager(BaseDataManager):
                 ignore_robots: bool = False, snapshot_retention_days: int = 0,
                 snapshot_max_snapshots: int = 0, parent_url_id: Optional[str] = None) -> Dict[str, Any]:
         """
-        Add a new URL to the database.
+        Add a new URL to the database with validation and title extraction.
         
         Args:
             url: The URL to add
-            title: Title for the URL (should be provided by business logic layer)
+            title: Optional title for the URL (will be extracted if not provided)
             description: Optional description
             refresh_interval_minutes: How often to refresh (defaults to 1440 minutes/24 hours)
             crawl_domain: Whether to crawl the entire domain
@@ -447,9 +506,55 @@ class URLDataManager(BaseDataManager):
         Returns:
             Dict with success status and URL details
         """
-        # Use provided title or fallback to URL
+        # Validate URL format
+        try:
+            result = urllib.parse.urlparse(url)
+            is_valid_url = all([result.scheme, result.netloc]) and result.scheme in ['http', 'https']
+        except Exception:
+            is_valid_url = False
+            
+        if not is_valid_url:
+            return {
+                'success': False,
+                'error': 'Invalid URL format',
+                'url_id': None,
+                'url_data': None
+            }
+        
+        # Extract title if not provided
         if not title:
-            title = url
+            try:
+                title = self.extract_title_from_url(url)
+            except Exception as e:
+                logger.warning(f"Could not extract title for {url}: {e}")
+                title = "Unknown Page"
+        
+        # Validate parent URL if provided
+        if parent_url_id:
+            # Validate UUID format
+            try:
+                uuid_obj = uuid.UUID(parent_url_id)
+                is_valid_uuid = str(uuid_obj) == parent_url_id
+            except (ValueError, TypeError):
+                is_valid_uuid = False
+                
+            if not is_valid_uuid:
+                return {
+                    'success': False,
+                    'error': 'Invalid parent URL ID format',
+                    'url_id': None,
+                    'url_data': None
+                }
+            
+            # Check if parent exists
+            parent_data = self.get_url_by_id(parent_url_id)
+            if not parent_data:
+                return {
+                    'success': False,
+                    'error': 'Parent URL not found',
+                    'url_id': None,
+                    'url_data': None
+                }
             
         # Set defaults
         if refresh_interval_minutes is None:
@@ -477,7 +582,24 @@ class URLDataManager(BaseDataManager):
             url_id = result['id']
             
             logger.info(f"Added URL: {url} with title: {title} (ID: {url_id}) {f'(parent: {parent_url_id})' if parent_url_id else '(root URL)'}")
-            return {"success": True, "message": "URL added successfully", "url_id": str(url_id), "title": title}
+            return {
+                "success": True, 
+                "message": "URL added successfully", 
+                "url_id": str(url_id), 
+                "title": title,
+                "url_data": {
+                    "url_id": str(url_id),
+                    "url": url,
+                    "title": title,
+                    "description": description
+                }
+            }
+            
+        except Exception as e:
+            if "duplicate key" in str(e).lower():
+                return {"success": False, "message": "URL already exists", "url_id": None, "url_data": None}
+            logger.error(f"Error adding URL: {str(e)}")
+            return {"success": False, "message": f"Database error: {str(e)}", "url_id": None, "url_data": None}
             
         except Exception as e:
             if "duplicate key" in str(e).lower():
@@ -670,6 +792,45 @@ class URLDataManager(BaseDataManager):
         except Exception as e:
             logger.error(f"Error retrieving child URLs for parent {parent_url_id}: {str(e)}")
             return []
+
+    def get_child_url_stats(self, parent_url_id: str) -> Dict[str, Any]:
+        """
+        Get statistics for child URLs.
+        
+        Args:
+            parent_url_id: Parent URL ID
+            
+        Returns:
+            Dictionary with child URL statistics
+        """
+        try:
+            child_urls = self.get_child_urls(parent_url_id)
+            
+            total_children = len(child_urls)
+            status_counts = {}
+            
+            for child in child_urls:
+                status = child.get('status', 'unknown')
+                status_counts[status] = status_counts.get(status, 0) + 1
+            
+            return {
+                'success': True,
+                'parent_url_id': parent_url_id,
+                'total_children': total_children,
+                'status_breakdown': status_counts,
+                'child_urls': child_urls
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to get child URL stats for {parent_url_id}: {e}")
+            return {
+                'success': False,
+                'error': str(e),
+                'parent_url_id': parent_url_id,
+                'total_children': 0,
+                'status_breakdown': {},
+                'child_urls': []
+            }
 
     def update_url_metadata(self, url_id: str, title: Optional[str], description: Optional[str], 
                            refresh_interval_minutes: Optional[int], crawl_domain: Optional[int], 
