@@ -13,7 +13,7 @@ import hashlib
 import logging
 from typing import Dict, List, Optional, Any, Tuple
 from urllib.parse import urlparse, parse_qsl, urlencode
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # Playwright imports (no fallback as per requirements)
@@ -42,9 +42,9 @@ class URLSnapshotService:
     def __init__(self, postgres_manager, config, url_manager=None):
         """Initialize snapshot service with database and configuration."""
         self.postgres_manager = postgres_manager
-        self.document_source_manager = DocumentSourceManager(postgres_manager) if postgres_manager else None
-        self.url_manager = url_manager
         self.config = config
+        self.document_source_manager = DocumentSourceManager(postgres_manager, config=config) if postgres_manager else None
+        self.url_manager = url_manager
         self.snapshot_dir = getattr(config, 'SNAPSHOT_DIR', os.path.join('uploaded', 'snapshots'))
         
         # Default snapshot settings from config
@@ -245,7 +245,7 @@ class URLSnapshotService:
                 "dom_hash8": content_hash_value,
                 "query_hash8": self.query_string_hash(url),
                 "locale": locale,
-                "created_at": datetime.utcnow().isoformat() + "Z"
+                "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
             }
             
             with open(final_json_path, "w", encoding="utf-8") as f:
@@ -332,7 +332,7 @@ class URLSnapshotService:
                 "error": str(e)
             }
     
-    def store_snapshot_document(self, url_id: str, url: str, snapshot_result: Dict[str, Any]) -> Optional[str]:
+    def store_snapshot_document(self, url_id: str, url: str, snapshot_result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Store snapshot as a document record in PostgreSQL.
         
@@ -387,20 +387,23 @@ class URLSnapshotService:
             # Ensure a url_snapshots row exists linking this URL and the stored document.
             # This keeps snapshot identifiers out of human-facing titles while preserving
             # point-in-time linkage programmatically.
+            snapshot_id = None
             try:
                 with self.postgres_manager.get_connection() as conn:
                     with conn.cursor() as cursor:
                         cursor.execute(
-                            "INSERT INTO url_snapshots (id, url_id, document_id, created_at) VALUES (uuid_generate_v4(), %s, %s, %s)",
-                            (url_id, document_id, datetime.utcnow())
+                            "INSERT INTO url_snapshots (url_id, document_id, created_at) VALUES (%s, %s, %s) RETURNING id",
+                            (url_id, document_id, datetime.now(timezone.utc))
                         )
+                        result = cursor.fetchone()
+                        snapshot_id = str(result['id'])
                         conn.commit()
-                        logger.debug(f"Inserted url_snapshots row for url_id={url_id} document_id={document_id}")
+                        logger.debug(f"Inserted url_snapshots row snapshot_id={snapshot_id} for url_id={url_id} document_id={document_id}")
             except Exception:
                 # If insertion fails (for example, extension not present or row exists), log and continue.
                 logger.exception("Failed to insert url_snapshots linkage (non-fatal)")
 
-            return document_id
+            return {"document_id": document_id, "snapshot_id": snapshot_id}
             
         except Exception as e:
             logger.error(f"Failed to store snapshot document for URL {url_id}: {e}")
@@ -471,7 +474,7 @@ class URLSnapshotService:
                         UPDATE documents 
                         SET created_at = %s 
                         WHERE id = %s
-                    """, (datetime.utcnow(), document_id))
+                    """, (datetime.now(timezone.utc), document_id))
                     conn.commit()
                     
                     logger.info(f"Updated timestamp for document {document_id}")
@@ -572,7 +575,7 @@ class URLSnapshotService:
             
             # Apply retention day policy (0 = unlimited)
             if retention_days > 0:
-                cutoff_date = datetime.utcnow() - timedelta(days=retention_days)
+                cutoff_date = datetime.now(timezone.utc) - timedelta(days=retention_days)
                 for doc in snapshot_docs:
                     doc_created = datetime.fromisoformat(doc["created_at"].replace("Z", "+00:00"))
                     if doc_created < cutoff_date:

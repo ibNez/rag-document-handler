@@ -9,6 +9,7 @@ import logging
 from typing import Dict, Any, Optional, List, Protocol
 from ingestion.utils.file_filters import should_ignore_file
 from rag_manager.core.models import DocumentMetadata
+from rag_manager.core.config import Config
 from rag_manager.data.document_data import DocumentDataManager
 
 logger = logging.getLogger(__name__)
@@ -29,15 +30,17 @@ class DocumentSourceManager:
     and delegates all data operations to DocumentDataManager.
     """
     
-    def __init__(self, postgres_manager, vector_store: Optional[VectorStore] = None):
+    def __init__(self, postgres_manager, vector_store: Optional[VectorStore] = None, config: Optional[Config] = None):
         """
         Initialize with PostgreSQL manager and optional vector store.
         
         Args:
             postgres_manager: PostgreSQL connection manager
             vector_store: Optional vector storage interface
+            config: Optional configuration object
         """
-        self.document_data_manager = DocumentDataManager(postgres_manager)
+        self.config = config or Config()
+        self.document_data_manager = DocumentDataManager(postgres_manager, config=self.config)
         self.vector_store = vector_store
         logger.info("DocumentSourceManager initialized for ingestion operations")
     
@@ -234,7 +237,7 @@ class DocumentSourceManager:
                            page_end: Optional[int] = None, section_path: Optional[str] = None,
                            element_types: Optional[List[str]] = None, token_count: Optional[int] = None,
                            chunk_hash: Optional[str] = None, topics: Optional[str] = None,
-                           embedding_version: str = 'mxbai-embed-large') -> str:
+                           embedding_version: Optional[str] = None) -> str:
         """
         Store document chunk with ingestion orchestration.
         

@@ -10,6 +10,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from .base_data import BaseDataManager
+from ..core.config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -22,15 +23,17 @@ class DocumentDataManager(BaseDataManager):
     without any business logic or orchestration.
     """
     
-    def __init__(self, postgres_manager: Any, milvus_manager: Optional[Any] = None) -> None:
+    def __init__(self, postgres_manager: Any, milvus_manager: Optional[Any] = None, config: Optional[Config] = None) -> None:
         """
         Initialize document data manager.
         
         Args:
             postgres_manager: PostgreSQL connection manager
             milvus_manager: Optional Milvus vector store manager
+            config: Optional configuration object for settings like embedding model
         """
         super().__init__(postgres_manager, milvus_manager)
+        self.config = config or Config()
         logger.info("DocumentDataManager initialized for pure data operations")
     
     # =============================================================================
@@ -351,7 +354,7 @@ class DocumentDataManager(BaseDataManager):
                            page_end: Optional[int] = None, section_path: Optional[str] = None,
                            element_types: Optional[List[str]] = None, token_count: Optional[int] = None,
                            chunk_hash: Optional[str] = None, topics: Optional[str] = None,
-                           embedding_version: str = 'mxbai-embed-large') -> str:
+                           embedding_version: Optional[str] = None, snapshot_id: Optional[str] = None) -> str:
         """
         Store document chunk for retrieval.
         
@@ -367,6 +370,7 @@ class DocumentDataManager(BaseDataManager):
             chunk_hash: Content hash for deduplication
             topics: Comma-separated list of topics (optional)
             embedding_version: Version/model used for embeddings
+            snapshot_id: Reference to url_snapshots.id for point-in-time linkage (optional)
             
         Returns:
             The UUID of the created chunk
@@ -374,8 +378,8 @@ class DocumentDataManager(BaseDataManager):
         query = """
             INSERT INTO document_chunks (
                 document_id, chunk_text, chunk_ordinal, page_start, page_end,
-                section_path, element_types, token_count, chunk_hash, topics, embedding_version
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                section_path, element_types, token_count, chunk_hash, topics, embedding_version, snapshot_id
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (document_id, chunk_ordinal) 
             DO UPDATE SET 
                 chunk_text = EXCLUDED.chunk_text,
@@ -386,30 +390,36 @@ class DocumentDataManager(BaseDataManager):
                 token_count = EXCLUDED.token_count,
                 chunk_hash = EXCLUDED.chunk_hash,
                 topics = EXCLUDED.topics,
-                embedding_version = EXCLUDED.embedding_version
+                embedding_version = EXCLUDED.embedding_version,
+                snapshot_id = EXCLUDED.snapshot_id
             RETURNING id
         """
         
         try:
+            # Use config value if embedding_version not provided
+            if embedding_version is None:
+                embedding_version = self.config.EMBEDDING_MODEL
+                
             logger.info(
-                "Storing document chunk: document_id=%s chunk_ordinal=%s chunk_hash=%s text_len=%s topics=%s",
+                "Storing document chunk: document_id=%s chunk_ordinal=%s chunk_hash=%s text_len=%s topics=%s embedding_version=%s",
                 document_id,
                 chunk_ordinal,
                 (chunk_hash or '')[:32],
                 len(chunk_text or ''),
-                topics or 'None'
+                topics or 'None',
+                embedding_version
             )
 
             with self.get_connection() as conn:
                 with conn.cursor() as cur:
                     cur.execute(query, [
                         document_id, chunk_text, chunk_ordinal, page_start, page_end,
-                        section_path, element_types, token_count, chunk_hash, topics, embedding_version
+                        section_path, element_types, token_count, chunk_hash, topics, embedding_version, snapshot_id
                     ])
                     result = cur.fetchone()
                     conn.commit()
                     chunk_id = str(result['id'])
-                    logger.info("Stored document chunk id=%s for document_id=%s", chunk_id, document_id)
+                    logger.info("Stored document chunk id=%s for document_id=%s snapshot_id=%s embedding_version=%s", chunk_id, document_id, snapshot_id, embedding_version)
                     return chunk_id
 
         except Exception as e:
@@ -451,6 +461,7 @@ class DocumentDataManager(BaseDataManager):
                     token_count = meta.get('token_count') or (len(chunk_text.split()) if chunk_text else 0)
                     chunk_hash = meta.get('content_hash')
                     topics = meta.get('topics')
+                    snapshot_id = meta.get('snapshot_id')  # Extract snapshot_id from chunk metadata
 
                     chunk_id = self.store_document_chunk(
                         document_id=document_id,
@@ -462,7 +473,8 @@ class DocumentDataManager(BaseDataManager):
                         element_types=element_types,
                         token_count=token_count,
                         chunk_hash=chunk_hash,
-                        topics=topics
+                        topics=topics,
+                        snapshot_id=snapshot_id
                     )
 
                     # Annotate chunk metadata for downstream consumers

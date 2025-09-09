@@ -40,7 +40,7 @@ class URLOrchestrator:
         # Use DocumentSourceManager directly instead of wrapper
         if self.postgres_manager:
             from ingestion.document.source_manager import DocumentSourceManager
-            self.document_source_manager = DocumentSourceManager(self.postgres_manager)
+            self.document_source_manager = DocumentSourceManager(self.postgres_manager, config=self.config)
         else:
             self.document_source_manager = None
         self.urls: List[Dict[str, Any]] = []
@@ -148,6 +148,7 @@ class URLOrchestrator:
             snapshot_created = False
             snapshot_result = None
             doc_id = None
+            snapshot_id = None
             
             if self.snapshot_service:
                 try:
@@ -164,15 +165,17 @@ class URLOrchestrator:
                         
                         if self.snapshot_service.check_content_changed(url_id, content_hash):
                             # Store snapshot as document
-                            doc_id = self.snapshot_service.store_snapshot_document(
+                            store_result = self.snapshot_service.store_snapshot_document(
                                 url_id, url_string, snapshot_result
                             )
                             
-                            if doc_id:
-                                logger.info(f"Stored snapshot document {doc_id} for URL {url_id}")
+                            if store_result and store_result.get("document_id"):
+                                doc_id = store_result["document_id"]
+                                snapshot_id = store_result.get("snapshot_id")
+                                logger.info(f"Stored snapshot document {doc_id} with snapshot_id {snapshot_id} for URL {url_id}")
                                 snapshot_created = True
                                 if trace_logger:
-                                    trace_logger.info(f"Stored snapshot document_id={doc_id}")
+                                    trace_logger.info(f"Stored snapshot document_id={doc_id} snapshot_id={snapshot_id}")
                                     # Also attach a per-document trace logger that writes to the same file
                                     try:
                                         doc_trace_logger = logging.getLogger(f"ingest_trace_{doc_id}")
@@ -260,8 +263,15 @@ class URLOrchestrator:
                     # Use doc_id from successful snapshot creation
                     doc_identifier = doc_id
                     
+                    # Add snapshot_id to chunk metadata for proper temporal linking
+                    if snapshot_id:
+                        for chunk in chunks:
+                            if hasattr(chunk, 'metadata'):
+                                chunk.metadata['snapshot_id'] = snapshot_id
+                                logger.debug(f"Added snapshot_id {snapshot_id} to chunk metadata")
+                    
                     if trace_logger:
-                        trace_logger.info(f"Persisting {len(chunks)} chunks to Postgres for document_id={doc_identifier} via DocumentDataManager")
+                        trace_logger.info(f"Persisting {len(chunks)} chunks to Postgres for document_id={doc_identifier} snapshot_id={snapshot_id} via DocumentDataManager")
 
                     try:
                         stored = self.document_source_manager.document_data_manager.persist_chunks(doc_identifier, chunks, trace_logger=trace_logger)

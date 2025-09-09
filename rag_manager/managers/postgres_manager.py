@@ -147,25 +147,6 @@ class PostgreSQLManager:
             CONSTRAINT uk_email_chunks_position UNIQUE(email_id, chunk_index)
         );
 
-    -- Document chunks table for retrieval
-        CREATE TABLE IF NOT EXISTS document_chunks (
-            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-            document_id UUID NOT NULL,
-            chunk_text TEXT NOT NULL,
-            chunk_ordinal INTEGER NOT NULL,
-            page_start INTEGER NULL,
-            page_end INTEGER NULL,
-            section_path TEXT NULL,
-            element_types TEXT[] NULL,
-            token_count INTEGER,
-            chunk_hash VARCHAR(64),
-            topics TEXT NULL,
-            embedding_version VARCHAR(50) DEFAULT 'mxbai-embed-large',
-            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-            CONSTRAINT fk_document_chunks_document FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE,
-            CONSTRAINT uk_document_chunks_position UNIQUE(document_id, chunk_ordinal)
-        );
-        
         -- URLs table: used to store URL Parent information
         CREATE TABLE IF NOT EXISTS urls (
             id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -192,7 +173,7 @@ class PostgreSQLManager:
             updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
         );
 
-        -- URL snapshots table for point-in-time captures of crawled pages
+        -- URL snapshots table for point-in-time captures of crawled pages (MUST come before document_chunks)
         CREATE TABLE IF NOT EXISTS url_snapshots (
             id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
             document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
@@ -205,10 +186,33 @@ class PostgreSQLManager:
             updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
         );
 
+    -- Document chunks table for retrieval (MUST come after url_snapshots for FK reference)
+        CREATE TABLE IF NOT EXISTS document_chunks (
+            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+            document_id UUID NOT NULL,
+            chunk_text TEXT NOT NULL,
+            chunk_ordinal INTEGER NOT NULL,
+            page_start INTEGER NULL,
+            page_end INTEGER NULL,
+            section_path TEXT NULL,
+            element_types TEXT[] NULL,
+            token_count INTEGER,
+            chunk_hash VARCHAR(64),
+            topics TEXT NULL,
+            embedding_version VARCHAR(50) DEFAULT 'mxbai-embed-large',
+            snapshot_id UUID REFERENCES url_snapshots(id) ON DELETE SET NULL, -- NULL for file documents, populated for URL documents
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            CONSTRAINT fk_document_chunks_document FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE,
+            CONSTRAINT uk_document_chunks_position UNIQUE(document_id, chunk_ordinal)
+        );
+
         -- Indexes for snapshots
         CREATE INDEX IF NOT EXISTS idx_url_snapshots_document_id ON url_snapshots(document_id);
         CREATE INDEX IF NOT EXISTS idx_url_snapshots_url_id ON url_snapshots(url_id);
         CREATE INDEX IF NOT EXISTS idx_url_snapshots_snapshot_ts ON url_snapshots(snapshot_ts);
+        
+        -- Index for document chunks snapshot relationship
+        CREATE INDEX IF NOT EXISTS idx_document_chunks_snapshot_id ON document_chunks(snapshot_id);
         
         -- Email accounts table 
         CREATE TABLE IF NOT EXISTS email_accounts (

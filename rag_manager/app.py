@@ -184,7 +184,7 @@ class RAGKnowledgebaseManager:
         try:
             from ingestion.document.source_manager import DocumentSourceManager
             if self.postgres_manager:
-                self.document_source_manager = DocumentSourceManager(self.postgres_manager)
+                self.document_source_manager = DocumentSourceManager(self.postgres_manager, config=self.config)
                 logger.info("Document Source Manager initialized successfully")
             else:
                 logger.error("Cannot initialize document source manager: PostgreSQL manager not available")
