@@ -1214,7 +1214,7 @@ class WebRoutes:
             
             logger.info(f"Starting background refresh thread for URL ID: '{url_id_str}'")
             import threading
-            th = threading.Thread(target=self.rag_manager._process_url_background, args=(url_rec['id'],))
+            th = threading.Thread(target=self.rag_manager._process_url_background, args=(url_rec['url_id'],))
             th.daemon = True
             th.start()
             logger.info(f"Background refresh thread started successfully for URL: {url_rec.get('url', 'N/A')}")
