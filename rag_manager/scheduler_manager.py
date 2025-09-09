@@ -7,8 +7,8 @@ from rag_manager.core.models import URLProcessingStatus, EmailProcessingStatus
 logger = logging.getLogger(__name__)
 
 class SchedulerManager:
-    def __init__(self, url_manager, config, email_orchestrator=None):
-        self.url_manager = url_manager
+    def __init__(self, url_data_manager, config, email_orchestrator=None):
+        self.url_data_manager = url_data_manager
         self.config = config
         self.email_orchestrator = email_orchestrator
         self._scheduler_thread = None
@@ -52,8 +52,8 @@ class SchedulerManager:
         """Return current scheduler diagnostic info."""
         alive = bool(self._scheduler_thread and self._scheduler_thread.is_alive())
         try:
-            if self.url_manager and hasattr(self.url_manager, 'get_due_urls'):
-                due_preview = self.url_manager.get_due_urls()[:5]
+            if self.url_data_manager and hasattr(self.url_data_manager, 'get_due_urls'):
+                due_preview = self.url_data_manager.get_due_urls()[:5]
             else:
                 due_preview = []
         except Exception:
@@ -85,9 +85,9 @@ class SchedulerManager:
                 
                 # Check if URL manager is available before accessing it
                 due_urls = []
-                if self.url_manager and hasattr(self.url_manager, 'get_due_urls'):
+                if self.url_data_manager and hasattr(self.url_data_manager, 'get_due_urls'):
                     try:
-                        due_urls = self.url_manager.get_due_urls()
+                        due_urls = self.url_data_manager.get_due_urls()
                     except Exception as e:
                         logger.error(f"Failed to get due URLs: {e}")
                         due_urls = []
@@ -122,9 +122,9 @@ class SchedulerManager:
                     
                 # Get URL count safely
                 url_count = 0
-                if self.url_manager and hasattr(self.url_manager, 'url_data') and self.url_manager.url_data:
+                if self.url_data_manager:
                     try:
-                        url_count = self.url_manager.url_data.get_url_count()
+                        url_count = self.url_data_manager.get_url_count()
                     except Exception as e:
                         logger.debug(f"Failed to get URL count: {e}")
                         

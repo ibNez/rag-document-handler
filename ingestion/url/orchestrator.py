@@ -11,7 +11,7 @@ import os
 from datetime import datetime
 from typing import Dict, List, Optional, Any
 
-from .source_manager import URLSourceManager
+from rag_manager.data.url_data import URLDataManager
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +22,7 @@ class URLOrchestrator:
     def __init__(
         self,
         config,
-        url_manager: Optional[URLSourceManager] = None,
+        url_manager: Optional[URLDataManager] = None,
         processor: Optional[Any] = None,  # URL processor will be implemented later
         milvus_manager: Optional[Any] = None,  # For storing chunks in vector database
         snapshot_service: Optional[Any] = None,  # For creating PDF snapshots
@@ -38,11 +38,13 @@ class URLOrchestrator:
         self.postgres_manager = postgres_manager or (getattr(self.milvus_manager, 'postgres_manager', None) if self.milvus_manager else None)
         
         # Initialize document data manager directly for chunk persistence
-        if self.postgres_manager:
-            from rag_manager.data.document_data import DocumentDataManager
-            self.document_data_manager = DocumentDataManager(self.postgres_manager, config=self.config)
-        else:
-            self.document_data_manager = None
+        if not self.postgres_manager:
+            raise RuntimeError("URLOrchestrator requires postgres_manager to function. Cannot initialize without database connection.")
+        
+        from rag_manager.data.document_data import DocumentDataManager
+        from rag_manager.data.url_data import URLDataManager
+        self.document_data_manager = DocumentDataManager(self.postgres_manager, config=self.config)
+        self.url_data_manager = URLDataManager(self.postgres_manager)
         self.urls: List[Dict[str, Any]] = []
 
         # Initialize domain crawler for discovering new URLs with robots.txt support
@@ -62,7 +64,21 @@ class URLOrchestrator:
             return
         try:
             logger.debug("Refreshing URL configurations.")
-            self.urls = self.url_manager.get_all_urls_including_children()
+            # Get all URLs from data layer and add hierarchy information
+            all_urls = self.url_data_manager.get_all_urls()
+            
+            # Add hierarchy information
+            for url in all_urls:
+                if url.get('parent_url_id'):
+                    # Mark as child
+                    url['is_child'] = True
+                    url['hierarchy_level'] = 1  # Could be extended for deeper nesting
+                else:
+                    # Mark as parent
+                    url['is_child'] = False
+                    url['hierarchy_level'] = 0
+            
+            self.urls = all_urls
             logger.debug("URLs retrieved: %s", len(self.urls))
         except Exception as exc:  # pragma: no cover - defensive
             logger.error(f"Failed to load URLs: {exc}")
@@ -73,7 +89,7 @@ class URLOrchestrator:
             return []
         
         try:
-            due_urls = self.url_manager.get_due_urls()
+            due_urls = self.url_data_manager.get_due_urls()
             logger.debug(f"Found {len(due_urls)} URLs due for processing")
             return due_urls
         except Exception as exc:
@@ -86,7 +102,7 @@ class URLOrchestrator:
             return 0
         
         try:
-            return self.url_manager.url_data.get_url_count()
+            return self.url_data_manager.get_url_count()
         except Exception as exc:
             logger.error(f"Failed to get URL count: {exc}")
             return 0
@@ -142,7 +158,7 @@ class URLOrchestrator:
                 trace_logger = None
             
             # Mark URL as being processed
-            self.url_manager.set_refreshing(url_id, True)
+            self.url_data_manager.set_refreshing(url_id, True)
             
             # Create snapshot (always enabled)
             snapshot_created = False
@@ -189,7 +205,7 @@ class URLOrchestrator:
                                         pass
                                 
                                 # Update URL content hash
-                                self.url_manager.update_url_hash_status(
+                                self.url_data_manager.update_url_hash_status(
                                     url_id, content_hash, "snapshot_created"
                                 )
                                 
@@ -239,7 +255,7 @@ class URLOrchestrator:
                                     trace_logger.error(f"Failed to retrieve existing document ID: {e}")
                             
                             # Update URL content hash
-                            self.url_manager.update_url_hash_status(
+                            self.url_data_manager.update_url_hash_status(
                                 url_id, content_hash, "snapshot_exists"
                             )
                             snapshot_created = True
@@ -292,14 +308,6 @@ class URLOrchestrator:
                     elif not self.milvus_manager:
                         logger.warning(f"URL {url_id}: Extracted {len(chunks)} chunks but no MilvusManager available for storage")
 
-                    # Persist chunk rows to Postgres using DocumentDataManager directly
-                    if not self.document_data_manager:
-                        err = "No document_data_manager available on URLOrchestrator; cannot persist chunks"
-                        logger.error(err)
-                        if trace_logger:
-                            trace_logger.error(err)
-                        raise RuntimeError(err)
-
                     # Use doc_id from successful snapshot creation
                     doc_identifier = doc_id
                     
@@ -338,7 +346,7 @@ class URLOrchestrator:
             
             # Mark URL as processed
             refresh_interval = url_record.get('refresh_interval_minutes')
-            self.url_manager.mark_scraped(url_id, refresh_interval)
+            self.url_data_manager.mark_scraped(url_id, refresh_interval)
             if trace_logger:
                 try:
                     trace_logger.info(f"Marked URL {url_id} as scraped; refresh_interval={refresh_interval}")
@@ -391,7 +399,7 @@ class URLOrchestrator:
                     domain_crawl_result = {"success": False, "error": str(e)}
             
             # Mark URL as no longer being processed
-            self.url_manager.set_refreshing(url_id, False)
+            self.url_data_manager.set_refreshing(url_id, False)
             
             logger.info(f"Successfully processed URL {url_id}")
             return {
@@ -408,7 +416,7 @@ class URLOrchestrator:
             logger.error(f"Failed to process URL {url_id}: {exc}")
             try:
                 # Make sure to clear the refreshing flag on error
-                self.url_manager.set_refreshing(url_id, False)
+                self.url_data_manager.set_refreshing(url_id, False)
             except Exception:
                 pass  # Don't fail on cleanup failure
             

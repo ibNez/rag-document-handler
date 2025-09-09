@@ -786,7 +786,7 @@ class WebRoutes:
             # No in-memory status; fetch final state from DB for in-place UI update
             logger.debug(f"No active processing status, fetching URL record for ID: '{url_id_str}'")
             try:
-                rec = self.rag_manager.url_manager.url_data.get_url_by_id(url_id_str)
+                rec = self.rag_manager.url_data_manager.get_url_by_id(url_id_str)
                 if rec:
                     logger.debug(f"Found URL record for status update: {rec.get('url', 'N/A')}")
                     # Compute next_refresh similar to list view
@@ -933,7 +933,7 @@ class WebRoutes:
                 flash(f"Invalid URL: {e}", 'error')
                 return redirect(url_for('index'))
             
-            result = self.rag_manager.url_manager.add_url(url)
+            result = self.rag_manager.url_data_manager.add_url(url)
             if result['success']:
                 extracted_title = result.get('title', 'Unknown')
                 url_id = result.get('url_id')
@@ -985,7 +985,7 @@ class WebRoutes:
                 
             # Load the URL and any crawled pages
             logger.debug(f"Looking up URL for deletion with ID: '{url_id_str}'")
-            url_rec = self.rag_manager.url_manager.url_data.get_url_by_id(url_id_str)
+            url_rec = self.rag_manager.url_data_manager.get_url_by_id(url_id_str)
             if not url_rec:
                 logger.error(f"URL not found for deletion with ID: '{url_id_str}'")
                 flash('URL not found', 'error')
@@ -1004,7 +1004,9 @@ class WebRoutes:
             # If domain crawl, delete each page embeddings
             try:
                 logger.debug(f"Checking for crawled pages for URL ID: '{url_id_str}'")
-                pages = self.rag_manager.url_manager.get_pages_for_parent(url_id_str)
+                # Get child URLs as pages
+                child_urls = self.rag_manager.url_data_manager.get_child_urls(url_id_str)
+                pages = [child['url'] for child in child_urls if child.get('url')]
                 logger.debug(f"Found {len(pages)} pages to delete for URL ID: '{url_id_str}'")
                 for page_url in pages:
                     try:
@@ -1013,15 +1015,16 @@ class WebRoutes:
                         self.rag_manager.milvus_manager.delete_document(document_id=page_doc_id)
                     except Exception as de:
                         logger.warning(f"Failed to delete page embeddings for {page_url}: {de}")
-                # Remove page records
+                # Remove page records (delete all child URLs for the parent)
                 logger.debug(f"Deleting page records for URL ID: '{url_id_str}'")
-                self.rag_manager.url_manager.delete_pages_for_parent(url_id_str)
+                for child in child_urls:
+                    self.rag_manager.url_data_manager.delete_url(child['id'])
             except Exception as e:
                 logger.warning(f"Failed to clean up url_pages: {e}")
 
             # Finally remove the URL record
             logger.debug(f"Deleting URL record for ID: '{url_id_str}'")
-            result = self.rag_manager.url_manager.delete_url(url_id_str)
+            result = self.rag_manager.url_data_manager.delete_url(url_id_str)
             if result['success']:
                 logger.info(f"URL deletion completed successfully for ID: '{url_id_str}'")
                 flash('URL and related embeddings deleted successfully', 'success')
@@ -1051,7 +1054,7 @@ class WebRoutes:
                 return redirect(url_for('index'))
                 
             logger.info(f"Getting URL record for ID: {url_id_str}")
-            url_rec = self.rag_manager.url_manager.url_data.get_url_by_id(url_id_str)
+            url_rec = self.rag_manager.url_data_manager.get_url_by_id(url_id_str)
             logger.info(f"URL record retrieved: {url_rec is not None}")
             if not url_rec:
                 logger.warning(f"URL not found for ID: {url_id_str}")
@@ -1161,7 +1164,7 @@ class WebRoutes:
                 flash(f"Invalid input: {e}", 'error')
                 return redirect(url_for('index'))
             
-            result = self.rag_manager.url_manager.update_url_metadata(
+            result = self.rag_manager.url_data_manager.update_url_metadata(
                 url_id_str, title, description, refresh_interval_minutes,
                 crawl_domain_flag, ignore_robots_flag,
                 snapshot_retention_days, snapshot_max_snapshots
@@ -1192,7 +1195,7 @@ class WebRoutes:
                 return redirect(url_for('index'))
                 
             logger.debug(f"Looking up URL with ID: '{url_id_str}'")
-            url_rec = self.rag_manager.url_manager.url_data.get_url_by_id(url_id_str)
+            url_rec = self.rag_manager.url_data_manager.get_url_by_id(url_id_str)
             if not url_rec:
                 logger.error(f"URL not found for ID: '{url_id_str}'")
                 flash('URL not found', 'error')
@@ -1750,15 +1753,13 @@ class WebRoutes:
     def _get_enriched_urls(self) -> list:
         """Get URLs enriched with robots.txt information."""
         try:
-            # Check if URL manager is available
-            if not (hasattr(self.rag_manager, 'url_manager') and 
-                    self.rag_manager.url_manager and 
-                    hasattr(self.rag_manager.url_manager, 'url_data') and
-                    self.rag_manager.url_manager.url_data):
-                logger.debug("URL manager or url_data not available")
+            # Check if URL data manager is available
+            if not (hasattr(self.rag_manager, 'url_data_manager') and 
+                    self.rag_manager.url_data_manager):
+                logger.debug("URL data manager not available")
                 return []
                 
-            urls = self.rag_manager.url_manager.url_data.get_all_urls()
+            urls = self.rag_manager.url_data_manager.get_all_urls()
             enriched_urls = []
             for u in urls:
                 try:
@@ -1813,7 +1814,7 @@ class WebRoutes:
                     try:
                         url_id = u.get('url_id')
                         if url_id:
-                            child_stats = self.rag_manager.url_manager.get_child_url_stats(url_id)
+                            child_stats = self.rag_manager.url_data_manager.get_child_url_stats(url_id)
                             u['child_stats'] = child_stats
                             # Check if this URL has any children
                             u['has_children'] = child_stats['total_children'] > 0
