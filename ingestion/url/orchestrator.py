@@ -203,6 +203,46 @@ class URLOrchestrator:
                                 logger.warning(f"Failed to store snapshot document for URL {url_id}")
                         else:
                             logger.info(f"No content changes detected for URL {url_id}, skipping snapshot storage")
+                            
+                            # Get the most recent document ID for this URL since content hasn't changed
+                            try:
+                                snapshot_docs = self.snapshot_service._get_snapshot_documents(url_id)
+                                if snapshot_docs:
+                                    # Get the most recent document (already ordered by created_at DESC)
+                                    doc_id = snapshot_docs[0]["document_id"]
+                                    logger.info(f"Using existing document ID {doc_id} for URL {url_id} (no content changes)")
+                                    if trace_logger:
+                                        trace_logger.info(f"Retrieved existing document_id={doc_id} for unchanged content")
+                                    
+                                    # Also try to get the snapshot_id from url_snapshots table
+                                    try:
+                                        with self.snapshot_service.postgres_manager.get_connection() as conn:
+                                            with conn.cursor() as cursor:
+                                                cursor.execute("""
+                                                    SELECT id FROM url_snapshots 
+                                                    WHERE url_id = %s AND document_id = %s 
+                                                    ORDER BY created_at DESC LIMIT 1
+                                                """, (url_id, doc_id))
+                                                result = cursor.fetchone()
+                                                if result:
+                                                    snapshot_id = result[0]
+                                                    if trace_logger:
+                                                        trace_logger.info(f"Retrieved existing snapshot_id={snapshot_id} for document_id={doc_id}")
+                                    except Exception as e:
+                                        logger.warning(f"Could not retrieve snapshot_id for document {doc_id}: {e}")
+                                        
+                                else:
+                                    logger.warning(f"No existing snapshot documents found for URL {url_id}, but content unchanged")
+                            except Exception as e:
+                                logger.error(f"Failed to retrieve existing document ID for URL {url_id}: {e}")
+                                if trace_logger:
+                                    trace_logger.error(f"Failed to retrieve existing document ID: {e}")
+                            
+                            # Update URL content hash
+                            self.url_manager.update_url_hash_status(
+                                url_id, content_hash, "snapshot_exists"
+                            )
+                            snapshot_created = True
                     else:
                         logger.warning(f"Snapshot creation failed for URL {url_id}: {snapshot_result.get('error')}")
                         

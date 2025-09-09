@@ -576,21 +576,33 @@ class URLSnapshotService:
             if retention_days > 0:
                 cutoff_date = datetime.now(timezone.utc) - timedelta(days=retention_days)
                 for doc in snapshot_docs:
-                    doc_created = datetime.fromisoformat(doc["created_at"].replace("Z", "+00:00"))
+                    # Handle both string and datetime objects
+                    created_at = doc["created_at"]
+                    if isinstance(created_at, str):
+                        doc_created = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+                    else:
+                        doc_created = created_at  # Already a datetime object
+                    
                     if doc_created < cutoff_date:
                         delete_candidates.append(doc)
             
             # Apply max snapshots policy (keep most recent, 0 = unlimited)
             if max_snapshots > 0 and len(snapshot_docs) > max_snapshots:
                 # Sort by creation date (newest first)
-                sorted_docs = sorted(snapshot_docs, 
-                                   key=lambda x: x["created_at"], 
-                                   reverse=True)
+                # Handle both string and datetime objects in sorting
+                def get_sort_key(doc):
+                    created_at = doc["created_at"]
+                    if isinstance(created_at, str):
+                        return datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+                    else:
+                        return created_at  # Already a datetime object
+                
+                sorted_docs = sorted(snapshot_docs, key=get_sort_key, reverse=True)
                 # Add older snapshots beyond max to delete candidates
                 delete_candidates.extend(sorted_docs[max_snapshots:])
             
             # Remove duplicates
-            delete_candidates = list({doc["id"]: doc for doc in delete_candidates}.values())
+            delete_candidates = list({doc["document_id"]: doc for doc in delete_candidates}.values())
             
             # Delete snapshots
             for doc in delete_candidates:
@@ -609,20 +621,60 @@ class URLSnapshotService:
         except Exception as e:
             logger.error(f"Error cleaning up snapshots for URL {url_id}: {e}")
             return {"success": False, "error": str(e)}
+
+    def cleanup_all_snapshots(self, url_id: str) -> Dict[str, Any]:
+        """
+        Clean up ALL snapshots for a URL (used during URL deletion).
+        
+        Args:
+            url_id: URL ID to clean up all snapshots for
+            
+        Returns:
+            Dictionary with cleanup results
+        """
+        try:
+            # Get all snapshot documents for this URL
+            snapshot_docs = self._get_snapshot_documents(url_id)
+            
+            deleted_count = 0
+            
+            # Delete all snapshots
+            for doc in snapshot_docs:
+                if self._delete_snapshot(doc):
+                    deleted_count += 1
+            
+            # Also clean up url_snapshots table entries
+            try:
+                with self.postgres_manager.get_connection() as conn:
+                    with conn.cursor() as cursor:
+                        cursor.execute("DELETE FROM url_snapshots WHERE url_id = %s", (url_id,))
+                        conn.commit()
+                        logger.debug(f"Deleted url_snapshots entries for URL {url_id}")
+            except Exception as e:
+                logger.warning(f"Failed to delete url_snapshots entries for URL {url_id}: {e}")
+            
+            logger.info(f"Cleaned up all {deleted_count} snapshots for URL {url_id}")
+            
+            return {"success": True, "deleted": deleted_count}
+            
+        except Exception as e:
+            logger.error(f"Error cleaning up all snapshots for URL {url_id}: {e}")
+            return {"success": False, "error": str(e)}
     
     def _get_snapshot_documents(self, url_id: str) -> List[Dict[str, Any]]:
-        """Get all snapshot documents for a URL."""
+        """Get all snapshot documents for a URL using url_snapshots table."""
         try:
             with self.postgres_manager.get_connection() as conn:
                 with conn.cursor() as cursor:
-                    # Find documents that are snapshots (contain URL ID in title or file_path)
+                    # Join with url_snapshots to get actual snapshots for this URL
                     cursor.execute("""
-                        SELECT id AS document_id, title, file_path, created_at, file_size
-                        FROM documents 
-                        WHERE document_type = 'url' 
-                        AND (title LIKE %s OR file_path LIKE %s)
-                        ORDER BY created_at DESC
-                    """, (f"%{url_id}%", f"%{url_id}%"))
+                        SELECT d.id AS document_id, d.title, d.file_path, d.created_at, d.file_size,
+                               us.id as snapshot_id
+                        FROM documents d 
+                        JOIN url_snapshots us ON d.id = us.document_id
+                        WHERE us.url_id = %s
+                        ORDER BY d.created_at DESC
+                    """, (url_id,))
                     
                     rows = [dict(row) for row in cursor.fetchall()]
                     return rows
@@ -646,11 +698,11 @@ class URLSnapshotService:
             # Delete PDF file
             if file_path and os.path.exists(file_path):
                 os.remove(file_path)
-            
-            # Delete JSON sidecar if it exists
-            json_path = file_path.replace(".pdf", ".json")
-            if os.path.exists(json_path):
-                os.remove(json_path)
+                
+                # Delete JSON sidecar if it exists
+                json_path = file_path.replace(".pdf", ".json")
+                if os.path.exists(json_path):
+                    os.remove(json_path)
             
             logger.debug(f"Deleted snapshot document {doc_id} and files")
             return True
