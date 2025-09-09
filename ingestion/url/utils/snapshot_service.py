@@ -16,7 +16,6 @@ from urllib.parse import urlparse, parse_qsl, urlencode
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-# Playwright imports (no fallback as per requirements)
 from playwright.async_api import async_playwright
 
 from ingestion.document.source_manager import DocumentSourceManager

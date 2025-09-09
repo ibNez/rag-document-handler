@@ -1786,6 +1786,29 @@ class WebRoutes:
                 except Exception:
                     u['chunk_count'] = 0
                 
+                # Add pages count for URL (number of documents/pages)
+                try:
+                    url_id = u.get('url_id')
+                    if url_id:
+                        u['pages'] = self.stats_provider.url_panel.get_url_pages_count(url_id)
+                    else:
+                        u['pages'] = 0
+                except Exception:
+                    u['pages'] = 0
+                
+                # Add snapshot size and count information
+                try:
+                    url_id = u.get('url_id')
+                    if url_id:
+                        u['snapshot_total_size'] = self.stats_provider.url_panel.get_url_snapshot_size(url_id)
+                        u['snapshot_count'] = self.stats_provider.url_panel.get_url_snapshot_count(url_id)
+                    else:
+                        u['snapshot_total_size'] = "—"
+                        u['snapshot_count'] = 0
+                except Exception: 
+                    u['snapshot_total_size'] = "—"
+                    u['snapshot_count'] = 0
+                
                 # Add child URL statistics for parent URLs
                     try:
                         url_id = u.get('url_id')

@@ -89,7 +89,7 @@ class SchedulerManager:
                     try:
                         due_urls = self.url_manager.get_due_urls()
                     except Exception as e:
-                        logger.debug(f"Failed to get due URLs: {e}")
+                        logger.error(f"Failed to get due URLs: {e}")
                         due_urls = []
                         
                 due_accounts = []
@@ -153,8 +153,8 @@ class SchedulerManager:
                     if urls_to_process >= url_slots_available:
                         logger.debug(f"URL concurrency limit reached ({self.max_concurrent_urls}), skipping remaining URLs")
                         break
-                    # Expect canonical 'url_id' from the URL manager
-                    url_id = rec.get('url_id')
+                    # Use 'id' column from the database, not 'url_id'
+                    url_id = rec.get('id')
                     if url_id is None or url_id in self.url_processing_status:
                         continue
                     self.url_processing_status[url_id] = URLProcessingStatus(url=rec.get('url'))
