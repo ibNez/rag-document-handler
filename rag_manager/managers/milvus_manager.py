@@ -913,31 +913,31 @@ class MilvusManager:
                         parsed = urlparse(url)
                         domain = parsed.netloc
                         
-                        cursor = self.postgres_manager.get_cursor()
-                        cursor.execute("""
-                            SELECT id AS document_id FROM documents 
-                            WHERE document_type = 'url' 
-                            AND file_path LIKE %s
-                        """, (f'%{domain}%',))
-                        
-                        rows = cursor.fetchall()
-                        document_ids = [row[0] for row in rows]
-                        
-                        # Also check by URL ID in filename if available
-                        if url_id:
-                            cursor.execute("""
-                                SELECT id AS document_id FROM documents 
-                                WHERE document_type = 'url' 
-                                AND (file_path LIKE %s OR filename LIKE %s)
-                            """, (f'%{url_id}%', f'%{url_id}%'))
-                            
-                            id_rows = cursor.fetchall()
-                            url_id_docs = [row[0] for row in id_rows]
-                            document_ids.extend(url_id_docs)
-                            
-                        # Remove duplicates
-                        document_ids = list(set(document_ids))
-                        cursor.close()
+                        with self.postgres_manager.get_connection() as conn:
+                            with conn.cursor() as cursor:
+                                cursor.execute("""
+                                    SELECT id AS document_id FROM documents 
+                                    WHERE document_type = 'url' 
+                                    AND file_path LIKE %s
+                                """, (f'%{domain}%',))
+                                
+                                rows = cursor.fetchall()
+                                document_ids = [row['document_id'] for row in rows]
+                                
+                                # Also check by URL ID in filename if available
+                                if url_id:
+                                    cursor.execute("""
+                                        SELECT id AS document_id FROM documents 
+                                        WHERE document_type = 'url' 
+                                        AND (file_path LIKE %s OR filename LIKE %s)
+                                    """, (f'%{url_id}%', f'%{url_id}%'))
+                                    
+                                    id_rows = cursor.fetchall()
+                                    url_id_docs = [row['document_id'] for row in id_rows]
+                                    document_ids.extend(url_id_docs)
+                                    
+                                # Remove duplicates
+                                document_ids = list(set(document_ids))
                         
                 except Exception as e:
                     logger.warning(f"Failed to query documents for URL {url}: {e}")
