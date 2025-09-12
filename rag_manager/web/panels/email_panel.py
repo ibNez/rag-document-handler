@@ -86,14 +86,14 @@ class EmailPanelStats:
             with self.rag_manager.postgres_manager.pool.connection() as conn:
                 with conn.cursor() as cur:
                     cur.execute("""
-                        SELECT COUNT(DISTINCT message_id) 
+                        SELECT COUNT(DISTINCT message_id) as count
                         FROM emails 
                         WHERE attachments IS NOT NULL 
                         AND attachments != 'null' 
                         AND attachments != '[]'
                     """)
                     result = cur.fetchone()
-                    return result[0] if result else 0
+                    return result['count'] if result else 0
                     
         except Exception as e:
             logger.debug(f"Error getting emails with attachments count: {e}")

@@ -59,6 +59,9 @@ class URLPanelStats:
             # Calculate total snapshot disk usage
             snapshot_size_human = self._calculate_snapshot_disk_usage()
             
+            # Calculate total number of snapshots
+            total_snapshots = self._calculate_total_snapshots()
+            
             return {
                 'total': total_urls,
                 'sub_urls': sub_urls,
@@ -68,7 +71,8 @@ class URLPanelStats:
                 'due_now': due_now,
                 'due_now_status': due_now_status,
                 'pages_processed': total_pages_processed,
-                'snapshot_disk_usage': snapshot_size_human
+                'snapshot_disk_usage': snapshot_size_human,
+                'total_snapshots': total_snapshots
             }
             
         except Exception as e:
@@ -145,6 +149,40 @@ class URLPanelStats:
         except Exception as e:
             logger.error(f"Failed to calculate snapshot disk usage: {e}")
             return "0 B"
+    
+    def _calculate_total_snapshots(self) -> int:
+        """
+        Calculate total number of snapshots across all domains by counting JSON/PDF pairs.
+        
+        Returns:
+            Total number of snapshots (file count divided by 2 for JSON/PDF pairs)
+        """
+        try:
+            # Get snapshot directory from config
+            snapshot_dir = getattr(self.rag_manager.config, 'SNAPSHOT_DIR', 
+                                 os.path.join('uploaded', 'snapshots'))
+            snapshot_path = Path(snapshot_dir)
+            
+            if not snapshot_path.exists():
+                return 0
+            
+            total_files = 0
+            
+            # Walk through all files in snapshot directory
+            for root, dirs, files in os.walk(snapshot_path):
+                for file in files:
+                    # Skip system files like .DS_Store
+                    if not file.startswith('.'):
+                        total_files += 1
+            
+            # Divide by 2 since each snapshot has a JSON and PDF pair
+            total_snapshots = total_files // 2
+            
+            return total_snapshots
+            
+        except Exception as e:
+            logger.error(f"Failed to calculate total snapshots: {e}")
+            return 0
     
     def get_url_pages_count(self, url_id: str) -> int:
         """
@@ -292,7 +330,7 @@ class URLPanelStats:
             if not refresh_interval or refresh_interval <= 0:
                 return False
                 
-            last_scraped = url.get('last_scraped')
+            last_scraped = url.get('last_crawled')  # Fixed: use last_crawled from database
             
             # If never scraped but has refresh interval, it's due
             if not last_scraped:
@@ -315,10 +353,10 @@ class URLPanelStats:
     
     def _get_sub_urls_count(self) -> int:
         """
-        Get the count of sub-URLs (child URLs) directly from the database.
+        Get the count of sub-pages (child documents) directly from the database.
         
         Returns:
-            Number of URLs that have a parent_url_id (i.e., child URLs discovered via domain crawling)
+            Number of documents that have a parent_url_id (i.e., sub-pages discovered via domain crawling)
         """
         try:
             if not self.rag_manager.url_data_manager:
@@ -331,14 +369,14 @@ class URLPanelStats:
                 
             query = """
                 SELECT COUNT(*) as count 
-                FROM urls 
-                WHERE status = 'active' AND parent_url_id IS NOT NULL
+                FROM documents 
+                WHERE parent_url_id IS NOT NULL
             """
             result = url_data_manager.execute_query(query, fetch_one=True)
             return int(result['count'] or 0) if result else 0
                     
         except Exception as e:
-            logger.error(f"Failed to get sub-URLs count: {e}")
+            logger.error(f"Failed to get sub-pages count: {e}")
             return 0
     
     def _get_due_now_threshold_status(self, due_now: int) -> str:
@@ -389,5 +427,6 @@ class URLPanelStats:
             'due_now': 0,
             'due_now_status': 'success',
             'pages_processed': 0,
-            'snapshot_disk_usage': '0 B'
+            'snapshot_disk_usage': '0 B',
+            'total_snapshots': 0
         }

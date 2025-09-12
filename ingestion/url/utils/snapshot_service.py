@@ -18,7 +18,7 @@ from pathlib import Path
 
 from playwright.async_api import async_playwright
 
-from ingestion.document.source_manager import DocumentSourceManager
+from rag_manager.data.document_data import DocumentDataManager
 from playwright.sync_api import sync_playwright, Browser, Page, Response
 
 logger = logging.getLogger(__name__)
@@ -38,12 +38,13 @@ class URLSnapshotService:
     snapshots/<domain>/<path_slug>/<timestampZ>__q-<qs8>__v-<variant>__c-<c8>.pdf
     """
     
-    def __init__(self, postgres_manager, config, url_manager=None):
+    def __init__(self, postgres_manager, config, url_manager=None, milvus_manager=None):
         """Initialize snapshot service with database and configuration."""
         self.postgres_manager = postgres_manager
         self.config = config
-        self.document_source_manager = DocumentSourceManager(postgres_manager, config=config) if postgres_manager else None
+        self.document_data_manager = DocumentDataManager(postgres_manager, config=config) if postgres_manager else None
         self.url_manager = url_manager
+        self.milvus_manager = milvus_manager  # Add milvus_manager for embedding operations
         self.snapshot_dir = getattr(config, 'SNAPSHOT_DIR', os.path.join('uploaded', 'snapshots'))
         
         # Default snapshot settings from config
@@ -106,39 +107,23 @@ class URLSnapshotService:
     
     def build_snapshot_paths(self, url: str, variant_tokens: List[str]) -> Tuple[str, str]:
         """
-        Build directory path and filename stem for snapshot.
-        
+        Build directory path and filename stem for snapshot using canonical folder logic.
         Returns:
             Tuple of (directory_path, filename_stem)
         """
-        parsed = urlparse(url)
-        
-        # Get domain (punycode normalized for international domains)
-        domain = "unknown"
-        if parsed.hostname:
-            try:
-                domain = parsed.hostname.encode("idna").decode("ascii")
-            except Exception:
-                domain = parsed.hostname.lower()
-        
-        # Create path slug from URL path
-        path_slug = self.slugify(parsed.path or "/")
-        
+        from rag_manager.data.url_data import URLDataManager
+        # Use canonical folder logic for directory
+        directory = URLDataManager.get_snapshot_folder_for_url(url, base_dir=self.snapshot_dir)
         # Build filename components
         timestamp = self.timestamp_utc()
         query_hash = self.query_string_hash(url)
         variant = "_".join(variant_tokens)
-        
-        # Build directory and filename stem
-        directory = os.path.join(self.snapshot_dir, domain, path_slug)
         filename_stem = f"{timestamp}__q-{query_hash}__v-{variant}"
-        
         # Ensure directory exists
         os.makedirs(directory, exist_ok=True)
-        
         return directory, filename_stem
     
-    async def create_snapshot(self, url_id: str, url: str, 
+    async def create_snapshot_files(self, url_id: str, url: str, 
                        viewport: Optional[Tuple[int, int]] = None,
                        locale: Optional[str] = None,
                        pdf_format: Optional[str] = None,
@@ -214,13 +199,10 @@ class URLSnapshotService:
                 return {
                     "success": True,
                     "duplicate": True,
-                    "pdf_path": existing_snapshot["file_path"],
-                    "json_path": existing_snapshot["json_path"],
-                    "file_size": existing_snapshot["file_size"],
-                    "content_hash": content_hash_value,
-                    "final_url": final_url,
-                    "http_status": http_status,
-                    "message": "Content unchanged - reusing existing snapshot"
+                    "file_path": os.path.dirname(existing_snapshot["file_path"]),
+                    "pdf_file": os.path.basename(existing_snapshot["file_path"]),
+                    "json_file": os.path.basename(existing_snapshot["json_path"]),
+                    "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
                 }
             
             # Build final filenames with content hash
@@ -257,13 +239,10 @@ class URLSnapshotService:
             
             return {
                 "success": True,
-                "pdf_path": final_pdf_path,
-                "json_path": final_json_path,
-                "file_size": file_size,
-                "content_hash": content_hash_value,
-                "final_url": final_url,
-                "http_status": http_status,
-                "metadata": metadata
+                "file_path": os.path.dirname(final_pdf_path),
+                "pdf_file": os.path.basename(final_pdf_path),
+                "json_file": os.path.basename(final_json_path),
+                "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
             }
             
         except Exception as e:
@@ -331,81 +310,41 @@ class URLSnapshotService:
                 "error": str(e)
             }
     
-    def store_snapshot_document(self, url_id: str, url: str, snapshot_result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+
+
+    def _find_existing_document(self, url_id: str, url: str) -> Optional[Dict[str, Any]]:
         """
-        Store snapshot as a document record in PostgreSQL.
+        Find existing document in Postgres for this URL.
         
         Args:
-            url_id: Original URL ID
-            url: Original URL
-            snapshot_result: Result from create_snapshot()
+            url_id: Parent URL ID
+            url: Current URL being processed
             
         Returns:
-            Document ID if successful, None otherwise
+            Dictionary with document info if found, None otherwise
         """
-        if not snapshot_result.get("success"):
-            logger.error(f"Cannot store document for failed snapshot: {snapshot_result}")
-            return None
-        
         try:
-            # Extract metadata
-            pdf_path = snapshot_result["pdf_path"]
-            file_size = snapshot_result["file_size"]
-            metadata = snapshot_result["metadata"]
-            
-            # Create descriptive title for the snapshot
-            timestamp = metadata["timestamp_utc"]
-            parsed_url = urlparse(url)
-            domain = parsed_url.hostname or "unknown"
-            
-            # Use the original URL title or generate one
-            url_record = None
-            if self.url_manager and hasattr(self.url_manager, 'url_data') and self.url_manager.url_data:
-                url_record = self.url_manager.url_data.get_url_by_id(url_id)
-            original_title = url_record.get("title", domain) if url_record else domain
-            
-            # Snapshot linkage is authoritative and stored in url_snapshots table.
-            snapshot_title = f"{original_title}"
-            filename = os.path.basename(pdf_path)  # Extract just the PDF filename
-            
-            # Store in documents table
-            if self.document_source_manager:
-                document_id = self.document_source_manager.store_document(
-                    file_path=pdf_path,
-                    filename=filename,
-                    title=snapshot_title,
-                    content_type="text/html",  # Content type remains HTML as per spec
-                    file_size=file_size,
-                    document_type="url"
-                )
-                logger.info(f"Stored snapshot document {document_id} for URL {url_id}")
-            else:
-                logger.error("Document source manager not available - cannot store snapshot document")
-                return None
-
-            # Ensure a url_snapshots row exists linking this URL and the stored document.
-            # This keeps snapshot identifiers out of human-facing titles while preserving
-            # point-in-time linkage programmatically.
-            snapshot_id = None
-            try:
-                with self.postgres_manager.get_connection() as conn:
-                    with conn.cursor() as cursor:
-                        cursor.execute(
-                            "INSERT INTO url_snapshots (url_id, document_id, created_at) VALUES (%s, %s, %s) RETURNING id",
-                            (url_id, document_id, datetime.now(timezone.utc))
-                        )
-                        result = cursor.fetchone()
-                        snapshot_id = str(result['id'])
-                        conn.commit()
-                        logger.debug(f"Inserted url_snapshots row snapshot_id={snapshot_id} for url_id={url_id} document_id={document_id}")
-            except Exception:
-                # If insertion fails (for example, extension not present or row exists), log and continue.
-                logger.exception("Failed to insert url_snapshots linkage (non-fatal)")
-
-            return {"document_id": document_id, "snapshot_id": snapshot_id}
+            # Look for documents with same parent_url_id and file_path (URL)
+            with self.postgres_manager.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        SELECT d.id as document_id 
+                        FROM documents d
+                        WHERE d.parent_url_id = %s
+                        AND d.document_type = 'url'
+                        AND d.file_path = %s
+                        ORDER BY d.created_at DESC
+                        LIMIT 1
+                    """, (url_id, url))
+                    
+                    result = cursor.fetchone()
+                    if result:
+                        return dict(result)
+                    
+            return None
             
         except Exception as e:
-            logger.error(f"Failed to store snapshot document for URL {url_id}: {e}")
+            logger.error(f"Error finding existing document for URL {url_id}: {e}")
             return None
     
     def find_existing_snapshot_with_hash(self, url: str, content_hash: str) -> Optional[Dict[str, Any]]:
@@ -519,97 +458,139 @@ class URLSnapshotService:
             logger.error(f"Error checking content change for URL {url_id}: {e}")
             return True  # Err on the side of creating snapshot
     
-    def cleanup_old_snapshots(self, url_id: str) -> Dict[str, Any]:
+    def cleanup_old_snapshot_files(self, url: str, retention_days: int = 0, max_snapshots: int = 0) -> Dict[str, Any]:
         """
-        Clean up old snapshots based on retention policies.
-        
+        Cleanup snapshots to maintain retention requirements for a specific URL.
+
         Args:
-            url_id: URL ID to clean up snapshots for
+            url: URL string to clean up snapshots for
+            retention_days: Number of days to retain snapshots (0 = unlimited)
+            max_snapshots: Maximum number of snapshots to keep (0 = unlimited)
             
         Returns:
             Dictionary with cleanup results
         """
         try:
-            # Get URL configuration from database
-            url_record = None
-            retention_days = None
-            max_snapshots = None
-            
-            try:
-                with self.postgres_manager.get_connection() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute(
-                        "SELECT snapshot_retention_days, snapshot_max_snapshots FROM urls WHERE id = %s",
-                        (url_id,)
-                    )
-                    result = cursor.fetchone()
-                    if result:
-                        retention_days_raw = result.get("snapshot_retention_days")
-                        max_snapshots_raw = result.get("snapshot_max_snapshots")
-                        
-                        # Convert to integers, default to 0 if missing (0 = unlimited)
-                        try:
-                            retention_days = int(retention_days_raw) if retention_days_raw is not None else 0
-                            max_snapshots = int(max_snapshots_raw) if max_snapshots_raw is not None else 0
-                            
-                            logger.debug(f"Retrieved retention policy for URL {url_id}: {retention_days} days, {max_snapshots} max (0=unlimited)")
-                        except (ValueError, TypeError) as e:
-                            logger.error(f"Failed to convert retention values to integers: retention_days_raw={retention_days_raw}, max_snapshots_raw={max_snapshots_raw}, error={e}")
-                            return {"success": False, "error": f"Invalid retention values in database: {e}"}
-                    else:
-                        return {"success": False, "error": "URL not found"}
-            except Exception as e:
-                logger.error(f"Failed to retrieve URL retention policy for {url_id}: {e}")
-                return {"success": False, "error": f"Database query failed: {e}"}
+            logger.debug(f"Running cleanup for URL {url}: {retention_days} days, {max_snapshots} max (0=unlimited)")
             
             # If no retention policies set (both are 0), nothing to clean
             if retention_days == 0 and max_snapshots == 0:
                 return {"success": True, "message": "No retention policies set (unlimited)", "deleted": 0}
             
-            # Get all snapshot documents for this URL
-            snapshot_docs = self._get_snapshot_documents(url_id)
+            # Step 1: Lookup document record in documents table by file_path (which contains the URL)
+            url_document = self._get_document_for_url_by_filepath(url)
             
-            deleted_count = 0
+            if not url_document:
+                return {"success": True, "message": "No document found for URL", "deleted": 0}
+            
+            doc_id = url_document["document_id"]
+            logger.debug(f"Found document {doc_id} for URL {url}")
+            
+            # Step 2: Get all snapshots for this document_id
+            snapshots = self._get_snapshots_for_document(doc_id)
+            
+            if not snapshots:
+                return {"success": True, "message": "No snapshots found for URL", "deleted": 0}
+            
+            logger.debug(f"Found {len(snapshots)} snapshots for document {doc_id}")
+            
+            # Step 3: Evaluate snapshots against retention requirements
             delete_candidates = []
             
             # Apply retention day policy (0 = unlimited)
             if retention_days > 0:
                 cutoff_date = datetime.now(timezone.utc) - timedelta(days=retention_days)
-                for doc in snapshot_docs:
-                    # Handle both string and datetime objects
-                    created_at = doc["created_at"]
+                for snapshot in snapshots:
+                    created_at = snapshot["created_at"]
                     if isinstance(created_at, str):
-                        doc_created = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+                        snapshot_created = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
                     else:
-                        doc_created = created_at  # Already a datetime object
+                        snapshot_created = created_at
                     
-                    if doc_created < cutoff_date:
-                        delete_candidates.append(doc)
+                    if snapshot_created < cutoff_date:
+                        delete_candidates.append(snapshot)
             
             # Apply max snapshots policy (keep most recent, 0 = unlimited)
-            if max_snapshots > 0 and len(snapshot_docs) > max_snapshots:
-                # Sort by creation date (newest first)
-                # Handle both string and datetime objects in sorting
-                def get_sort_key(doc):
-                    created_at = doc["created_at"]
+            if max_snapshots > 0 and len(snapshots) > max_snapshots:
+                def get_sort_key(snapshot):
+                    created_at = snapshot["created_at"]
                     if isinstance(created_at, str):
                         return datetime.fromisoformat(created_at.replace("Z", "+00:00"))
                     else:
-                        return created_at  # Already a datetime object
+                        return created_at
                 
-                sorted_docs = sorted(snapshot_docs, key=get_sort_key, reverse=True)
+                sorted_snapshots = sorted(snapshots, key=get_sort_key, reverse=True)
                 # Add older snapshots beyond max to delete candidates
-                delete_candidates.extend(sorted_docs[max_snapshots:])
+                for snapshot in sorted_snapshots[max_snapshots:]:
+                    delete_candidates.append(snapshot)
             
-            # Remove duplicates
-            delete_candidates = list({doc["document_id"]: doc for doc in delete_candidates}.values())
+            # Remove duplicates based on snapshot_id
+            seen_snapshots = set()
+            unique_candidates = []
+            for candidate in delete_candidates:
+                snapshot_id = candidate["snapshot_id"]
+                if snapshot_id not in seen_snapshots:
+                    seen_snapshots.add(snapshot_id)
+                    unique_candidates.append(candidate)
             
-            # Delete snapshots
-            for doc in delete_candidates:
-                if self._delete_snapshot(doc):
-                    deleted_count += 1
+            logger.debug(f"Identified {len(unique_candidates)} snapshots for deletion")
             
-            logger.info(f"Cleaned up {deleted_count} old snapshots for URL {url_id}")
+            # Step 4: Delete each snapshot that needs to be culled
+            deleted_count = 0
+            for snapshot in unique_candidates:
+                snapshot_id = snapshot["snapshot_id"]
+                logger.debug(f"Deleting snapshot {snapshot_id}")
+                
+                # Track which cleanup steps completed for this snapshot
+                cleanup_steps_completed = []
+                
+                # Step 4a: Delete embeddings from Milvus documents collection by snapshot_id
+                try:
+                    if self._delete_snapshot_milvus_embeddings(snapshot_id):
+                        cleanup_steps_completed.append("milvus_embeddings")
+                        logger.debug(f"Deleted Milvus embeddings for snapshot {snapshot_id}")
+                    else:
+                        logger.warning(f"Failed to delete Milvus embeddings for snapshot {snapshot_id}")
+                except Exception as e:
+                    logger.error(f"Error deleting Milvus embeddings for snapshot {snapshot_id}: {e}")
+                
+                # Step 4b: Delete document_chunks belonging to the snapshot
+                try:
+                    if self._delete_snapshot_document_chunks(snapshot_id):
+                        cleanup_steps_completed.append("document_chunks")
+                        logger.debug(f"Deleted document chunks for snapshot {snapshot_id}")
+                    else:
+                        logger.warning(f"Failed to delete document chunks for snapshot {snapshot_id}")
+                except Exception as e:
+                    logger.error(f"Error deleting document chunks for snapshot {snapshot_id}: {e}")
+                
+                # Step 4c: Delete snapshot files from filesystem
+                try:
+                    if self._delete_snapshot_files_by_name(
+                        snapshot.get("file_path"), 
+                        snapshot.get("pdf_file"), 
+                        snapshot.get("json_file")
+                    ):
+                        cleanup_steps_completed.append("snapshot_files")
+                        logger.debug(f"Deleted snapshot files for snapshot {snapshot_id}")
+                    else:
+                        logger.warning(f"Failed to delete snapshot files for {snapshot_id}")
+                except Exception as e:
+                    logger.error(f"Error deleting snapshot files for snapshot {snapshot_id}: {e}")
+                
+                # Step 4d: Delete snapshot record from url_snapshots table (ALWAYS LAST)
+                try:
+                    if self._delete_snapshot_record_by_id(snapshot_id):
+                        cleanup_steps_completed.append("snapshot_record")
+                        deleted_count += 1
+                        logger.debug(f"Successfully deleted snapshot record {snapshot_id}")
+                        logger.info(f"Completed cleanup for snapshot {snapshot_id}: {', '.join(cleanup_steps_completed)}")
+                    else:
+                        logger.error(f"Failed to delete snapshot record {snapshot_id} - snapshot will be retried next cycle")
+                except Exception as e:
+                    logger.error(f"Error deleting snapshot record {snapshot_id}: {e} - snapshot will be retried next cycle")
+            
+            logger.info(f"Cleaned up {deleted_count} old snapshots for URL {url}")
             
             return {
                 "success": True,
@@ -619,94 +600,341 @@ class URLSnapshotService:
             }
             
         except Exception as e:
-            logger.error(f"Error cleaning up snapshots for URL {url_id}: {e}")
-            return {"success": False, "error": str(e)}
+            logger.error(f"Error cleaning up snapshots for URL {url}: {e}")
+            raise
 
-    def cleanup_all_snapshots(self, url_id: str) -> Dict[str, Any]:
+    def _get_documents_for_url(self, url_id: str) -> List[Dict[str, Any]]:
         """
-        Clean up ALL snapshots for a URL (used during URL deletion).
+        Get all documents for a URL (where parent_url_id = url_id).
         
         Args:
-            url_id: URL ID to clean up all snapshots for
+            url_id: URL ID to get documents for
             
         Returns:
-            Dictionary with cleanup results
+            List of document records with document_id
         """
-        try:
-            # Get all snapshot documents for this URL
-            snapshot_docs = self._get_snapshot_documents(url_id)
-            
-            deleted_count = 0
-            
-            # Delete all snapshots
-            for doc in snapshot_docs:
-                if self._delete_snapshot(doc):
-                    deleted_count += 1
-            
-            # Also clean up url_snapshots table entries
-            try:
-                with self.postgres_manager.get_connection() as conn:
-                    with conn.cursor() as cursor:
-                        cursor.execute("DELETE FROM url_snapshots WHERE url_id = %s", (url_id,))
-                        conn.commit()
-                        logger.debug(f"Deleted url_snapshots entries for URL {url_id}")
-            except Exception as e:
-                logger.warning(f"Failed to delete url_snapshots entries for URL {url_id}: {e}")
-            
-            logger.info(f"Cleaned up all {deleted_count} snapshots for URL {url_id}")
-            
-            return {"success": True, "deleted": deleted_count}
-            
-        except Exception as e:
-            logger.error(f"Error cleaning up all snapshots for URL {url_id}: {e}")
-            return {"success": False, "error": str(e)}
-    
-    def _get_snapshot_documents(self, url_id: str) -> List[Dict[str, Any]]:
-        """Get all snapshot documents for a URL using url_snapshots table."""
         try:
             with self.postgres_manager.get_connection() as conn:
                 with conn.cursor() as cursor:
-                    # Join with url_snapshots to get actual snapshots for this URL
                     cursor.execute("""
-                        SELECT d.id AS document_id, d.title, d.file_path, d.created_at, d.file_size,
-                               us.id as snapshot_id
-                        FROM documents d 
+                        SELECT id AS document_id
+                        FROM documents 
+                        WHERE parent_url_id = %s
+                        ORDER BY created_at DESC
+                    """, (url_id,))
+                    
+                    return [dict(row) for row in cursor.fetchall()]
+                    
+        except Exception as e:
+            logger.error(f"Error getting documents for URL {url_id}: {e}")
+            raise
+
+    def _get_document_for_url_by_filepath(self, url: str) -> Optional[Dict[str, Any]]:
+        """
+        Get the document for a URL by file_path (where file_path = url).
+        This is used for discovered URLs that don't have their own url_id.
+        
+        Args:
+            url: URL string to get document for
+            
+        Returns:
+            Document record with document_id, or None if not found
+        """
+        try:
+            with self.postgres_manager.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        SELECT id AS document_id
+                        FROM documents 
+                        WHERE file_path = %s AND document_type = 'url'
+                        ORDER BY created_at DESC
+                        LIMIT 1
+                    """, (url,))
+                    
+                    result = cursor.fetchone()
+                    return dict(result) if result else None
+                    
+        except Exception as e:
+            logger.error(f"Error getting document for URL {url}: {e}")
+            raise
+
+    def _get_snapshots_for_document(self, document_id: str) -> List[Dict[str, Any]]:
+        """
+        Get all snapshots for a document.
+        
+        Args:
+            document_id: Document ID to get snapshots for
+            
+        Returns:
+            List of snapshot records with file paths
+        """
+        try:
+            with self.postgres_manager.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        SELECT id AS snapshot_id, url_id, document_id, 
+                               file_path, pdf_file, json_file, created_at
+                        FROM url_snapshots 
+                        WHERE document_id = %s
+                        ORDER BY created_at DESC
+                    """, (document_id,))
+                    
+                    return [dict(row) for row in cursor.fetchall()]
+                    
+        except Exception as e:
+            logger.error(f"Error getting snapshots for document {document_id}: {e}")
+            raise
+
+    def _delete_document_record(self, document_id: str) -> bool:
+        """
+        Delete a document record from documents table.
+        
+        Args:
+            document_id: Document ID to delete
+            
+        Returns:
+            True if deleted successfully
+        """
+        try:
+            with self.postgres_manager.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("DELETE FROM documents WHERE id = %s", (document_id,))
+                    conn.commit()
+                    return cursor.rowcount > 0
+                    
+        except Exception as e:
+            logger.error(f"Error deleting document record {document_id}: {e}")
+            raise
+
+    def _get_snapshot_documents(self, url_id: str) -> List[Dict[str, Any]]:
+        """
+        Get all snapshot documents for a URL with their snapshot information.
+        This combines document and snapshot data for cleanup operations with minimal fields.
+        
+        Args:
+            url_id: URL ID to get snapshot documents for
+            
+        Returns:
+            List of combined document/snapshot records with only essential fields
+        """
+        try:
+            with self.postgres_manager.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        SELECT 
+                            d.id AS document_id,
+                            d.file_path,
+                            d.created_at,
+                            us.id AS snapshot_id,
+                            us.file_path AS snapshot_file_path,
+                            us.pdf_file,
+                            us.json_file,
+                            us.created_at AS snapshot_created_at
+                        FROM documents d
                         JOIN url_snapshots us ON d.id = us.document_id
-                        WHERE us.url_id = %s
+                        WHERE d.parent_url_id = %s
                         ORDER BY d.created_at DESC
                     """, (url_id,))
                     
-                    rows = [dict(row) for row in cursor.fetchall()]
-                    return rows
+                    return [dict(row) for row in cursor.fetchall()]
                     
         except Exception as e:
             logger.error(f"Error getting snapshot documents for URL {url_id}: {e}")
-            return []
-    
-    def _delete_snapshot(self, doc: Dict[str, Any]) -> bool:
-        """Delete a snapshot document and its files."""
-        try:
-            doc_id = doc.get("document_id")
-            file_path = doc.get("file_path")
+            raise
+
+    def find_orphaned_files(self, url_id: str) -> List[str]:
+        """
+        Find orphaned snapshot files for a URL (files that exist but have no database records).
+        
+        Args:
+            url_id: URL ID to check for orphaned files
             
-            # Delete from database
+        Returns:
+            List of orphaned file paths
+        """
+        try:
+            # Get documents for this URL (file_path contains the URL)
+            documents = self._get_documents_for_url(url_id)
+            if not documents:
+                return []
+            
+            # Use the URL from the first document's file_path to determine directory structure
+            url = documents[0]['file_path']
+            
+            # Get expected directory for this URL
+            from rag_manager.data.url_data import URLDataManager
+            directory = URLDataManager.get_snapshot_folder_for_url(url, base_dir=self.snapshot_dir)
+            
+            if not os.path.exists(directory):
+                return []
+            
+            # Get all PDF files in directory
+            import glob
+            pdf_files = glob.glob(os.path.join(directory, "*.pdf"))
+            
+            # Get all file paths from snapshot documents for this URL
+            snapshot_docs = self._get_snapshot_documents(url_id)
+            db_files = {doc['snapshot_file_path'] for doc in snapshot_docs if doc['snapshot_file_path']}
+            
+            # Find orphaned files
+            orphaned_files = [f for f in pdf_files if f not in db_files]
+            
+            return orphaned_files
+            
+        except Exception as e:
+            logger.error(f"Error finding orphaned files for URL {url_id}: {e}")
+            raise
+
+    def find_orphaned_documents(self, url_id: str) -> List[Dict[str, Any]]:
+        """
+        Find orphaned documents for a URL (documents that have no snapshots).
+        
+        Args:
+            url_id: URL ID to check for orphaned documents
+            
+        Returns:
+            List of orphaned document records
+        """
+        try:
+            documents = self._get_documents_for_url(url_id)
+            orphaned_documents = []
+            
+            for doc in documents:
+                snapshots = self._get_snapshots_for_document(doc['document_id'])
+                if not snapshots:
+                    orphaned_documents.append(doc)
+            
+            return orphaned_documents
+            
+        except Exception as e:
+            logger.error(f"Error finding orphaned documents for URL {url_id}: {e}")
+            raise
+
+    def _delete_snapshot_record_by_id(self, snapshot_id: str) -> bool:
+        """
+        Delete a single snapshot record from url_snapshots table by snapshot_id.
+        
+        Args:
+            snapshot_id: Snapshot ID to delete
+            
+        Returns:
+            True if deleted successfully
+        """
+        try:
             with self.postgres_manager.get_connection() as conn:
                 with conn.cursor() as cursor:
-                    cursor.execute("DELETE FROM documents WHERE id = %s", (doc_id,))
+                    cursor.execute("DELETE FROM url_snapshots WHERE id = %s", (snapshot_id,))
                     conn.commit()
+                    deleted = cursor.rowcount > 0
+                    if deleted:
+                        logger.debug(f"Deleted snapshot record {snapshot_id}")
+                    return deleted
+                    
+        except Exception as e:
+            logger.error(f"Error deleting snapshot record {snapshot_id}: {e}")
+            raise
+
+    def _delete_snapshot_document_chunks(self, snapshot_id: str) -> bool:
+        """
+        Delete document chunks from PostgreSQL by snapshot_id.
+        
+        Args:
+            snapshot_id: ID of the snapshot whose document chunks should be deleted
             
-            # Delete PDF file
-            if file_path and os.path.exists(file_path):
-                os.remove(file_path)
-                
-                # Delete JSON sidecar if it exists
-                json_path = file_path.replace(".pdf", ".json")
-                if os.path.exists(json_path):
-                    os.remove(json_path)
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            if not self.document_data_manager:
+                logger.error("No document_data_manager available - cannot delete document chunks")
+                return False
             
-            logger.debug(f"Deleted snapshot document {doc_id} and files")
+            # Delete chunks from PostgreSQL document_chunks table by snapshot_id
+            deleted_chunks = self.document_data_manager.delete_document_chunks_by_snapshot_id(snapshot_id)
+            logger.info(f"Deleted {deleted_chunks} document chunks from PostgreSQL for snapshot {snapshot_id}")
+            
             return True
             
         except Exception as e:
-            logger.error(f"Error deleting snapshot {doc.get('document_id')}: {e}")
+            logger.error(f"Error deleting document chunks for snapshot {snapshot_id}: {str(e)}")
             return False
+
+    def _delete_snapshot_milvus_embeddings(self, snapshot_id: str) -> bool:
+        """
+        Delete embeddings from Milvus by snapshot_id.
+        
+        Args:
+            snapshot_id: ID of the snapshot whose embeddings should be deleted
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            if not self.milvus_manager:
+                logger.warning(f"No Milvus manager available - skipping embedding deletion for snapshot {snapshot_id}")
+                return True
+            
+            # Delete embeddings from Milvus by snapshot_id directly
+            result = self.milvus_manager.delete_by_snapshot_id(snapshot_id)
+            if result.get('success', False):
+                deleted_count = result.get('deleted_count', 0)
+                logger.info(f"Successfully deleted {deleted_count} embeddings for snapshot {snapshot_id} from Milvus")
+                return True
+            else:
+                logger.warning(f"Failed to delete embeddings for snapshot {snapshot_id}: {result.get('error', 'Unknown error')}")
+                return False
+            
+        except Exception as e:
+            logger.error(f"Error deleting Milvus embeddings for snapshot {snapshot_id}: {str(e)}")
+            return False
+
+    def _delete_snapshot_files_by_name(self, file_path: Optional[str], pdf_file: Optional[str], json_file: Optional[str]) -> bool:
+        """
+        Delete snapshot files from filesystem using provided file information.
+        
+        Args:
+            file_path: Full path to files
+            pdf_file: PDF filename
+            json_file: JSON filename
+            
+        Returns:
+            True if at least one file was deleted successfully
+        """
+        try:
+            files_deleted = 0
+            
+            # Construct full paths from directory and filenames
+            if file_path and (pdf_file or json_file):
+                # Delete PDF file if specified
+                if pdf_file:
+                    pdf_path = os.path.join(file_path, pdf_file)
+                    if os.path.exists(pdf_path):
+                        os.remove(pdf_path)
+                        files_deleted += 1
+                        logger.debug(f"Deleted PDF file: {pdf_path}")
+                
+                # Delete JSON file if specified
+                if json_file:
+                    json_path = os.path.join(file_path, json_file)
+                    if os.path.exists(json_path):
+                        os.remove(json_path)
+                        files_deleted += 1
+                        logger.debug(f"Deleted JSON file: {json_path}")
+            
+            # If no directory path or filenames provided, cannot delete files
+            elif not file_path:
+                logger.error("Cannot delete files without directory path")
+                raise ValueError("Directory path required for file deletion")
+            elif not pdf_file and not json_file:
+                logger.error("Cannot delete files without filenames")
+                raise ValueError("At least one filename required for file deletion")
+            
+            if files_deleted == 0:
+                logger.warning("No files found to delete")
+                return False
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error deleting snapshot files: {e}")
+            raise

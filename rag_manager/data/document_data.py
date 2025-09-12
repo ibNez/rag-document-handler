@@ -278,7 +278,8 @@ class DocumentDataManager(BaseDataManager):
     def store_document(self, file_path: str, filename: str, 
                       title: Optional[str] = None, content_preview: Optional[str] = None,
                       content_type: Optional[str] = None, file_size: Optional[int] = None,
-                      word_count: Optional[int] = None, document_type: str = 'file', **kwargs) -> str:
+                      word_count: Optional[int] = None, document_type: str = 'file', 
+                      parent_url_id: Optional[str] = None, **kwargs) -> str:
         """
         Store document metadata and return the UUID.
         
@@ -291,10 +292,11 @@ class DocumentDataManager(BaseDataManager):
             file_size: File size in bytes (optional)
             word_count: Number of words in document (optional)
             document_type: Type of document ('file' or 'url')
+            parent_url_id: Optional UUID reference to parent URL for sub-pages
             **kwargs: Additional metadata (ignored)
             
         Returns:
-            The UUID of the stored document
+            Document ID as string
             
         Raises:
             ValueError: If required fields are missing or invalid
@@ -308,12 +310,13 @@ class DocumentDataManager(BaseDataManager):
             logger.error(f"Missing required field: filename")
             raise ValueError("filename is required and cannot be empty")
             
-        logger.info(f"Storing document: file_path='{file_path}', filename='{filename}', type='{document_type}'")
+        logger.info(f"Storing document: file_path='{file_path}', filename='{filename}', type='{document_type}', parent_url_id='{parent_url_id}'")
         
         query = """
             INSERT INTO documents (title, content_preview, file_path, filename,
-                                 content_type, file_size, word_count, document_type, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                                 content_type, file_size, word_count, document_type, 
+                                 parent_url_id, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
             RETURNING id
         """
         
@@ -321,7 +324,7 @@ class DocumentDataManager(BaseDataManager):
             with conn.cursor() as cur:
                 cur.execute(query, [
                     title, content_preview, file_path, filename,
-                    content_type, file_size, word_count, document_type
+                    content_type, file_size, word_count, document_type, parent_url_id
                 ])
                 result = cur.fetchone()
                 conn.commit()
@@ -536,7 +539,7 @@ class DocumentDataManager(BaseDataManager):
         elif isinstance(metadata, dict):
             metadata_dict = metadata
         
-        return self.store_document(
+        result = self.store_document(
             file_path=metadata_dict.get('file_path', ''),
             filename=metadata_dict.get('filename', ''),
             title=metadata_dict.get('title'),
@@ -546,6 +549,7 @@ class DocumentDataManager(BaseDataManager):
             word_count=len(content.split()) if content else 0,
             document_type=metadata_dict.get('document_type', 'file')
         )
+        return result
 
     def search_documents(self, query: str, limit: int = 50) -> List[Dict[str, Any]]:
         """
@@ -916,6 +920,31 @@ class DocumentDataManager(BaseDataManager):
             
         except Exception as e:
             logger.error(f"Failed to delete chunks for document {document_id}: {e}")
+            raise
+
+    def delete_document_chunks_by_snapshot_id(self, snapshot_id: str) -> int:
+        """
+        Delete all chunks associated with a specific snapshot_id.
+        
+        Args:
+            snapshot_id: Snapshot identifier
+            
+        Returns:
+            Number of chunks deleted
+        """
+        try:
+            query = "DELETE FROM document_chunks WHERE snapshot_id = %s"
+            with self.get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(query, (snapshot_id,))
+                    deleted_count = cur.rowcount
+                conn.commit()
+            
+            logger.debug(f"Deleted {deleted_count} chunks for snapshot {snapshot_id}")
+            return deleted_count
+            
+        except Exception as e:
+            logger.error(f"Failed to delete chunks for snapshot {snapshot_id}: {e}")
             raise
     
     # =============================================================================

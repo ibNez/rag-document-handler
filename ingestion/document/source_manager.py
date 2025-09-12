@@ -179,43 +179,6 @@ class DocumentSourceManager:
             logger.exception(f"Failed to delete metadata row for {filename}")
             raise
 
-    def store_document(self, file_path: str, filename: str, 
-                      title: Optional[str] = None, content_preview: Optional[str] = None,
-                      content_type: Optional[str] = None, file_size: Optional[int] = None,
-                      word_count: Optional[int] = None, document_type: str = 'file', **kwargs) -> str:
-        """
-        Store document with ingestion validation and business logic.
-        
-        Args:
-            file_path: Full path to file for files, URL for URLs
-            filename: Filename for files, descriptive name for URLs
-            title: Document title (optional)
-            content_preview: Preview of document content (optional)
-            content_type: MIME type (optional)
-            file_size: File size in bytes (optional)
-            word_count: Number of words in document (optional)
-            document_type: Type of document ('file' or 'url')
-            **kwargs: Additional metadata (ignored)
-            
-        Returns:
-            The UUID of the stored document
-        """
-        # Apply ingestion business rules and validation
-        if should_ignore_file(filename):
-            raise ValueError(f"File type not supported for ingestion: {filename}")
-        
-        # Delegate to data manager
-        return self.document_data_manager.store_document(
-            file_path=file_path,
-            filename=filename,
-            title=title,
-            content_preview=content_preview,
-            content_type=content_type,
-            file_size=file_size,
-            word_count=word_count,
-            document_type=document_type
-        )
-
     def update_processing_status(self, document_id: str, status: str) -> None:
         """
         Update document processing status.

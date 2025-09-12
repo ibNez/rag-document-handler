@@ -22,11 +22,22 @@ class SchedulerManager:
         # Add concurrency limits to prevent database pool exhaustion
         self.max_concurrent_urls = getattr(config, 'MAX_CONCURRENT_URLS', 5)  # Limit concurrent URL processing
         self.max_concurrent_emails = getattr(config, 'MAX_CONCURRENT_EMAILS', 3)  # Limit concurrent email processing
+        
+        # Initialize cleanup components
+        self.snapshot_service = None
+        self.postgres_manager = None
+        self._last_cleanup_cycle = 0
+        self.cleanup_interval_cycles = 10  # Run cleanup every 10 scheduler cycles (roughly every 5 minutes)
     
     def set_background_processors(self, url_processor, email_processor):
         """Set the background processing methods from the main app."""
         self._process_url_background = url_processor
         self._refresh_email_account_background = email_processor
+    
+    def set_cleanup_components(self, snapshot_service, postgres_manager):
+        """Set the cleanup components for snapshot cleanup."""
+        self.snapshot_service = snapshot_service
+        self.postgres_manager = postgres_manager
     
     def set_processing_status(self, url_status, email_status):
         """Set the processing status dictionaries from the main app."""
@@ -198,6 +209,12 @@ class SchedulerManager:
                         t.start()
                         started += 1
                         emails_to_process += 1
+                
+                # Run cleanup periodically
+                if cycle - self._last_cleanup_cycle >= self.cleanup_interval_cycles:
+                    self._run_cleanup_cycle()
+                    self._last_cleanup_cycle = cycle
+                
                 sleep_for = self.config.SCHEDULER_POLL_SECONDS_BUSY if started else self.config.SCHEDULER_POLL_SECONDS_IDLE
                 logger.debug(
                     f"Scheduler cycle {cycle}: started {started} task(s); sleeping {sleep_for}s"
@@ -206,3 +223,23 @@ class SchedulerManager:
             except Exception as e:
                 logger.error(f"Scheduler loop error: {e}")
                 time.sleep(30)
+
+    def _run_cleanup_cycle(self):
+        """Run cleanup for all URLs with retention policies."""
+        if not self.snapshot_service or not self.postgres_manager:
+            logger.debug("Cleanup components not configured, skipping cleanup")
+            return
+        
+        try:
+            from ingestion.url.utils.cleanup_utils import run_snapshot_cleanup
+            
+            logger.debug("Starting periodic cleanup cycle")
+            cleanup_result = run_snapshot_cleanup(self.snapshot_service, self.postgres_manager)
+            
+            if cleanup_result.get('total_cleaned', 0) > 0:
+                logger.info(f"Periodic cleanup completed: {cleanup_result}")
+            else:
+                logger.debug("Periodic cleanup completed: no files cleaned")
+                
+        except Exception as e:
+            logger.error(f"Periodic cleanup failed: {e}")

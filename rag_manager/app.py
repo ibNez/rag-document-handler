@@ -227,7 +227,7 @@ class RAGKnowledgebaseManager:
             snapshot_service = None
             try:
                 from ingestion.url.utils.snapshot_service import URLSnapshotService
-                snapshot_service = URLSnapshotService(self.postgres_manager, self.config, self.url_data_manager)
+                snapshot_service = URLSnapshotService(self.postgres_manager, self.config, self.url_data_manager, self.milvus_manager)
                 logger.info("URL snapshot service initialized successfully")
             except Exception as e:
                 logger.warning(f"Failed to initialize snapshot service: {e}")
