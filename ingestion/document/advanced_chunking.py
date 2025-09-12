@@ -466,18 +466,3 @@ class AdvancedChunker:
             'chunking_strategy': self.config.strategy
         }
 
-
-# Factory function for easy instantiation
-def create_chunker(strategy: str = "title_aware", **kwargs) -> AdvancedChunker:
-    """
-    Create an AdvancedChunker with the specified strategy.
-    
-    Args:
-        strategy: Chunking strategy to use
-        **kwargs: Additional configuration options
-        
-    Returns:
-        Configured AdvancedChunker instance
-    """
-    config = ChunkingConfig(strategy=strategy, **kwargs)
-    return AdvancedChunker(config)

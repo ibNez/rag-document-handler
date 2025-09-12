@@ -351,20 +351,3 @@ class TextChunker:
         logger.info(f"Created {len(email_chunks)} chunks for email {email_content.get('message_id', 'unknown')}")
         return email_chunks
 
-
-def create_email_chunker(chunk_size: int = 800, overlap: int = 100) -> TextChunker:
-    """
-    Factory function to create a TextChunker configured for email processing.
-    
-    Args:
-        chunk_size: Token size for each chunk
-        overlap: Token overlap between chunks
-        
-    Returns:
-        Configured TextChunker instance
-    """
-    return TextChunker(
-        chunk_size_tokens=chunk_size,
-        chunk_overlap_tokens=overlap,
-        encoding_name="cl100k_base"
-    )

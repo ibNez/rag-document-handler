@@ -329,53 +329,6 @@ class PostgreSQLManager:
                 results = cur.fetchall()
                 return [dict(row) for row in results]
     
-    def get_document_analytics(self) -> Dict[str, Any]:
-        """Get document processing analytics."""
-        analytics_sql = """
-            WITH stats AS (
-                SELECT 
-                    COUNT(*) as total_documents,
-                    COUNT(*) FILTER (WHERE processing_status = 'completed') as completed,
-                    COUNT(*) FILTER (WHERE processing_status = 'pending') as pending,
-                    COUNT(*) FILTER (WHERE processing_status = 'failed') as failed,
-                    AVG(word_count) as avg_word_count,
-                    SUM(file_size) as total_size
-                FROM documents
-            ),
-            daily_stats AS (
-                SELECT 
-                    DATE_TRUNC('day', created_at) as date,
-                    COUNT(*) as daily_count
-                FROM documents
-                WHERE created_at >= NOW() - INTERVAL '30 days'
-                GROUP BY DATE_TRUNC('day', created_at)
-                ORDER BY date DESC
-                LIMIT 30
-            )
-            SELECT 
-                json_build_object(
-                    'total_documents', s.total_documents,
-                    'completed', s.completed,
-                    'pending', s.pending,
-                    'failed', s.failed,
-                    'avg_word_count', ROUND(s.avg_word_count::numeric, 2),
-                    'total_size_mb', ROUND((s.total_size / 1024.0 / 1024.0)::numeric, 2),
-                    'daily_counts', json_agg(
-                        json_build_object('date', ds.date, 'count', ds.daily_count)
-                        ORDER BY ds.date DESC
-                    )
-                ) as analytics
-            FROM stats s
-            CROSS JOIN daily_stats ds
-            GROUP BY s.total_documents, s.completed, s.pending, s.failed, s.avg_word_count, s.total_size
-        """
-        
-        with self.get_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(analytics_sql)
-                result = cur.fetchone()
-                return result['analytics'] if result else {}
-    
     def get_version_info(self) -> Dict[str, Any]:
         """Get PostgreSQL version and connection info."""
         try:
@@ -495,40 +448,6 @@ class PostgreSQLManager:
         if self.pool:
             self.pool.closeall()
             logger.info("PostgreSQL connection pool closed")
-    
-    def get_pool_status(self) -> dict:
-        """
-        Get connection pool status information.
-        
-        Returns:
-            Dictionary with pool status details
-        """
-        if not self.pool:
-            return {'status': 'not_initialized'}
-            
-        # Note: psycopg2 ThreadedConnectionPool doesn't expose internal stats
-        # This is a basic status check
-        try:
-            with self.get_connection() as conn:
-                with conn.cursor() as cur:
-                    cur.execute("SELECT 1")
-                    result = cur.fetchone()
-            
-            return {
-                'status': 'healthy',
-                'database': self.config.database,
-                'host': self.config.host,
-                'port': self.config.port,
-                'test_query': 'success' if result else 'failed'
-            }
-        except Exception as e:
-            return {
-                'status': 'error',
-                'error': str(e),
-                'database': self.config.database,
-                'host': self.config.host,
-                'port': self.config.port
-            }
 
 
 # Global instance for easy access

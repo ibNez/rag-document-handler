@@ -128,7 +128,17 @@ class MilvusManager:
             if not utility.has_collection(self.email_collection_name):
                 logger.info(f"Collection '{self.email_collection_name}' doesn't exist, forcing creation with dummy document...")
                 dummy_texts = ["Email initialization document - this will be removed"]
-                dummy_metas = [{"document_id": "init-dummy-email", "content_hash": "init", "page": 1}]
+                dummy_metas = [{
+                    "message_id": "init-dummy-email", 
+                    "source": "email:init@dummy.com",
+                    "subject": "Initialization Email",
+                    "from_addr": "init@dummy.com",
+                    "date_utc": "2023-01-01T00:00:00Z",
+                    "chunk_id": "init-dummy-email:0",
+                    "page": 0,
+                    "content_hash": "init-dummy-content-hash", 
+                    "category_type": "email"
+                }]
                 
                 # Ensure email vector store is initialized before using add_texts
                 if self.email_vector_store is None:
@@ -139,7 +149,7 @@ class MilvusManager:
                 # Remove the dummy document immediately
                 if utility.has_collection(self.email_collection_name):
                     col = Collection(self.email_collection_name)
-                    col.delete(expr='document_id == "init-dummy-email"')
+                    col.delete(expr='message_id == "init-dummy-email"')
                     col.flush()
                     logger.info(f"Collection '{self.email_collection_name}' created and dummy document removed")
             

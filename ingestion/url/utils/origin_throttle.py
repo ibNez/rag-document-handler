@@ -150,46 +150,7 @@ class OriginThrottle:
         origin = self._get_origin(url)
         return self._next_allowed_time.get(origin, time.monotonic())
     
-    def is_ready(self, url: str) -> bool:
-        """
-        Check if a request to the given URL's origin is ready (no throttling needed).
-        
-        Args:
-            url: The URL to check
-            
-        Returns:
-            bool: True if request can be made immediately
-        """
-        return time.monotonic() >= self.get_next_allowed_time(url)
-    
-    def get_wait_time(self, url: str) -> float:
-        """
-        Get the remaining wait time for the given URL's origin.
-        
-        Args:
-            url: The URL to check
-            
-        Returns:
-            float: Seconds to wait before making request (0 if ready)
-        """
-        next_allowed = self.get_next_allowed_time(url)
-        now = time.monotonic()
-        return max(0.0, next_allowed - now)
-    
-    def reset_origin(self, url: str) -> None:
-        """
-        Reset throttling state for the given URL's origin.
-        
-        Useful for testing or when crawling policies change.
-        
-        Args:
-            url: URL whose origin should be reset
-        """
-        origin = self._get_origin(url)
-        self._next_allowed_time.pop(origin, None)
-        self._backoff_count.pop(origin, None)
-        logger.debug(f"Reset throttling state for {origin}")
-    
+
     def get_stats(self) -> Dict[str, Any]:
         """
         Get throttling statistics for monitoring.
@@ -215,34 +176,3 @@ class OriginThrottle:
         
         return stats
     
-    def cleanup_old_entries(self, max_age_seconds: float = 3600.0) -> int:
-        """
-        Clean up old throttling entries to prevent memory leaks.
-        
-        Args:
-            max_age_seconds: Remove entries older than this many seconds
-            
-        Returns:
-            int: Number of entries removed
-        """
-        now = time.monotonic()
-        cutoff_time = now - max_age_seconds
-        
-        # Find origins to remove
-        origins_to_remove = []
-        for origin, next_time in self._next_allowed_time.items():
-            if next_time < cutoff_time:
-                origins_to_remove.append(origin)
-        
-        # Remove old entries
-        removed_count = 0
-        for origin in origins_to_remove:
-            self._next_allowed_time.pop(origin, None)
-            self._backoff_count.pop(origin, None)
-            self._locks.pop(origin, None)
-            removed_count += 1
-        
-        if removed_count > 0:
-            logger.debug(f"Cleaned up {removed_count} old throttling entries")
-        
-        return removed_count

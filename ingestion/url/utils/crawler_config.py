@@ -151,21 +151,3 @@ def get_config() -> CrawlerConfig:
         _config = CrawlerConfig.from_environment()
         _config.validate()
     return _config
-
-
-def set_config(config: CrawlerConfig) -> None:
-    """
-    Set the global crawler configuration instance.
-    
-    Args:
-        config: The configuration instance to use globally
-    """
-    global _config
-    config.validate()
-    _config = config
-
-
-def reset_config() -> None:
-    """Reset the global configuration to reload from environment."""
-    global _config
-    _config = None
