@@ -149,7 +149,7 @@ class URLOrchestrator:
                     # Returns "file_path", "pdf_file", "json_file", "created_at"
                     snapshot_result = await self.snapshot_service.create_snapshot_files(url_id, url_string)
                     
-                    if snapshot_result.get("success"):
+                    if snapshot_result.get("success") and not snapshot_result.get("duplicate"):
                         # Check if content has changed before storing
                         content_hash = snapshot_result.get("content_hash")
                         if trace_logger:
@@ -270,22 +270,6 @@ class URLOrchestrator:
                                 self.url_data_manager.update_url_hash_status(
                                     url_id, content_hash, "success"
                                 )
-                                
-                                # Mark URL as no longer being processed
-                                self.url_data_manager.set_refreshing(url_id, False)
-                                # Always run cleanup at the end of processing to catch any retention policy changes
-                                logger.debug(f"Running final cleanup check for URL {url_id}")
-                                try:
-                                    if self.snapshot_service:
-                                        retention_days = url_record.get('snapshot_retention_days', 0) or 0
-                                        max_snapshots = url_record.get('snapshot_max_snapshots', 0) or 0
-                                        final_cleanup_result = self.snapshot_service.cleanup_old_snapshot_files(url_string, retention_days, max_snapshots)
-                                        if final_cleanup_result.get("deleted", 0) > 0:
-                                            logger.info(f"Final cleanup removed {final_cleanup_result['deleted']} additional snapshots for URL {url_id}")
-                                        elif final_cleanup_result.get("success"):
-                                            logger.debug(f"Final cleanup completed for URL {url_id} - no additional files to remove")
-                                except Exception as cleanup_error:
-                                    logger.warning(f"Final cleanup failed for URL {url_id}: {cleanup_error}")
 
                             except Exception as e:
                                 logger.error(f"Failed to store snapshot document for URL {url_id}: {e}")
@@ -366,9 +350,31 @@ class URLOrchestrator:
                     if trace_logger:
                         trace_logger.exception(f"Snapshot processing failed: {e}")
                     
-                    
-                    
-                    # Continue domain crawl even if snapshot fails
+                
+                # Always run cleanup after snapshot processing (regardless of content changes)
+                logger.info(f"Running cleanup check for URL {url_id} after snapshot processing")
+                try:
+                    if self.snapshot_service:
+                        # Refresh URL record to get latest retention settings from database
+                        fresh_url_record = self.url_data_manager.get_url_by_id(url_id)
+                        if fresh_url_record:
+                            retention_days = fresh_url_record.get('snapshot_retention_days', 0) or 0
+                            max_snapshots = fresh_url_record.get('snapshot_max_snapshots', 0) or 0
+                        else:
+                            # Fallback to cached values if fresh lookup fails
+                            retention_days = url_record.get('snapshot_retention_days', 0) or 0
+                            max_snapshots = url_record.get('snapshot_max_snapshots', 0) or 0
+                        
+                        logger.info(f"Cleanup using retention_days={retention_days}, max_snapshots={max_snapshots} for URL {url_string}")
+                        cleanup_result = self.snapshot_service.cleanup_old_snapshot_files(url_string, retention_days, max_snapshots)
+                        if cleanup_result.get("deleted", 0) > 0:
+                            logger.info(f"Cleanup removed {cleanup_result['deleted']} snapshots for URL {url_id}")
+                        elif cleanup_result.get("success"):
+                            logger.info(f"Cleanup completed for URL {url_id} - no files to remove")
+                        else:
+                            logger.warning(f"Cleanup failed for URL {url_id}: {cleanup_result.get('error', 'Unknown error')}")
+                except Exception as cleanup_error:
+                    logger.error(f"Cleanup failed for URL {url_id}: {cleanup_error}")
             
 
             # Mark URL as processed
@@ -380,7 +386,7 @@ class URLOrchestrator:
                     trace_logger.info(f"Completed ingestion trace for URL {url_id} at {datetime.utcnow().isoformat()}Z")
                 except Exception:
                     pass
-            
+            # Continue domain crawl even if snapshot fails
             # Perform domain crawling if enabled
             domain_crawl_result = None
             if url_record.get('crawl_domain') and self.domain_crawler and url_string:
@@ -455,7 +461,7 @@ class URLOrchestrator:
                                     
                                     # 3b.) Check if snapshot has new content
                                     page_content_hash = page_snapshot_result.get("content_hash")
-                                    if not self.snapshot_service.check_content_changed(url_id, page_content_hash):
+                                    if page_snapshot_result.get("duplicate"):
                                         logger.info(f"No content changes for discovered URL {discovered_url}, skipping processing")
                                         continue
                                     

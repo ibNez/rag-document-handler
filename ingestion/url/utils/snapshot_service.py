@@ -239,6 +239,7 @@ class URLSnapshotService:
             
             return {
                 "success": True,
+                "duplicate": False,
                 "file_path": os.path.dirname(final_pdf_path),
                 "pdf_file": os.path.basename(final_pdf_path),
                 "json_file": os.path.basename(final_json_path),
@@ -359,17 +360,9 @@ class URLSnapshotService:
             Dictionary with existing snapshot info, or None if not found
         """
         try:
-            # Build the expected directory structure for this URL
-            parsed = urlparse(url)
-            domain = "unknown"
-            if parsed.hostname:
-                try:
-                    domain = parsed.hostname.encode("idna").decode("ascii")
-                except Exception:
-                    domain = parsed.hostname.lower()
-            
-            path_slug = self.slugify(parsed.path or "/")
-            directory = os.path.join(self.snapshot_dir, domain, path_slug)
+            # Use the same canonical folder logic as build_snapshot_paths
+            from rag_manager.data.url_data import URLDataManager
+            directory = URLDataManager.get_snapshot_folder_for_url(url, base_dir=self.snapshot_dir)
             
             if not os.path.exists(directory):
                 return None

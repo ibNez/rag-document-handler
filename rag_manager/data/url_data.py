@@ -345,7 +345,13 @@ class URLDataManager(BaseDataManager):
             return None
             
         try:
-            query = "SELECT id AS url_id, * FROM urls WHERE id = %s"
+            query = """
+                SELECT id AS url_id, url, title, description, status, refresh_interval_minutes, 
+                       crawl_domain, ignore_robots, snapshot_retention_days, snapshot_max_snapshots,
+                       last_crawled, is_refreshing, last_refresh_started, last_content_hash, 
+                       last_update_status, created_at, updated_at
+                FROM urls WHERE id = %s
+            """
             result = self.execute_query(query, (url_id_str,), fetch_one=True)
             
             if result:
