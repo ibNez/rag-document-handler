@@ -116,7 +116,7 @@ class EmailManager:
                     """, (email_address, email_address))
                     
                     chunk_result = cur.fetchone()
-                    total_chunks = chunk_result[0] if chunk_result else 0
+                    total_chunks = chunk_result['count'] if chunk_result else 0
                     
                     return {
                         'total_emails': total_emails,

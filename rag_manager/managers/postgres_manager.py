@@ -92,6 +92,31 @@ class PostgreSQLManager:
         -- Enable required extensions
         CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
         
+        -- URLs table: used to store URL Parent information (MUST come before documents for FK reference)
+        CREATE TABLE IF NOT EXISTS urls (
+            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+            url TEXT UNIQUE NOT NULL,
+            title TEXT,
+            description TEXT,
+            status VARCHAR(50) DEFAULT 'pending',
+            content_type VARCHAR(100),
+            content_length BIGINT,
+            last_crawled TIMESTAMP WITH TIME ZONE,
+            crawl_depth INTEGER DEFAULT 0,
+            refresh_interval_minutes INTEGER DEFAULT 1440,
+            crawl_domain BOOLEAN DEFAULT FALSE,
+            ignore_robots BOOLEAN DEFAULT FALSE,
+            snapshot_retention_days INTEGER DEFAULT 0,
+            snapshot_max_snapshots INTEGER DEFAULT 0,
+            is_refreshing BOOLEAN DEFAULT FALSE,
+            last_refresh_started TIMESTAMP WITH TIME ZONE,
+            last_content_hash TEXT,
+            last_update_status VARCHAR(50),
+            child_url_count INTEGER DEFAULT 0,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        );
+
         -- Documents table for metadata storage (files AND URLs)
         CREATE TABLE IF NOT EXISTS documents (
             id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -111,6 +136,7 @@ class PostgreSQLManager:
             processing_time_seconds REAL,
             processing_status VARCHAR(50) DEFAULT 'pending',
             file_hash VARCHAR(64) UNIQUE,
+            parent_url_id UUID REFERENCES urls(id) ON DELETE CASCADE, -- NULL for files
             created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
             updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
             indexed_at TIMESTAMP WITH TIME ZONE
@@ -147,38 +173,15 @@ class PostgreSQLManager:
             CONSTRAINT uk_email_chunks_position UNIQUE(email_id, chunk_index)
         );
 
-        -- URLs table: used to store URL Parent information
-        CREATE TABLE IF NOT EXISTS urls (
-            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-            url TEXT UNIQUE NOT NULL,
-            title TEXT,
-            description TEXT,
-            status VARCHAR(50) DEFAULT 'pending',
-            content_type VARCHAR(100),
-            content_length BIGINT,
-            last_crawled TIMESTAMP WITH TIME ZONE,
-            crawl_depth INTEGER DEFAULT 0,
-            refresh_interval_minutes INTEGER DEFAULT 1440,
-            crawl_domain BOOLEAN DEFAULT FALSE,
-            ignore_robots BOOLEAN DEFAULT FALSE,
-            snapshot_retention_days INTEGER DEFAULT 0,
-            snapshot_max_snapshots INTEGER DEFAULT 0,
-            is_refreshing BOOLEAN DEFAULT FALSE,
-            last_refresh_started TIMESTAMP WITH TIME ZONE,
-            last_content_hash TEXT,
-            last_update_status VARCHAR(50),
-            parent_url_id UUID REFERENCES urls(id) ON DELETE CASCADE,
-            child_url_count INTEGER DEFAULT 0,
-            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-        );
-
         -- URL snapshots table for point-in-time captures of crawled pages (MUST come before document_chunks)
         CREATE TABLE IF NOT EXISTS url_snapshots (
             id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
             document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
             url_id UUID REFERENCES urls(id) ON DELETE CASCADE,
             snapshot_ts TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+            file_path TEXT, -- Full path to the snapshot PDF file
+            pdf_file TEXT, -- Filename of the PDF snapshot
+            json_file TEXT, -- Filename of the JSON metadata file
             pdf_document_id UUID, -- optional link to documents table for stored PDF artifact
             mhtml_document_id UUID, -- optional link to documents table for stored MHTML artifact
             sha256 TEXT,
@@ -210,6 +213,7 @@ class PostgreSQLManager:
         CREATE INDEX IF NOT EXISTS idx_url_snapshots_document_id ON url_snapshots(document_id);
         CREATE INDEX IF NOT EXISTS idx_url_snapshots_url_id ON url_snapshots(url_id);
         CREATE INDEX IF NOT EXISTS idx_url_snapshots_snapshot_ts ON url_snapshots(snapshot_ts);
+        CREATE INDEX IF NOT EXISTS idx_url_snapshots_file_path ON url_snapshots(file_path);
         
         -- Index for document chunks snapshot relationship
         CREATE INDEX IF NOT EXISTS idx_document_chunks_snapshot_id ON document_chunks(snapshot_id);
@@ -236,6 +240,7 @@ class PostgreSQLManager:
         -- Create indexes for performance
         CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(processing_status);
         CREATE INDEX IF NOT EXISTS idx_documents_created ON documents(created_at);
+        CREATE INDEX IF NOT EXISTS idx_documents_parent_url_id ON documents(parent_url_id);
         CREATE INDEX IF NOT EXISTS idx_documents_keywords_search ON documents 
             USING GIN(to_tsvector('english', keywords));
         CREATE INDEX IF NOT EXISTS idx_documents_content_search ON documents 
@@ -266,7 +271,6 @@ class PostgreSQLManager:
         
         CREATE INDEX IF NOT EXISTS idx_urls_url ON urls(url);
         CREATE INDEX IF NOT EXISTS idx_urls_status ON urls(status);
-        CREATE INDEX IF NOT EXISTS idx_urls_parent_url_id ON urls(parent_url_id);
         
         CREATE INDEX IF NOT EXISTS idx_email_accounts_email ON email_accounts(email_address);
         CREATE INDEX IF NOT EXISTS idx_email_accounts_name ON email_accounts(account_name);

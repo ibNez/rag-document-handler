@@ -92,7 +92,7 @@
                                         </td>
                                         <td class="small schedule-times">
                                             <div>Every {{ url.refresh_interval_minutes or 1440 }} min</div>
-                                            <div class="text-muted">Last: <span class="dt-local" data-utc="{{ url.last_scraped or '' }}">{{ url.last_scraped or '—' }}</span></div>
+                                            <div class="text-muted">Last: <span class="dt-local" data-utc="{{ url.last_crawled or '' }}">{{ url.last_crawled or '—' }}</span></div>
                                             <div class="text-muted">Next: <span class="dt-local" data-utc="{{ url.next_refresh or '' }}">{{ url.next_refresh or '—' }}</span></div>
                                         </td>
                                         <td class="text-center">

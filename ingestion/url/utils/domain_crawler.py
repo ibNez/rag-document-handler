@@ -29,7 +29,7 @@ class DomainCrawler:
     respecting robots.txt rules and avoiding infinite loops.
     """
     
-    def __init__(self, url_manager, config: Optional[Any] = None, respect_robots: bool = True):
+    def __init__(self, url_manager, config: Optional[Any] = None, respect_robots: bool = True, document_manager: Optional[Any] = None):
         """
         Initialize domain crawler with URL management and robots.txt enforcement.
         
@@ -37,8 +37,10 @@ class DomainCrawler:
             url_manager: The URL manager for database operations
             config: Optional crawler configuration. If None, uses global config.
             respect_robots: Whether to respect robots.txt by default
+            document_manager: Optional document manager for creating documents instead of URLs
         """
         self.url_manager = url_manager
+        self.document_manager = document_manager
         self.config = config or get_config()
         self.respect_robots = respect_robots
         
@@ -381,22 +383,41 @@ class DomainCrawler:
                 
                 title = title[:200]  # Limit title length
                 
-                # Add URL with domain crawling disabled (to avoid infinite loops)
-                result = self.url_manager.add_url(
-                    url=url,
-                    title=title,
-                    description=f"Discovered from domain crawl of {parent_domain}",
-                    parent_url_id=parent_url_id
-                )
-                
-                if result.get("success"):
-                    added_count += 1
-                    logger.debug(f"Added discovered URL: {url}")
+                # Use document manager if available, otherwise fall back to URL manager
+                if self.document_manager:
+                    # Create document with parent URL reference (new approach)
+                    document_id = self.document_manager.store_document(
+                        file_path=url,
+                        filename=title,
+                        title=title,
+                        content_preview=f"Discovered from domain crawl of {parent_domain}",
+                        document_type='url',
+                        parent_url_id=parent_url_id
+                    )
+                    
+                    if document_id:
+                        added_count += 1
+                        logger.debug(f"Added discovered URL as document: {url} -> {document_id}")
+                    else:
+                        failed_count += 1
+                        errors.append(f"{url}: Failed to create document")
                 else:
-                    failed_count += 1
-                    error_msg = result.get("message", "Unknown error")
-                    if "already exists" not in error_msg.lower():
-                        errors.append(f"{url}: {error_msg}")
+                    # Legacy approach: Add URL with domain crawling disabled (to avoid infinite loops)
+                    # Note: Since parent_url_id is no longer supported in URLs, this creates independent URLs
+                    result = self.url_manager.add_url(
+                        url=url,
+                        title=title,
+                        description=f"Discovered from domain crawl of {parent_domain}"
+                    )
+                    
+                    if result.get("success"):
+                        added_count += 1
+                        logger.debug(f"Added discovered URL: {url}")
+                    else:
+                        failed_count += 1
+                        error_msg = result.get("message", "Unknown error")
+                        if "already exists" not in error_msg.lower():
+                            errors.append(f"{url}: {error_msg}")
                         
             except Exception as e:
                 failed_count += 1

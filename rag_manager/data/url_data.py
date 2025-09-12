@@ -26,6 +26,76 @@ logger = logging.getLogger(__name__)
 
 
 class URLDataManager(BaseDataManager):
+    @staticmethod
+    def get_snapshot_folder_for_url(url: str, base_dir: str = "snapshots") -> str:
+        """
+        Given a URL, return the full folder path for storing its snapshots/documents.
+        Uses the domain as the first folder, and the safe page name as the subfolder.
+        Example: https://news.ycombinator.com/from?site=sourcetable.com
+        → snapshots/news.ycombinator.com/from_QuestionMark_site-Equals-sourcetable.com/
+        """
+        parsed = urllib.parse.urlparse(url)
+        domain = parsed.netloc or "unknown-domain"
+        page_folder = URLDataManager.url_to_safe_folder(url)
+        return os.path.join(base_dir, domain, page_folder)
+    # =============================================================================
+    # URL Path to Filesystem-safe Folder Name
+    # =============================================================================
+
+    @staticmethod
+    def url_to_safe_folder(url: str) -> str:
+        """
+        Convert a URL path and query into a filesystem-safe folder name.
+        Replaces unsafe characters with _CharName_ (e.g., ? -> _QuestionMark_).
+        Example: /from?site=sourcetable.com -> from_QuestionMark_site-Equals-sourcetable.com
+        """
+        char_map = {
+            '/': '_ForwardSlash_',
+            '?': '_QuestionMark_',
+            '=': '_Equals_',
+            '&': '_Ampersand_',
+            '#': '_Hash_',
+            ':': '_Colon_',
+            ';': '_Semicolon_',
+            '\\': '_Backslash_',
+            ' ': '_Space_',
+            '<': '_LessThan_',
+            '>': '_GreaterThan_',
+            '|': '_Pipe_',
+            '"': '_Quote_',
+            "'": '_Apostrophe_',
+            '*': '_Asterisk_',
+            '%': '_Percent_',
+            '$': '_Dollar_',
+            ',': '_Comma_',
+            '@': '_At_',
+            '+': '_Plus_',
+            '`': '_Backtick_',
+            '^': '_Caret_',
+            '~': '_Tilde_',
+            '(': '_LeftParen_',
+            ')': '_RightParen_',
+            '{': '_LeftBrace_',
+            '}': '_RightBrace_',
+            '[': '_LeftBracket_',
+            ']': '_RightBracket_',
+        }
+        parsed = urllib.parse.urlparse(url)
+        # Combine path and query for uniqueness
+        page = parsed.path
+        if parsed.query:
+            page += '?' + parsed.query
+        # Remove leading slash for folder name
+        if page.startswith('/'):
+            page = page[1:]
+        # Replace each unsafe character
+        safe = []
+        for c in page:
+            if c in char_map:
+                safe.append(char_map[c])
+            else:
+                safe.append(c)
+        return ''.join(safe) or 'root'
     """
     Pure data access manager for URL operations.
     
@@ -83,8 +153,8 @@ class URLDataManager(BaseDataManager):
             soup = BeautifulSoup(response.content, 'html.parser')
             title_tag = soup.find('title')
             
-            if title_tag and title_tag.string:
-                title = title_tag.string.strip()
+            if title_tag and title_tag:
+                title = title_tag.get_text().strip()
                 # Clean up title
                 title = re.sub(r'\s+', ' ', title)
                 title = title[:255]  # Limit length
@@ -488,7 +558,7 @@ class URLDataManager(BaseDataManager):
     def add_url(self, url: str, title: Optional[str] = None, description: Optional[str] = None,
                 refresh_interval_minutes: Optional[int] = None, crawl_domain: bool = False,
                 ignore_robots: bool = False, snapshot_retention_days: int = 0,
-                snapshot_max_snapshots: int = 0, parent_url_id: Optional[str] = None) -> Dict[str, Any]:
+                snapshot_max_snapshots: int = 0) -> Dict[str, Any]:
         """
         Add a new URL to the database with validation and title extraction.
         
@@ -501,7 +571,6 @@ class URLDataManager(BaseDataManager):
             ignore_robots: Whether to ignore robots.txt for this URL
             snapshot_retention_days: How long to keep snapshots
             snapshot_max_snapshots: Maximum number of snapshots to keep
-            parent_url_id: Optional parent URL ID for child URLs
             
         Returns:
             Dict with success status and URL details
@@ -529,33 +598,6 @@ class URLDataManager(BaseDataManager):
                 logger.warning(f"Could not extract title for {url}: {e}")
                 title = "Unknown Page"
         
-        # Validate parent URL if provided
-        if parent_url_id:
-            # Validate UUID format
-            try:
-                uuid_obj = uuid.UUID(parent_url_id)
-                is_valid_uuid = str(uuid_obj) == parent_url_id
-            except (ValueError, TypeError):
-                is_valid_uuid = False
-                
-            if not is_valid_uuid:
-                return {
-                    'success': False,
-                    'error': 'Invalid parent URL ID format',
-                    'url_id': None,
-                    'url_data': None
-                }
-            
-            # Check if parent exists
-            parent_data = self.get_url_by_id(parent_url_id)
-            if not parent_data:
-                return {
-                    'success': False,
-                    'error': 'Parent URL not found',
-                    'url_id': None,
-                    'url_data': None
-                }
-            
         # Set defaults
         if refresh_interval_minutes is None:
             refresh_interval_minutes = 1440  # 24 hours default
@@ -568,12 +610,12 @@ class URLDataManager(BaseDataManager):
             query = """
                 INSERT INTO urls (url, title, description, status, refresh_interval_minutes, 
                                 crawl_domain, ignore_robots, snapshot_retention_days, 
-                                snapshot_max_snapshots, parent_url_id)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
+                                snapshot_max_snapshots)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
             """
             params = (url, title, description, 'active', refresh_interval_minutes, 
                      crawl_domain, ignore_robots, snapshot_retention_days, 
-                     snapshot_max_snapshots, parent_url_id)
+                     snapshot_max_snapshots)
             
             result = self.execute_query(query, params, fetch_one=True)
             if not result:
@@ -581,7 +623,7 @@ class URLDataManager(BaseDataManager):
                 
             url_id = result['id']
             
-            logger.info(f"Added URL: {url} with title: {title} (ID: {url_id}) {f'(parent: {parent_url_id})' if parent_url_id else '(root URL)'}")
+            logger.info(f"Added URL: {url} with title: {title} (ID: {url_id}) (root URL)")
             return {
                 "success": True, 
                 "message": "URL added successfully", 
@@ -614,7 +656,7 @@ class URLDataManager(BaseDataManager):
                 SELECT id AS url_id, url, title, description, status, refresh_interval_minutes, 
                        crawl_domain, ignore_robots, snapshot_retention_days, snapshot_max_snapshots,
                        last_crawled, is_refreshing, last_refresh_started, last_content_hash, last_update_status,
-                       created_at, updated_at, parent_url_id,
+                       created_at, updated_at,
                         CASE 
                             WHEN refresh_interval_minutes IS NOT NULL 
                                  AND refresh_interval_minutes > 0 
@@ -623,7 +665,7 @@ class URLDataManager(BaseDataManager):
                             ELSE NULL
                         END AS next_refresh
                 FROM urls 
-                WHERE status = 'active' AND parent_url_id IS NULL
+                WHERE status = 'active'
                 ORDER BY created_at DESC
             """
             
@@ -631,26 +673,7 @@ class URLDataManager(BaseDataManager):
             if not result:
                 return []
                 
-            urls = []
-            
-            for row in result:
-                url_dict = dict(row)
-                
-                # Convert boolean to int for SQLite compatibility
-                url_dict['crawl_domain'] = 1 if url_dict.get('crawl_domain') else 0
-                url_dict['ignore_robots'] = 1 if url_dict.get('ignore_robots') else 0
-                
-                # Map PostgreSQL columns used by the UI
-                url_dict['last_scraped'] = url_dict['last_crawled']
-                
-                # Convert datetime objects to strings for JSON serialization
-                for key, value in url_dict.items():
-                    if isinstance(value, datetime):
-                        url_dict[key] = value.isoformat() if value else None
-                
-                urls.append(url_dict)
-            
-            return urls
+            return [dict(row) for row in result]
             
         except Exception as e:
             logger.error(f"Error retrieving URLs: {str(e)}")
@@ -661,15 +684,8 @@ class URLDataManager(BaseDataManager):
         try:
             query = """
                 SELECT * FROM urls
-                WHERE status = 'active'
-                    AND refresh_interval_minutes IS NOT NULL
-                    AND refresh_interval_minutes > 0
-                    AND (is_refreshing IS NOT TRUE OR is_refreshing IS NULL)
-                    AND NOT EXISTS (
-                        SELECT 1 FROM urls child_urls 
-                        WHERE child_urls.parent_url_id = urls.id 
-                        AND child_urls.is_refreshing = TRUE
-                    )
+                WHERE refresh_interval_minutes > 0
+                    AND (is_refreshing IS NOT TRUE)
                     AND (
                         last_crawled IS NULL OR
                         last_crawled + INTERVAL '1 minute' * refresh_interval_minutes <= NOW()
@@ -681,26 +697,7 @@ class URLDataManager(BaseDataManager):
                 logger.debug("Scheduler: no due URLs this cycle")
                 return []
                 
-            rows = []
-            
-            for row in result:
-                url_dict = dict(row)
-                
-                # Convert boolean to int for SQLite compatibility
-                url_dict['crawl_domain'] = 1 if url_dict.get('crawl_domain') else 0
-                url_dict['ignore_robots'] = 1 if url_dict.get('ignore_robots') else 0
-                
-                # Map PostgreSQL columns used by the UI
-                url_dict['last_scraped'] = url_dict['last_crawled']
-                
-                # Convert datetime objects to strings
-                for key, value in url_dict.items():
-                    if isinstance(value, datetime):
-                        url_dict[key] = value.isoformat() if value else None
-                
-                rows.append(url_dict)
-            
-            return rows
+            return [dict(row) for row in result]
             
         except Exception as e:
             logger.error(f"Error fetching due URLs: {e}")
@@ -728,28 +725,11 @@ class URLDataManager(BaseDataManager):
             return None
             
         try:
-            query = "SELECT * FROM urls WHERE id = %s"
+            query = "SELECT id AS url_id, * FROM urls WHERE id = %s"
             result = self.execute_query(query, (url_id_str,), fetch_one=True)
             
             if result:
                 url_dict = dict(result)
-                url_dict['url_id'] = str(url_dict.get('id'))
-                if 'id' in url_dict:
-                    del url_dict['id']
-                
-                # Normalize booleans for UI compatibility
-                url_dict['crawl_domain'] = 1 if url_dict.get('crawl_domain') else 0
-                url_dict['ignore_robots'] = 1 if url_dict.get('ignore_robots') else 0
-                
-                # Map PostgreSQL columns used by the UI
-                url_dict['last_scraped'] = url_dict['last_crawled']
-
-                # Convert datetime objects to strings
-                from datetime import datetime
-                for key, value in url_dict.items():
-                    if isinstance(value, datetime):
-                        url_dict[key] = value.isoformat() if value else None
-                
                 logger.debug(f"Found URL: {url_dict['url']} (ID: {url_id_str})")
                 return url_dict
             else:
@@ -760,14 +740,14 @@ class URLDataManager(BaseDataManager):
             logger.error(f"Database error getting URL by ID {url_id_str}: {str(e)}", exc_info=True)
             return None
 
-    def get_child_urls(self, parent_url_id: str) -> List[Dict[str, Any]]:
-        """Retrieve all child URLs discovered from domain crawling for a specific parent URL."""
+    def get_child_url_documents(self, parent_url_id: str) -> List[Dict[str, Any]]:
+        """Retrieve all child documents discovered from domain crawling for a specific parent URL."""
         try:
             query = """
-                SELECT id, url, title, description, status, last_crawled, last_update_status,
-                       created_at, updated_at
-                FROM urls 
-                WHERE status = 'active' AND parent_url_id = %s
+                SELECT id AS document_id, title, file_path, filename, content_preview, document_type,
+                       processing_status, created_at, updated_at
+                FROM documents 
+                WHERE parent_url_id = %s
                 ORDER BY created_at DESC
             """
             
@@ -775,42 +755,30 @@ class URLDataManager(BaseDataManager):
             if not result:
                 return []
                 
-            child_urls = []
-            
-            for row in result:
-                url_dict = dict(row)
-                
-                # Convert datetime objects to strings for JSON serialization
-                for key, value in url_dict.items():
-                    if isinstance(value, datetime):
-                        url_dict[key] = value.isoformat() if value else None
-                
-                child_urls.append(url_dict)
-            
-            return child_urls
+            return [dict(row) for row in result]
             
         except Exception as e:
-            logger.error(f"Error retrieving child URLs for parent {parent_url_id}: {str(e)}")
+            logger.error(f"Error retrieving child URL documents for parent {parent_url_id}: {str(e)}")
             return []
 
-    def get_child_url_stats(self, parent_url_id: str) -> Dict[str, Any]:
+    def get_child_document_stats(self, parent_url_id: str) -> Dict[str, Any]:
         """
-        Get statistics for child URLs.
+        Get statistics for child documents.
         
         Args:
             parent_url_id: Parent URL ID
             
         Returns:
-            Dictionary with child URL statistics
+            Dictionary with child document statistics
         """
         try:
-            child_urls = self.get_child_urls(parent_url_id)
+            child_documents = self.get_child_url_documents(parent_url_id)
             
-            total_children = len(child_urls)
+            total_children = len(child_documents)
             status_counts = {}
             
-            for child in child_urls:
-                status = child.get('status', 'unknown')
+            for child in child_documents:
+                status = child.get('processing_status', 'unknown')
                 status_counts[status] = status_counts.get(status, 0) + 1
             
             return {
@@ -818,11 +786,11 @@ class URLDataManager(BaseDataManager):
                 'parent_url_id': parent_url_id,
                 'total_children': total_children,
                 'status_breakdown': status_counts,
-                'child_urls': child_urls
+                'child_documents': child_documents
             }
             
         except Exception as e:
-            logger.error(f"Failed to get child URL stats for {parent_url_id}: {e}")
+            logger.error(f"Failed to get child document stats for {parent_url_id}: {e}")
             return {
                 'success': False,
                 'error': str(e),
@@ -840,7 +808,7 @@ class URLDataManager(BaseDataManager):
         """Update URL metadata."""
         try:
             # Check if URL exists
-            existing_url = self.execute_query("SELECT id FROM urls WHERE id = %s", (str(url_id),), fetch_one=True)
+            existing_url = self.execute_query("SELECT id AS url_id FROM urls WHERE id = %s", (str(url_id),), fetch_one=True)
             if not existing_url:
                 return {"success": False, "message": "URL not found"}
             
@@ -886,7 +854,7 @@ class URLDataManager(BaseDataManager):
             return {"success": False, "message": str(e)}
 
     def delete_url(self, url_id: str) -> Dict[str, Any]:
-        """Delete a URL from the database and clean up all associated data."""
+        """Delete a URL and all associated data."""
         import uuid
         
         logger.info(f"Starting URL deletion process for ID: {url_id}")
@@ -896,7 +864,6 @@ class URLDataManager(BaseDataManager):
             logger.error("URL deletion failed: No URL ID provided")
             return {"success": False, "message": "Invalid URL ID: ID cannot be empty"}
         
-        # Basic UUID format validation
         try:
             uuid.UUID(url_id)
         except (ValueError, TypeError):
@@ -904,114 +871,201 @@ class URLDataManager(BaseDataManager):
             return {"success": False, "message": "Invalid URL ID format"}
         
         try:
-            logger.debug(f"Attempting to delete URL with ID: {url_id}")
+            # Step 1: Get document IDs and snapshot file info for this URL
+            url_context = self._get_complete_url_context(url_id)
+            if url_context is None:
+                return {"success": False, "message": "Error retrieving URL context"}
             
-            # First check if the URL exists
-            existing_url = self.execute_query("SELECT url, title FROM urls WHERE id = %s", (url_id,), fetch_one=True)
+            document_ids = url_context["document_ids"]
+            snapshots = url_context["snapshots"]
             
-            if not existing_url:
-                logger.warning(f"URL deletion failed: No URL found with ID: {url_id}")
-                return {"success": False, "message": "URL not found"}
+            # Step 2: Delete files from disk
+            files_deleted = self._delete_snapshot_files_from_disk(snapshots)
             
-            url_string = existing_url['url']
-            logger.info(f"Found URL to delete - ID: {url_id}, URL: {url_string}, Title: {existing_url['title']}")
+            # Step 3: Delete embeddings from Milvus
+            embeddings_deleted = self._delete_embeddings_by_document_ids(document_ids)
             
-            # Step 1: Clean up snapshots using snapshot service
-            logger.info(f"Cleaning up snapshots for URL ID: {url_id}")
-            snapshot_cleanup_result = {"deleted": 0}
-            try:
-                # Import snapshot service to handle proper cleanup
-                from ingestion.url.utils.snapshot_service import URLSnapshotService
-                from rag_manager.core.config import Config
-                
-                config = Config()
-                snapshot_service = URLSnapshotService(self.postgres_manager, config)
-                
-                # Use the comprehensive snapshot cleanup
-                snapshot_cleanup_result = snapshot_service.cleanup_all_snapshots(url_id)
-                if snapshot_cleanup_result.get("success"):
-                    logger.info(f"Successfully cleaned up {snapshot_cleanup_result.get('deleted', 0)} snapshots")
-                else:
-                    logger.warning(f"Snapshot cleanup warning: {snapshot_cleanup_result.get('error', 'Unknown error')}")
-            except Exception as snapshot_error:
-                logger.warning(f"Failed to use snapshot service for cleanup: {snapshot_error}")
-                # Fall back to basic cleanup
-                snapshot_cleanup_result = {"deleted": 0, "error": str(snapshot_error)}
-
-            # Step 2: Find and delete any remaining documents (fallback)
-            logger.info(f"Cleaning up any remaining documents for URL: {url_string}")
-            documents_query = """
-                SELECT d.id, d.file_path 
-                FROM documents d 
-                LEFT JOIN url_snapshots us ON d.id = us.document_id 
-                WHERE us.url_id = %s OR (d.document_type = 'url' AND d.file_path LIKE %s)
-            """
-            url_documents = self.execute_query(documents_query, (url_id, f"%{url_string}%"), fetch_all=True)
+            # Step 4: Delete document chunks from PostgreSQL
+            chunks_deleted = self._delete_document_chunks_by_document_ids(document_ids)
             
-            if url_documents:
-                document_ids = [doc['id'] for doc in url_documents]
-                remaining_files = [doc['file_path'] for doc in url_documents]
-                
-                logger.info(f"Found {len(url_documents)} remaining documents to clean up")
-                
-                # Step 3: Delete document chunks first (foreign key constraint)
-                chunk_delete_query = "DELETE FROM document_chunks WHERE document_id = ANY(%s)"
-                self.execute_query(chunk_delete_query, (document_ids,))
-                logger.info(f"Deleted document chunks for {len(document_ids)} documents")
-                
-                # Step 4: Delete remaining documents
-                doc_delete_query = "DELETE FROM documents WHERE id = ANY(%s)"
-                self.execute_query(doc_delete_query, (document_ids,))
-                logger.info(f"Deleted {len(document_ids)} remaining documents")
-                
-                # Step 5: Clean up any remaining files on disk
-                files_deleted = 0
-                for file_path in remaining_files:
-                    try:
-                        if file_path and os.path.exists(file_path):
-                            os.remove(file_path)
-                            files_deleted += 1
-                            logger.debug(f"Deleted remaining file: {file_path}")
-                            # Also delete JSON sidecar if it exists
-                            json_path = file_path.replace(".pdf", ".json")
-                            if os.path.exists(json_path):
-                                os.remove(json_path)
-                                logger.debug(f"Deleted remaining JSON file: {json_path}")
-                    except Exception as file_error:
-                        logger.warning(f"Failed to delete remaining file {file_path}: {file_error}")
-            else:
-                document_ids = []
-                files_deleted = 0
-                logger.info("No remaining documents found to clean up")
+            # Step 5: Delete URL snapshots
+            snapshots_deleted = self._delete_url_snapshots_by_document_ids(document_ids)
             
-            # Step 6: Delete child URLs first (if any)
-            child_delete_query = "DELETE FROM urls WHERE parent_url_id = %s"
-            self.execute_query(child_delete_query, (url_id,))
-            logger.info(f"Deleted child URLs for parent {url_id}")
+            # Step 6: Delete documents
+            documents_deleted = self._delete_documents_by_document_ids(document_ids)
             
-            # Step 7: Delete the main URL
-            url_delete_query = "DELETE FROM urls WHERE id = %s"
-            self.execute_query(url_delete_query, (url_id,))
+            # Step 7: Delete URL record
+            self._delete_url_record(url_id)
             
-            # Calculate total files deleted (snapshots + remaining files)
-            total_files_deleted = snapshot_cleanup_result.get("deleted", 0) + files_deleted
-            
-            logger.info(f"URL deletion completed successfully - ID: {url_id}, URL: {url_string}, Total files cleaned: {total_files_deleted}")
+            logger.info(f"URL deletion completed successfully - ID: {url_id}")
             return {
-                "success": True, 
+                "success": True,
                 "message": "URL and associated data deleted successfully",
                 "details": {
-                    "url": url_string,
-                    "documents_deleted": len(document_ids),
-                    "snapshot_files_deleted": snapshot_cleanup_result.get("deleted", 0),
-                    "remaining_files_deleted": files_deleted,
-                    "total_files_deleted": total_files_deleted
+                    "url_id": url_id,
+                    "files_deleted": files_deleted,
+                    "embeddings_deleted": embeddings_deleted,
+                    "chunks_deleted": chunks_deleted,
+                    "snapshots_deleted": snapshots_deleted,
+                    "documents_deleted": documents_deleted
                 }
             }
             
         except Exception as e:
-            logger.error(f"URL deletion failed for ID {url_id}: {str(e)}", exc_info=True)
-            return {"success": False, "message": f"Deletion failed: {str(e)}"}
+            logger.error(f"URL deletion failed for ID {url_id}: {str(e)}")
+            raise
+
+    def _get_complete_url_context(self, url_id: str) -> Optional[Dict[str, Any]]:
+        """Get document IDs and snapshot file info for URL deletion operations."""
+        try:
+            # Get document IDs for this URL
+            documents_query = """
+                SELECT id AS document_id
+                FROM documents 
+                WHERE parent_url_id = %s
+            """
+            documents = self.execute_query(documents_query, (url_id,), fetch_all=True)
+            document_ids = [doc['document_id'] for doc in documents] if documents else []
+            
+            # Get snapshot file info for this URL
+            snapshots_query = """
+                SELECT file_path, pdf_file, json_file
+                FROM url_snapshots 
+                WHERE url_id = %s
+            """
+            snapshots = self.execute_query(snapshots_query, (url_id,), fetch_all=True)
+            snapshot_files = [dict(snap) for snap in snapshots] if snapshots else []
+            
+            return {
+                "document_ids": document_ids,
+                "snapshots": snapshot_files
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting URL context for {url_id}: {e}")
+            raise
+
+    def _delete_snapshot_files_from_disk(self, snapshots: List[Dict[str, Any]]) -> int:
+        """Delete snapshot files from filesystem."""
+        if not snapshots:
+            return 0
+        
+        files_deleted = 0
+        
+        try:
+            for snapshot in snapshots:
+                file_path = snapshot.get("file_path")
+                pdf_file = snapshot.get("pdf_file")
+                json_file = snapshot.get("json_file")
+                
+                if file_path and (pdf_file or json_file):
+                    # Delete PDF file
+                    if pdf_file:
+                        pdf_path = os.path.join(file_path, pdf_file)
+                        if os.path.exists(pdf_path):
+                            os.remove(pdf_path)
+                            files_deleted += 1
+                            logger.debug(f"Deleted PDF file: {pdf_path}")
+                    
+                    # Delete JSON file
+                    if json_file:
+                        json_path = os.path.join(file_path, json_file)
+                        if os.path.exists(json_path):
+                            os.remove(json_path)
+                            files_deleted += 1
+                            logger.debug(f"Deleted JSON file: {json_path}")
+            
+            logger.info(f"Deleted {files_deleted} files from disk")
+            return files_deleted
+            
+        except Exception as e:
+            logger.error(f"Error deleting files from disk: {e}")
+            raise
+
+    def _delete_embeddings_by_document_ids(self, document_ids: List[str]) -> int:
+        """Delete embeddings from Milvus by document IDs."""
+        if not self.milvus_manager or not document_ids:
+            return 0
+        
+        try:
+            total_deleted = 0
+            for document_id in document_ids:
+                result = self.milvus_manager.delete_document(document_id=document_id)
+                if result.get('success', False):
+                    deleted_count = result.get('deleted_count', 0)
+                    total_deleted += deleted_count
+                    logger.debug(f"Deleted {deleted_count} embeddings for document {document_id}")
+                else:
+                    logger.warning(f"Failed to delete embeddings for document {document_id}")
+            
+            logger.info(f"Deleted {total_deleted} embeddings from Milvus")
+            return total_deleted
+            
+        except Exception as e:
+            logger.error(f"Error deleting embeddings: {e}")
+            raise
+
+    def _delete_document_chunks_by_document_ids(self, document_ids: List[str]) -> int:
+        """Delete document chunks from PostgreSQL by document IDs."""
+        if not document_ids:
+            return 0
+        
+        try:
+            query = "DELETE FROM document_chunks WHERE document_id = ANY(%s::uuid[]) RETURNING id"
+            results = self.execute_query(query, (document_ids,), fetch_all=True)
+            
+            chunks_deleted = len(results) if results else 0
+            logger.info(f"Deleted {chunks_deleted} document chunks")
+            return chunks_deleted
+            
+        except Exception as e:
+            logger.error(f"Error deleting document chunks: {e}")
+            raise
+
+    def _delete_url_snapshots_by_document_ids(self, document_ids: List[str]) -> int:
+        """Delete URL snapshots by document IDs."""
+        if not document_ids:
+            return 0
+        
+        try:
+            query = "DELETE FROM url_snapshots WHERE document_id = ANY(%s::uuid[]) RETURNING id"
+            results = self.execute_query(query, (document_ids,), fetch_all=True)
+            
+            snapshots_deleted = len(results) if results else 0
+            logger.info(f"Deleted {snapshots_deleted} URL snapshots")
+            return snapshots_deleted
+            
+        except Exception as e:
+            logger.error(f"Error deleting URL snapshots: {e}")
+            raise
+
+    def _delete_documents_by_document_ids(self, document_ids: List[str]) -> int:
+        """Delete documents by document IDs."""
+        if not document_ids:
+            return 0
+        
+        try:
+            query = "DELETE FROM documents WHERE id = ANY(%s::uuid[]) RETURNING id"
+            results = self.execute_query(query, (document_ids,), fetch_all=True)
+            
+            documents_deleted = len(results) if results else 0
+            logger.info(f"Deleted {documents_deleted} documents")
+            return documents_deleted
+            
+        except Exception as e:
+            logger.error(f"Error deleting documents: {e}")
+            raise
+
+    def _delete_url_record(self, url_id: str) -> None:
+        """Delete the URL record from urls table."""
+        try:
+            query = "DELETE FROM urls WHERE id = %s"
+            self.execute_query(query, (url_id,))
+            logger.info(f"Deleted URL record: {url_id}")
+            
+        except Exception as e:
+            logger.error(f"Error deleting URL record: {e}")
+            raise
 
     def mark_scraped(self, url_id: str, refresh_interval_minutes: Optional[int]) -> None:
         """Mark URL as scraped."""
@@ -1064,7 +1118,7 @@ class URLDataManager(BaseDataManager):
         """
         try:
             query = """
-                SELECT id, url, ignore_robots, last_update_status, created_at
+                SELECT id AS url_id, url, ignore_robots, last_update_status, created_at
                 FROM urls 
                 WHERE id = %s AND status = 'active'
             """
@@ -1077,7 +1131,7 @@ class URLDataManager(BaseDataManager):
             
             return {
                 "success": True,
-                "id": str(url_info['id']),
+                "id": str(url_info['url_id']),
                 "url": url_info['url'],
                 "ignore_robots": bool(url_info['ignore_robots']),
                 "robots_enforcement": "disabled" if url_info['ignore_robots'] else "enabled",
@@ -1105,7 +1159,7 @@ class URLDataManager(BaseDataManager):
                 UPDATE urls 
                 SET ignore_robots = %s, updated_at = NOW()
                 WHERE id = %s AND status = 'active'
-                RETURNING id, url, ignore_robots
+                RETURNING id AS url_id, url, ignore_robots
             """
             result = self.execute_query(query, (ignore_robots, url_id), fetch_one=True)
             
@@ -1118,7 +1172,7 @@ class URLDataManager(BaseDataManager):
             
             return {
                 "success": True,
-                "id": str(url_info['id']),
+                "id": str(url_info['url_id']),
                 "url": url_info['url'],
                 "ignore_robots": bool(url_info['ignore_robots']),
                 "message": f"Robots.txt enforcement {'disabled' if ignore_robots else 'enabled'}"

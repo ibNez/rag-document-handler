@@ -792,7 +792,7 @@ class WebRoutes:
                     # Compute next_refresh similar to list view
                     next_refresh = None
                     try:
-                        last = rec.get('last_scraped')
+                        last = rec.get('last_crawled')  # Fixed: use last_crawled from database
                         interval = rec.get('refresh_interval_minutes')
                         if last and interval and int(interval) > 0:
                             try:
@@ -805,7 +805,7 @@ class WebRoutes:
                         next_refresh = None
                     
                     # Format last_scraped to human-readable format
-                    last_scraped = rec.get('last_scraped')
+                    last_scraped = rec.get('last_crawled')  # Fixed: use last_crawled from database
                     if last_scraped:
                         try:
                             dt_last_scraped = datetime.fromisoformat(str(last_scraped))

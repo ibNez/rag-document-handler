@@ -89,6 +89,31 @@ class MilvusManager:
         try:
             logger.info(f"Initializing document collection '{self.collection_name}' via LangChain...")
             self._ensure_vector_store()
+            
+            # Force collection creation by adding a dummy document if collection doesn't exist
+            if not utility.has_collection(self.collection_name):
+                logger.info(f"Collection '{self.collection_name}' doesn't exist, forcing creation with dummy document...")
+                dummy_texts = ["Initialization document - this will be removed"]
+                dummy_metas = [{
+                    "document_id": "init-dummy", 
+                    "content_hash": "init", 
+                    "page": 1,
+                    "snapshot_id": "init-dummy-snapshot"  # Include snapshot_id for schema creation
+                }]
+                
+                # Ensure vector store is initialized before using add_texts
+                if self.vector_store is None:
+                    raise RuntimeError("Vector store not initialized for collection creation")
+                    
+                self.vector_store.add_texts(texts=dummy_texts, metadatas=dummy_metas)
+                
+                # Remove the dummy document immediately
+                if utility.has_collection(self.collection_name):
+                    col = Collection(self.collection_name)
+                    col.delete(expr='document_id == "init-dummy"')
+                    col.flush()
+                    logger.info(f"Collection '{self.collection_name}' created and dummy document removed")
+            
             logger.info(f"Document collection '{self.collection_name}' initialized successfully")
         except Exception as e:
             logger.error(f"Failed to initialize document collection '{self.collection_name}': {e}", exc_info=True)
@@ -98,6 +123,26 @@ class MilvusManager:
         try:
             logger.info(f"Initializing email collection '{self.email_collection_name}' via LangChain...")
             self._ensure_email_vector_store()
+            
+            # Force collection creation by adding a dummy document if collection doesn't exist
+            if not utility.has_collection(self.email_collection_name):
+                logger.info(f"Collection '{self.email_collection_name}' doesn't exist, forcing creation with dummy document...")
+                dummy_texts = ["Email initialization document - this will be removed"]
+                dummy_metas = [{"document_id": "init-dummy-email", "content_hash": "init", "page": 1}]
+                
+                # Ensure email vector store is initialized before using add_texts
+                if self.email_vector_store is None:
+                    raise RuntimeError("Email vector store not initialized for collection creation")
+                    
+                self.email_vector_store.add_texts(texts=dummy_texts, metadatas=dummy_metas)
+                
+                # Remove the dummy document immediately
+                if utility.has_collection(self.email_collection_name):
+                    col = Collection(self.email_collection_name)
+                    col.delete(expr='document_id == "init-dummy-email"')
+                    col.flush()
+                    logger.info(f"Collection '{self.email_collection_name}' created and dummy document removed")
+            
             logger.info(f"Email collection '{self.email_collection_name}' initialized successfully")
         except Exception as e:
             logger.error(f"Failed to initialize email collection '{self.email_collection_name}': {e}", exc_info=True)
@@ -314,7 +359,8 @@ class MilvusManager:
             meta_minimal = {
                 'document_id': document_id,  # ID reference to PostgreSQL document
                 'content_hash': ch,            # For deduplication
-                'page': int(meta.get('page', 0) or 0)  # Keep page for basic navigation
+                'page': int(meta.get('page', 0) or 0),  # Keep page for basic navigation
+                'snapshot_id': meta.get('snapshot_id')  # Keep snapshot_id for temporal deletion
             }
             
             texts.append(content)
@@ -582,6 +628,67 @@ class MilvusManager:
                 "entities_before": -1,
                 "entities_after": -1,
                 "remaining_records": -1
+            }
+
+    def delete_by_snapshot_id(self, snapshot_id: str) -> Dict[str, Any]:
+        """
+        Delete all documents associated with a specific snapshot_id.
+        
+        Args:
+            snapshot_id: Snapshot ID to delete documents for
+            
+        Returns:
+            Dictionary with deletion results
+        """
+        try:
+            if not snapshot_id:
+                return {
+                    "success": False,
+                    "error": "No snapshot_id provided",
+                    "deleted_count": 0
+                }
+            
+            # Check if collection exists
+            if not utility.has_collection(self.collection_name):
+                logger.warning(f"Collection '{self.collection_name}' does not exist - nothing to delete")
+                return {"success": True, "deleted_count": 0, "message": "Collection does not exist"}
+            
+            col = Collection(self.collection_name)
+            
+            # Get initial count
+            initial_count = col.num_entities
+            
+            # Build delete expression for snapshot_id
+            delete_expr = f'snapshot_id == "{snapshot_id}"'
+            logger.info(f"Delete expression: {delete_expr}")
+            
+            # Execute deletion
+            delete_result = col.delete(expr=delete_expr)
+            
+            # Get final count
+            final_count = col.num_entities
+            deleted_count = initial_count - final_count
+            
+            result = {
+                "success": True,
+                "deleted_count": deleted_count,
+                "entities_before": initial_count,
+                "entities_after": final_count,
+                "delete_expression": delete_expr,
+                "snapshot_id": snapshot_id
+            }
+            
+            logger.info(f"Successfully deleted {deleted_count} entities for snapshot_id '{snapshot_id}'")
+            return result
+            
+        except Exception as e:
+            error_msg = f"Snapshot deletion failed for snapshot_id {snapshot_id}: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            return {
+                "success": False,
+                "error": error_msg,
+                "deleted_count": 0,
+                "snapshot_id": snapshot_id
             }
 
     def check_deletion_status(self, document_id: Optional[str] = None, filename: Optional[str] = None) -> Dict[str, Any]:
