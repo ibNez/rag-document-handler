@@ -221,6 +221,25 @@ class DocumentDataManager(BaseDataManager):
             logger.error(f"Failed to get knowledgebase metadata: {e}")
             return kb_meta
     
+    def get_total_chunks_count(self) -> int:
+        """
+        Get total count of chunks in the document_chunks table.
+        
+        Returns:
+            Total number of document chunks
+        """
+        try:
+            with self.get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("SELECT COUNT(*) as count FROM document_chunks")
+                    result = cursor.fetchone()
+                    if result:
+                        return int(result['count'] or 0)
+                    return 0
+        except Exception as e:
+            logger.error(f"Failed to get total chunks count: {e}")
+            return 0
+    
     def get_document_statistics(self) -> Dict[str, Any]:
         """
         Get global document statistics.
