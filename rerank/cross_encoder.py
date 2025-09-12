@@ -202,43 +202,6 @@ class CrossEncoderReranker:
             logger.error(f"Error during reranking: {e}")
             raise RuntimeError(f"Cross-encoder reranking failed: {e}") from e
 
-    def batch_rerank(
-        self,
-        queries: List[str],
-        candidates_list: List[List[Dict[str, Any]]],
-        top_k: Optional[int] = None
-    ) -> List[List[RerankResult]]:
-        """
-        Rerank multiple queries and their candidates in batch.
-        
-        Args:
-            queries: List of search queries
-            candidates_list: List of candidate lists, one per query
-            top_k: Number of top results to return per query
-        
-        Returns:
-            List of reranked results, one list per query
-        """
-        if len(queries) != len(candidates_list):
-            raise ValueError("Number of queries must match number of candidate lists")
-        
-        results = []
-        for query, candidates in zip(queries, candidates_list):
-            query_results = self.rerank(query, candidates, top_k)
-            results.append(query_results)
-        
-        return results
-    
-    def get_model_info(self) -> Dict[str, Any]:
-        """Get information about the loaded model."""
-        return {
-            'model_name': self.model_name,
-            'max_length': self.max_length,
-            'device': self.device,
-            'available': self.is_available(),
-            'sentence_transformers_available': SENTENCE_TRANSFORMERS_AVAILABLE
-        }
-
 
 class RerankerFactory:
     """Factory for creating different types of rerankers."""
@@ -272,31 +235,4 @@ class RerankerFactory:
         
         model_name = cls.SUPPORTED_MODELS[model_type]
         return CrossEncoderReranker(model_name=model_name, **kwargs)
-    
-    @classmethod
-    def list_supported_models(cls) -> Dict[str, str]:
-        """Get list of supported model types."""
-        return cls.SUPPORTED_MODELS.copy()
 
-
-# Convenience function for quick reranking
-def rerank_documents(
-    query: str,
-    documents: List[Dict[str, Any]],
-    model_type: str = 'ms-marco-minilm',
-    top_k: Optional[int] = None
-) -> List[RerankResult]:
-    """
-    Convenience function for quick document reranking.
-    
-    Args:
-        query: Search query
-        documents: List of documents to rerank
-        model_type: Type of reranker model to use
-        top_k: Number of top results to return
-    
-    Returns:
-        List of reranked documents
-    """
-    reranker = RerankerFactory.create_reranker(model_type)
-    return reranker.rerank(query, documents, top_k)

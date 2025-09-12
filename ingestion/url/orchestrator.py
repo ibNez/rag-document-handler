@@ -97,7 +97,6 @@ class URLOrchestrator:
         """
         if not self.url_manager:
             return {"success": False, "error": "URL manager not available"}
-        
         try:
             # Get URL details
             # PostgreSQLURLManager canonicalizes the primary key to 'url_id'

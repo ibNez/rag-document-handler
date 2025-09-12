@@ -111,21 +111,7 @@ class EmailDataManager(BaseDataManager):
         except Exception as e:
             logger.error(f"Failed to upsert email record {message_id}: {e}")
             raise
-    
-    def get_email_by_id(self, message_id: str) -> Optional[Dict[str, Any]]:
-        """
-        Retrieve email record by message ID.
-        
-        Args:
-            message_id: Email message ID
-            
-        Returns:
-            Email record dictionary or None if not found
-        """
-        query = "SELECT * FROM emails WHERE message_id = %s"
-        result = self.execute_query(query, (message_id,), fetch_one=True)
-        return dict(result) if result else None
-    
+     
     def delete_email(self, message_id: str) -> bool:
         """
         Delete email record by message ID.
@@ -158,52 +144,7 @@ class EmailDataManager(BaseDataManager):
     # =============================================================================
     # Email Statistics Operations
     # =============================================================================
-    
-    def get_email_statistics(self, email_address: str) -> Dict[str, int]:
-        """
-        Get email statistics for a specific email address.
         
-        Args:
-            email_address: Email address to get statistics for
-            
-        Returns:
-            Dictionary with email statistics
-        """
-        try:
-            query = """
-                SELECT 
-                    COUNT(DISTINCT message_id) as total_emails,
-                    COUNT(*) as total_chunks,
-                    COUNT(*) FILTER (WHERE created_at >= CURRENT_DATE) as today_emails,
-                    COUNT(*) FILTER (WHERE created_at >= CURRENT_DATE - INTERVAL '7 days') as week_emails,
-                    COUNT(*) FILTER (WHERE created_at >= CURRENT_DATE - INTERVAL '30 days') as month_emails
-                FROM emails 
-                WHERE from_addr = %s
-            """
-            
-            result = self.execute_query(query, (email_address,), fetch_one=True)
-            
-            if result:
-                return {
-                    'total_emails': result['total_emails'],
-                    'total_chunks': result['total_chunks'],
-                    'today_emails': result['today_emails'],
-                    'week_emails': result['week_emails'],
-                    'month_emails': result['month_emails']
-                }
-            else:
-                return {
-                    'total_emails': 0,
-                    'total_chunks': 0,
-                    'today_emails': 0,
-                    'week_emails': 0,
-                    'month_emails': 0
-                }
-                
-        except Exception as e:
-            logger.error(f"Failed to get email statistics for {email_address}: {e}")
-            raise
-    
     def get_global_email_statistics(self) -> Dict[str, int]:
         """
         Get global email statistics across all accounts.
@@ -266,53 +207,6 @@ class EmailDataManager(BaseDataManager):
             logger.error(f"Failed to update total emails count for account {account_id}: {e}")
             raise
 
-    def update_account_sync_status(self, account_id: int, last_synced: Optional[datetime] = None, 
-                                  last_update_status: Optional[str] = None, 
-                                  current_offset: Optional[int] = None) -> None:
-        """
-        Update email account sync status and position.
-        
-        Args:
-            account_id: Email account ID
-            last_synced: Last synchronization timestamp
-            last_update_status: Status of last update (success/error)
-            current_offset: Current email offset position
-        """
-        try:
-            # Build dynamic query based on provided parameters
-            update_fields = []
-            params = []
-            
-            if last_synced is not None:
-                update_fields.append("last_synced = %s")
-                params.append(last_synced)
-            
-            if last_update_status is not None:
-                update_fields.append("last_update_status = %s")
-                params.append(last_update_status)
-            
-            if current_offset is not None:
-                update_fields.append("current_offset = %s")
-                params.append(current_offset)
-            
-            if not update_fields:
-                logger.warning(f"No fields to update for account {account_id}")
-                return
-            
-            query = f"""
-                UPDATE email_accounts 
-                SET {', '.join(update_fields)}, updated_at = CURRENT_TIMESTAMP
-                WHERE id = %s
-            """
-            params.append(account_id)
-            
-            self.execute_query(query, tuple(params))
-            logger.debug(f"Updated sync status for account {account_id}: fields={update_fields}")
-            
-        except Exception as e:
-            logger.error(f"Failed to update sync status for account {account_id}: {e}")
-            raise
-    
     # =============================================================================
     # Email Search Operations  
     # =============================================================================
@@ -373,57 +267,6 @@ class EmailDataManager(BaseDataManager):
             logger.error(f"FTS search failed for query '{query}': {e}")
             raise
     
-    def search_chunks_for_email(self, email_id: str) -> List[Dict[str, Any]]:
-        """
-        Retrieve all chunks for a specific email.
-        
-        Args:
-            email_id: Email message ID
-            
-        Returns:
-            List of chunk dictionaries
-        """
-        try:
-            query = """
-                SELECT 
-                    message_id,
-                    subject,
-                    from_addr,
-                    to_addrs,
-                    date_utc,
-                    content,
-                    created_at
-                FROM emails 
-                WHERE message_id = %s
-                ORDER BY created_at
-            """
-            
-            results = self.execute_query(query, (email_id,), fetch_all=True)
-            
-            chunks = []
-            if results:
-                for row in results:
-                    chunk = {
-                        'chunk_id': row['message_id'],
-                        'email_id': row['message_id'],
-                        'chunk_text': row['content'],
-                        'metadata': {
-                            'message_id': row['message_id'],
-                            'subject': row['subject'],
-                            'from_addr': row['from_addr'],
-                            'to_addrs': row['to_addrs'],
-                            'date_utc': row['date_utc'],
-                            'created_at': row['created_at']
-                        }
-                    }
-                    chunks.append(chunk)
-            
-            logger.debug(f"Retrieved {len(chunks)} chunks for email {email_id}")
-            return chunks
-            
-        except Exception as e:
-            logger.error(f"Failed to get chunks for email {email_id}: {e}")
-            raise
     
     def get_chunk_statistics(self) -> Dict[str, Any]:
         """

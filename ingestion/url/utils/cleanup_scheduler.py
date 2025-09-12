@@ -65,10 +65,6 @@ class SnapshotCleanupScheduler:
                 # Continue running even if one cycle fails
                 await asyncio.sleep(self.cleanup_interval)
     
-    def stop_scheduler(self) -> None:
-        """Stop the cleanup scheduler."""
-        logger.info("Stopping snapshot cleanup scheduler")
-        self.running = False
     
     async def run_cleanup_cycle(self) -> Dict[str, Any]:
         """
@@ -156,22 +152,6 @@ class SnapshotCleanupScheduler:
             logger.error(f"Failed to get URLs with retention policies: {e}")
             return []
     
-    def get_cleanup_status(self) -> Dict[str, Any]:
-        """
-        Get current status of the cleanup scheduler.
-        
-        Returns:
-            Status dictionary
-        """
-        urls_with_policies = self._get_urls_with_retention_policies()
-        
-        return {
-            'running': self.running,
-            'cleanup_interval': self.cleanup_interval,
-            'urls_with_policies': len(urls_with_policies),
-            'last_check': datetime.now(timezone.utc).isoformat()
-        }
-
 
 # Singleton instance for shared use
 _cleanup_scheduler: Optional[SnapshotCleanupScheduler] = None
