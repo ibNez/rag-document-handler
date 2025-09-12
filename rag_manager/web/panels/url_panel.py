@@ -216,7 +216,8 @@ class URLPanelStats:
 
     def get_url_snapshot_size(self, url_id: str) -> str:
         """
-        Get the total size of all snapshots for a specific URL.
+        Get the total size of all snapshots for a specific URL by scanning the domain folder.
+        This includes the main URL and all discovered subpages from domain crawling.
         
         Args:
             url_id: The UUID of the URL
@@ -232,31 +233,36 @@ class URLPanelStats:
             if not url_data_manager:
                 return "—"
                 
-            # Get all document IDs related to this URL through snapshots
-            query = """
-                SELECT d.file_path, d.file_size
-                FROM documents d
-                JOIN url_snapshots us ON d.id = us.document_id
-                WHERE us.url_id = %s AND d.file_path IS NOT NULL
-            """
-            result = url_data_manager.execute_query(query, (url_id,), fetch_all=True)
-            
-            if not result:
+            # Get the URL to determine the domain folder
+            url_record = url_data_manager.get_url_by_id(url_id)
+            if not url_record:
+                return "—"
+                
+            url_string = url_record.get('url')
+            if not url_string:
                 return "—"
             
-            total_size = 0
+            # Get the domain from the URL for the folder structure
+            from urllib.parse import urlparse
+            parsed_url = urlparse(url_string)
+            domain = parsed_url.netloc or "unknown-domain"
             
-            for row in result:
-                file_path = row['file_path']
-                file_size = row['file_size']
-                
-                # Use file_size from database if available, otherwise check filesystem
-                if file_size:
-                    total_size += file_size
-                elif file_path and os.path.exists(file_path):
+            # Calculate size for the entire domain folder (includes all crawled pages)
+            domain_folder = os.path.join("snapshots", domain)
+            
+            # Check if the folder exists
+            if not os.path.exists(domain_folder):
+                return "—"
+            
+            # Calculate total size by scanning the entire domain directory recursively
+            total_size = 0
+            for root, dirs, files in os.walk(domain_folder):
+                for file in files:
+                    file_path = os.path.join(root, file)
                     try:
                         total_size += os.path.getsize(file_path)
-                    except Exception:
+                    except (OSError, IOError):
+                        # Skip files that can't be accessed
                         continue
             
             if total_size == 0:

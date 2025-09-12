@@ -735,9 +735,9 @@ class WebRoutes:
             
             # Update database status to 'pending' when processing starts
             try:
-                if self.rag_manager.document_manager:
+                if self.rag_manager.document_source_manager:
                     staging_path = os.path.join(self.config.UPLOAD_FOLDER, filename)
-                    self.rag_manager.document_manager.upsert_document_metadata(
+                    self.rag_manager.document_source_manager.upsert_document_metadata(
                         filename,
                         {
                             'processing_status': 'pending',
@@ -1633,7 +1633,7 @@ class WebRoutes:
                 # Enrich uploaded files with metadata from database
                 if directory == self.config.UPLOADED_FOLDER:
                     try:
-                        meta = self.rag_manager.document_manager.get_document_metadata(filename) or {} if self.rag_manager.document_manager else {}
+                        meta = self.rag_manager.document_source_manager.get_document_metadata(filename) or {} if self.rag_manager.document_source_manager else {}
                         entry['title'] = meta.get('title') or self.rag_manager._fallback_title_from_filename(filename)
                         
                         # Debug logging to see what metadata we have
