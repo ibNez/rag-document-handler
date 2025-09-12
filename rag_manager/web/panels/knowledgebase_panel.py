@@ -33,6 +33,9 @@ class KnowledgebasePanelStats:
             # Get document metadata stats from PostgreSQL
             metadata_stats = self._get_metadata_stats()
             
+            # Get total chunks count from PostgreSQL
+            total_chunks = self._get_total_chunks_count()
+            
             return {
                 # Collection metrics from Milvus
                 'total_documents': collection_stats.get('num_entities', 0),
@@ -44,7 +47,8 @@ class KnowledgebasePanelStats:
                 'avg_words_per_doc': metadata_stats.get('avg_words_per_doc', 0),
                 'avg_chunks_per_doc': metadata_stats.get('avg_chunks_per_doc', 0),
                 'median_chunk_chars': metadata_stats.get('median_chunk_chars', 0),
-                'keywords': metadata_stats.get('keywords', [])
+                'keywords': metadata_stats.get('keywords', []),
+                'total_chunks': total_chunks
             }
             
         except Exception as e:
@@ -75,6 +79,18 @@ class KnowledgebasePanelStats:
             logger.warning(f"Failed to get metadata stats: {e}")
             return {}
     
+    def _get_total_chunks_count(self) -> int:
+        """Get total chunks count from PostgreSQL."""
+        try:
+            if not self.rag_manager.document_source_manager:
+                return 0
+                
+            return self.rag_manager.document_source_manager.document_data_manager.get_total_chunks_count()
+            
+        except Exception as e:
+            logger.warning(f"Failed to get total chunks count: {e}")
+            return 0
+    
     def _empty_stats(self) -> Dict[str, Any]:
         """Return empty knowledgebase panel stats."""
         return {
@@ -85,5 +101,6 @@ class KnowledgebasePanelStats:
             'avg_words_per_doc': 0,
             'avg_chunks_per_doc': 0,
             'median_chunk_chars': 0,
-            'keywords': []
+            'keywords': [],
+            'total_chunks': 0
         }
