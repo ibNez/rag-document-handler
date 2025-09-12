@@ -360,7 +360,7 @@ class MilvusManager:
                 'document_id': document_id,  # ID reference to PostgreSQL document
                 'content_hash': ch,            # For deduplication
                 'page': int(meta.get('page', 0) or 0),  # Keep page for basic navigation
-                'snapshot_id': meta.get('snapshot_id')  # Keep snapshot_id for temporal deletion
+                'snapshot_id': meta.get('snapshot_id') or ""  # Keep snapshot_id for temporal deletion, empty string for file uploads
             }
             
             texts.append(content)
@@ -641,10 +641,10 @@ class MilvusManager:
             Dictionary with deletion results
         """
         try:
-            if not snapshot_id:
+            if not snapshot_id or snapshot_id.strip() == "":
                 return {
                     "success": False,
-                    "error": "No snapshot_id provided",
+                    "error": "No valid snapshot_id provided",
                     "deleted_count": 0
                 }
             
