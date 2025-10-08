@@ -141,11 +141,502 @@
   // refreshEmailAccounts: Re-fetches #email-accounts block, then re-binds modal button listeners.
   function refreshEmailAccounts(){ fetch(window.location.href).then(r=>r.text()).then(html => { const doc=new DOMParser().parseFromString(html,'text/html'); const newSec=doc.querySelector('#email-accounts'); const cur=document.querySelector('#email-accounts'); if(newSec && cur){ cur.innerHTML=newSec.innerHTML; applyLocalTimes(cur); attachEmailAccountListeners(); } }); }
   // attachEmailAccountListeners: Binds click handlers for Edit/Delete account buttons to populate modals.
-  function attachEmailAccountListeners(){ document.querySelectorAll('.edit-account-btn').forEach(btn => { btn.addEventListener('click', () => { fetch('/email_accounts').then(r=>r.json()).then(accounts => { const id=btn.dataset.id; const account=accounts.find(a=>a.id==id); if(account){ fillEditForm(account, btn.dataset.action); } else { populateEditFormFromDataset(btn); } }).catch(()=> populateEditFormFromDataset(btn)); }); }); document.querySelectorAll('.delete-account-btn').forEach(btn => { btn.addEventListener('click', () => { const form=document.getElementById('deleteEmailAccountForm'); form.action=btn.dataset.action; document.getElementById('deleteAccountName').textContent=btn.dataset.name||''; }); }); }
+  function attachEmailAccountListeners(){ 
+    document.querySelectorAll('.edit-account-btn').forEach(btn => { 
+      btn.addEventListener('click', () => { 
+        console.log('🔍 Edit button clicked, fetching account data...');
+        fetch('/email_accounts')
+          .then(r => {
+            console.log('🔍 /email_accounts response status:', r.status);
+            return r.json();
+          })
+          .then(accounts => { 
+            console.log('🔍 Received accounts:', accounts);
+            console.log('🔍 First account structure:', accounts[0]);
+            const id = btn.dataset.id; 
+            const account = accounts.find(a => a.id == id || a.email_account_id == id); 
+            console.log('🔍 Looking for account ID:', id);
+            console.log('🔍 Found account:', account);
+            if(account){ 
+              fillEditForm(account, btn.dataset.action); 
+            } else { 
+              console.log('🔍 Account not found, falling back to dataset');
+              populateEditFormFromDataset(btn); 
+            } 
+          })
+          .catch((error) => {
+            console.log('🔍 /email_accounts fetch failed, falling back to dataset:', error);
+            populateEditFormFromDataset(btn);
+          }); 
+      }); 
+    }); 
+    document.querySelectorAll('.delete-account-btn').forEach(btn => { 
+      btn.addEventListener('click', () => { 
+        const form = document.getElementById('deleteEmailAccountForm'); 
+        form.action = btn.dataset.action; 
+        document.getElementById('deleteAccountName').textContent = btn.dataset.name || ''; 
+      }); 
+    }); 
+  }
   // fillEditForm: Populates the edit modal with live account data from /email_accounts.
-  function fillEditForm(account, action){ const form=document.getElementById('editEmailAccountForm'); form.action=action; const map={ editAccountId:account.id, editAccountName:account.account_name, editServer:account.server, editEmailAddress:account.email_address, editPassword:'', editPort:account.port, editMailbox:account.mailbox, editBatchLimit:account.batch_limit, editRefreshInterval:account.refresh_interval_minutes, editUseSSL:account.use_ssl, editServerType:account.server_type||'imap', editLastSyncedOffset:account.last_synced_offset||'0'}; Object.keys(map).forEach(id=>{ const el=document.getElementById(id); if(!el) return; if(el.type==='checkbox') el.checked=!!map[id]; else el.value = map[id] ?? ''; }); }
+  function fillEditForm(account, action) {
+    const form = document.getElementById('editEmailAccountForm');
+    form.action = action;
+    
+    const serverType = account.server_type || 'imap';
+    
+    // Show/hide field sets based on server type
+    const traditionalFields = document.getElementById('editTraditionalFields');
+    const gmailFields = document.getElementById('editGmailFields');
+    
+    if (serverType === 'gmail') {
+      // Show Gmail fields, hide traditional fields
+      if (traditionalFields) traditionalFields.classList.add('d-none');
+      if (gmailFields) gmailFields.classList.remove('d-none');
+      
+      // Remove required attribute from hidden traditional fields
+      const traditionalRequiredFields = ['editServer', 'editEmailAddress', 'editPort', 'editMailbox'];
+      traditionalRequiredFields.forEach(fieldId => {
+        const field = document.getElementById(fieldId);
+        if (field) field.removeAttribute('required');
+      });
+      
+      // Ensure Gmail fields have required attribute
+      const gmailRequiredFields = ['editAccountName', 'editGmailEmailAddress', 'editGmailMailbox'];
+      gmailRequiredFields.forEach(fieldId => {
+        const field = document.getElementById(fieldId);
+        if (field) field.setAttribute('required', 'required');
+      });
+      
+      // Populate Gmail-specific fields
+      const gmailFieldMap = {
+        editAccountName: account.account_name,
+        editGmailEmailAddress: account.email_address,
+        editGmailMailbox: account.mailbox,
+        editBatchSize: account.batch_size,
+        editRefreshInterval: account.refresh_interval_minutes,
+        editAccountId: account.id
+      };
+      
+      Object.keys(gmailFieldMap).forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.value = gmailFieldMap[id] ?? '';
+      });
+      
+      // Try to load Gmail labels for selection
+      if (account.id) {
+        console.log('🔍 About to call loadGmailLabelsForEdit with account.mailbox:', account.mailbox);
+        loadGmailLabelsForEdit(account.id, account.mailbox);
+      }
+      
+    } else {
+      // Show traditional fields, hide Gmail fields
+      if (traditionalFields) traditionalFields.classList.remove('d-none');
+      if (gmailFields) gmailFields.classList.add('d-none');
+      
+      // Populate traditional fields
+      const traditionalFieldMap = {
+        editAccountId: account.id,
+        editAccountName: account.account_name,
+        editServer: account.server,
+        editEmailAddress: account.email_address,
+        editPassword: '',
+        editPort: account.port,
+        editMailbox: account.mailbox,
+        editBatchSize: account.batch_size,
+        editRefreshInterval: account.refresh_interval_minutes,
+        editUseSSL: account.use_ssl,
+        editLastSyncedOffset: account.last_synced_offset || '0'
+      };
+      
+      Object.keys(traditionalFieldMap).forEach(id => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        if (el.type === 'checkbox') el.checked = !!traditionalFieldMap[id];
+        else el.value = traditionalFieldMap[id] ?? '';
+      });
+      
+      // Handle mailbox selection for IMAP/Exchange
+      handleEditServerTypeChange(serverType, account);
+    }
+  }
   // populateEditFormFromDataset: Fallback when live fetch fails; uses data-* attributes on the clicked button.
-  function populateEditFormFromDataset(btn){ const form=document.getElementById('editEmailAccountForm'); form.action=btn.dataset.action; const fieldMap={ editAccountId:'id', editAccountName:'name', editServer:'server', editEmailAddress:'email', editPassword:null, editPort:'port', editMailbox:'mailbox', editBatchLimit:'batch', editRefreshInterval:'interval', editUseSSL:'ssl', editServerType:'type', editLastSyncedOffset:'offset'}; Object.entries(fieldMap).forEach(([id,key])=>{ const el=document.getElementById(id); if(!el) return; if(id==='editUseSSL') el.checked=['1','true','on'].includes(btn.dataset[key]); else if(id==='editPassword') el.value=''; else el.value= btn.dataset[key] || (id==='editServerType'?'imap':''); }); }
+  function populateEditFormFromDataset(btn) {
+    const form = document.getElementById('editEmailAccountForm');
+    form.action = btn.dataset.action;
+    
+    const serverType = btn.dataset.type || 'imap';
+    
+    // Show/hide field sets based on server type
+    const traditionalFields = document.getElementById('editTraditionalFields');
+    const gmailFields = document.getElementById('editGmailFields');
+    
+    if (serverType === 'gmail') {
+      // Show Gmail fields, hide traditional fields
+      if (traditionalFields) traditionalFields.classList.add('d-none');
+      if (gmailFields) gmailFields.classList.remove('d-none');
+      
+      // Remove required attribute from hidden traditional fields
+      const traditionalRequiredFields = ['editServer', 'editEmailAddress', 'editPort', 'editMailbox'];
+      traditionalRequiredFields.forEach(fieldId => {
+        const field = document.getElementById(fieldId);
+        if (field) field.removeAttribute('required');
+      });
+      
+      // Ensure Gmail fields have required attribute
+      const gmailRequiredFields = ['editAccountName', 'editGmailEmailAddress', 'editGmailMailbox'];
+      gmailRequiredFields.forEach(fieldId => {
+        const field = document.getElementById(fieldId);
+        if (field) field.setAttribute('required', 'required');
+      });
+      
+      // Populate Gmail-specific fields
+      const gmailFieldMap = {
+        editAccountName: 'name',
+        editGmailEmailAddress: 'email',
+        editGmailMailbox: 'mailbox',
+        editBatchSize: 'batch',
+        editRefreshInterval: 'interval',
+        editAccountId: 'id'
+      };
+      
+      Object.entries(gmailFieldMap).forEach(([id, key]) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.value = btn.dataset[key] || '';
+      });
+      
+      // Try to load Gmail labels for selection
+      const accountId = btn.dataset.id;
+      const currentMailbox = btn.dataset.mailbox;
+      console.log('🔍 Gmail account detected in populateEditFormFromDataset, calling loadGmailLabelsForEdit');
+      console.log('🔍 Account data from button dataset:', { accountId, currentMailbox });
+      console.log('🔍 All button dataset:', btn.dataset);
+      if (accountId) {
+        loadGmailLabelsForEdit(accountId, currentMailbox);
+      } else {
+        console.error('❌ No account ID found in dataset for Gmail label loading');
+      }
+      
+    } else {
+      // Show traditional fields, hide Gmail fields
+      if (traditionalFields) traditionalFields.classList.remove('d-none');
+      if (gmailFields) gmailFields.classList.add('d-none');
+      
+      // Restore required attribute to traditional fields
+      const traditionalRequiredFields = ['editServer', 'editEmailAddress', 'editPort', 'editMailbox'];
+      traditionalRequiredFields.forEach(fieldId => {
+        const field = document.getElementById(fieldId);
+        if (field) field.setAttribute('required', 'required');
+      });
+      
+      // Remove required from hidden Gmail fields
+      const gmailRequiredFields = ['editGmailEmailAddress', 'editGmailMailbox'];
+      gmailRequiredFields.forEach(fieldId => {
+        const field = document.getElementById(fieldId);
+        if (field) field.removeAttribute('required');
+      });
+      
+      // Populate traditional fields
+      const fieldMap = {
+        editAccountId: 'id',
+        editAccountName: 'name',
+        editServer: 'server',
+        editEmailAddress: 'email',
+        editPassword: null,
+        editPort: 'port',
+        editMailbox: 'mailbox',
+        editBatchSize: 'batch',
+        editRefreshInterval: 'interval',
+        editUseSSL: 'ssl',
+        editLastSyncedOffset: 'offset'
+      };
+      
+      Object.entries(fieldMap).forEach(([id, key]) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        if (id === 'editUseSSL') el.checked = ['1', 'true', 'on'].includes(btn.dataset[key]);
+        else if (id === 'editPassword') el.value = '';
+        else el.value = btn.dataset[key] || '';
+      });
+      
+      // Handle mailbox selection for IMAP/Exchange
+      const account = {
+        id: btn.dataset.id,
+        mailbox: btn.dataset.mailbox,
+        server_type: serverType
+      };
+      handleEditServerTypeChange(serverType, account);
+    }
+  }
+
+  // handleEditServerTypeChange: Handle server type changes in edit modal
+  function handleEditServerTypeChange(serverType, account) {
+    const mailboxField = document.getElementById('editMailbox');
+    const dynamicMailboxesDiv = document.getElementById('editDynamicMailboxes');
+    
+    if (!mailboxField || !dynamicMailboxesDiv) return;
+    
+    // Only show dynamic mailbox selection for IMAP and Exchange (which work)
+    // Gmail needs OAuth token implementation first
+    if ((serverType === 'imap' || serverType === 'exchange') && account && account.id) {
+      // Hide traditional mailbox field, show dynamic selection
+      mailboxField.style.display = 'none';
+      dynamicMailboxesDiv.classList.remove('d-none');
+      
+      // Load mailboxes for this account
+      loadEditAccountMailboxes(account.id, account.mailbox, serverType);
+    } else {
+      // Show traditional mailbox field for Gmail and other types
+      mailboxField.style.display = 'block';
+      dynamicMailboxesDiv.classList.add('d-none');
+      
+      // Show helpful placeholder for Gmail
+      if (serverType === 'gmail') {
+        mailboxField.placeholder = 'e.g., INBOX,SENT,Important (comma-separated Gmail labels)';
+      } else {
+        mailboxField.placeholder = 'e.g., INBOX';
+      }
+    }
+  }
+
+  // Gmail helper function for updating mailbox field with selected labels
+  function updateGmailMailboxField() {
+    console.log('🔍 updateGmailMailboxField called');
+    const checkboxes = document.querySelectorAll('input[name="gmail_labels"]:checked');
+    const selectedLabels = Array.from(checkboxes).map(cb => cb.value);
+    const mailboxField = document.getElementById('editGmailMailbox');
+    
+    console.log('🔍 Selected labels:', selectedLabels);
+    console.log('🔍 Mailbox field found:', !!mailboxField);
+    
+    if (mailboxField) {
+      mailboxField.value = selectedLabels.join(', ');
+      console.log('🔍 Updated mailbox field value to:', mailboxField.value);
+    }
+  }
+
+  // Gmail label functions for edit modal
+  function loadGmailLabelsForEdit(accountId, currentMailbox) {
+    console.log('🔍 loadGmailLabelsForEdit called with:', accountId, currentMailbox);
+    const dynamicLabels = document.getElementById('editGmailDynamicLabels');
+    const loadingIndicator = document.getElementById('editGmailLabelsLoading');
+    const labelsList = document.getElementById('editGmailLabelsList');
+    const errorDiv = document.getElementById('editGmailLabelsError');
+    
+    console.log('🔍 Elements found:', {
+      dynamicLabels: !!dynamicLabels,
+      loadingIndicator: !!loadingIndicator,
+      labelsList: !!labelsList,
+      errorDiv: !!errorDiv
+    });
+    
+    if (!dynamicLabels) {
+      console.error('❌ editGmailDynamicLabels element not found!');
+      return;
+    }
+    
+    // Show loading state
+    console.log('🔍 Showing loading state');
+    if (loadingIndicator) loadingIndicator.classList.remove('d-none');
+    if (labelsList) labelsList.classList.add('d-none');
+    if (errorDiv) errorDiv.classList.add('d-none');
+    
+    console.log('🔍 Making fetch request to:', `/email_accounts/${accountId}/mailboxes`);
+    fetch(`/email_accounts/${accountId}/mailboxes`)
+      .then(response => {
+        console.log('🔍 Response status:', response.status);
+        console.log('🔍 Response headers:', response.headers);
+        return response.json();
+      })
+      .then(data => {
+        console.log('🔍 Response data:', data);
+        if (data.error) {
+          throw new Error(data.error);
+        }
+        
+        // Extract mailboxes array from response
+        const mailboxes = data.mailboxes || data;
+        if (!Array.isArray(mailboxes)) {
+          throw new Error('Invalid response format: expected mailboxes array');
+        }
+        
+        // Build checkboxes for each label
+        const currentLabels = currentMailbox ? currentMailbox.split(',').map(l => l.trim()) : [];
+        console.log('🔍 Processing currentMailbox:', currentMailbox);
+        console.log('🔍 Parsed currentLabels:', currentLabels);
+        
+        const checkboxesHtml = mailboxes.map(label => {
+          const isChecked = currentLabels.includes(label.name) ? 'checked' : '';
+          console.log(`🔍 Label ${label.name}: currentLabels.includes = ${currentLabels.includes(label.name)}, isChecked = "${isChecked}"`);
+          return `
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" 
+                     value="${label.name}" 
+                     id="gmail_label_${label.id}" 
+                     name="gmail_labels" 
+                     ${isChecked}>
+              <label class="form-check-label" for="gmail_label_${label.id}">
+                ${label.name} <small class="text-muted">(${label.messageCount} messages)</small>
+              </label>
+            </div>
+          `;
+        }).join('');
+        
+        if (labelsList) {
+          labelsList.innerHTML = checkboxesHtml;
+          labelsList.classList.remove('d-none');
+        }
+        
+        // Update the mailbox field with selected values on change
+        const checkboxes = labelsList.querySelectorAll('input[name="gmail_labels"]');
+        console.log('🔍 Attaching event listeners to', checkboxes.length, 'Gmail label checkboxes');
+        checkboxes.forEach((checkbox, index) => {
+          console.log('🔍 Attaching listener to checkbox', index, 'label:', checkbox.value);
+          checkbox.addEventListener('change', () => {
+            console.log('🔍 Checkbox changed:', checkbox.value, 'checked:', checkbox.checked);
+            updateGmailMailboxField();
+          });
+        });
+        
+        // Call updateGmailMailboxField once initially to set the field value
+        updateGmailMailboxField();
+        
+      })
+      .catch(error => {
+        console.error('❌ Gmail labels loading failed:', error);
+        console.error('❌ Error details:', error.message, error.stack);
+        // Don't hide the error - let it bubble up
+        if (loadingIndicator) loadingIndicator.classList.add('d-none');
+        throw error; // Re-throw to expose the problem
+      })
+      .finally(() => {
+        if (loadingIndicator) loadingIndicator.classList.add('d-none');
+      });
+  }
+
+  // loadEditAccountMailboxes: Load mailboxes for edit modal (works for all server types)
+  function loadEditAccountMailboxes(accountId, currentMailboxes, serverType) {
+    const loadingDiv = document.getElementById('editMailboxesLoading');
+    const listDiv = document.getElementById('editMailboxesList');
+    const errorDiv = document.getElementById('editMailboxesError');
+    
+    if (!loadingDiv || !listDiv || !errorDiv) return;
+    
+    // Show loading, hide others
+    loadingDiv.classList.remove('d-none');
+    listDiv.classList.add('d-none');
+    errorDiv.classList.add('d-none');
+    
+    fetch(`/email_accounts/${accountId}/mailboxes`)
+      .then(response => response.json())
+      .then(data => {
+        if (data.error) {
+          throw new Error(data.error);
+        }
+        
+        // Hide loading, show list
+        loadingDiv.classList.add('d-none');
+        listDiv.classList.remove('d-none');
+        
+        // Generate checkboxes for mailboxes
+        const currentSelection = currentMailboxes ? currentMailboxes.split(',') : ['INBOX'];
+        let html = '';
+        
+        data.mailboxes.forEach(mailbox => {
+          const isChecked = currentSelection.includes(mailbox.id) ? 'checked' : '';
+          const messageCount = mailbox.messageCount ? ` (${mailbox.messageCount})` : '';
+          const typeIcon = getMailboxTypeIcon(mailbox.type);
+          
+          html += `
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" value="${mailbox.id}" 
+                     id="editMailbox_${mailbox.id}" name="mailboxes[]" ${isChecked}>
+              <label class="form-check-label" for="editMailbox_${mailbox.id}">
+                ${typeIcon} ${mailbox.name}${messageCount}
+              </label>
+            </div>
+          `;
+        });
+        
+        if (html === '') {
+          html = '<div class="text-muted">No mailboxes found</div>';
+        }
+        
+        listDiv.innerHTML = html;
+        
+        // Update hidden mailbox field when checkboxes change
+        const checkboxes = listDiv.querySelectorAll('input[type="checkbox"]');
+        checkboxes.forEach(cb => {
+          cb.addEventListener('change', updateEditMailboxField);
+        });
+        
+        // Initial update
+        updateEditMailboxField();
+        
+      })
+      .catch(error => {
+        console.error('Failed to load mailboxes:', error);
+        
+        // Hide loading, show error  
+        loadingDiv.classList.add('d-none');
+        
+        // Check if this is a Gmail fallback case
+        if (error.message.includes('OAuth implementation') || error.message.includes('fallback')) {
+          errorDiv.classList.remove('d-none');
+          errorDiv.innerHTML = `
+            <strong>Gmail Label Discovery Not Available</strong><br>
+            Gmail requires OAuth token storage for automatic label discovery. 
+            Please manually enter the mailbox/labels you want to sync (e.g., "INBOX,SENT,Important").
+          `;
+        } else {
+          errorDiv.classList.remove('d-none');
+          errorDiv.textContent = `Failed to load mailboxes: ${error.message}`;
+        }
+        
+        // Fall back to showing the traditional mailbox field
+        const mailboxField = document.getElementById('editMailbox');
+        if (mailboxField) {
+          mailboxField.style.display = 'block';
+        }
+        const dynamicMailboxesDiv = document.getElementById('editDynamicMailboxes');
+        if (dynamicMailboxesDiv) {
+          dynamicMailboxesDiv.classList.add('d-none');
+        }
+      });
+  }
+
+  // getMailboxTypeIcon: Get icon for mailbox type
+  function getMailboxTypeIcon(type) {
+    const icons = {
+      'inbox': '📥',
+      'sent': '📤', 
+      'drafts': '📝',
+      'trash': '🗑️',
+      'spam': '🚫',
+      'outbox': '📮',
+      'folder': '📁',
+      'label': '🏷️'
+    };
+    return icons[type] || '📁';
+  }
+
+  // updateEditMailboxField: Update the hidden mailbox field with selected mailboxes
+  function updateEditMailboxField() {
+    const listDiv = document.getElementById('editMailboxesList');
+    const mailboxField = document.getElementById('editMailbox');
+    
+    if (!listDiv || !mailboxField) return;
+    
+    const selectedMailboxes = [];
+    const checkboxes = listDiv.querySelectorAll('input[type="checkbox"]:checked');
+    checkboxes.forEach(cb => {
+      selectedMailboxes.push(cb.value);
+    });
+    
+    // Update the hidden field with comma-separated values
+    mailboxField.value = selectedMailboxes.length > 0 ? selectedMailboxes.join(',') : 'INBOX';
+  }
 
   // === Email Account Form Handlers ===
   // setupEmailAccountFormHandlers: Sets up AJAX form submission handlers for add/edit forms
@@ -169,6 +660,21 @@
     if (editForm) {
       editForm.addEventListener('submit', function(e) {
         e.preventDefault();
+        
+        // Ensure Gmail mailbox field is updated before submission
+        const gmailFieldsVisible = !document.getElementById('editGmailFields')?.classList.contains('d-none');
+        if (gmailFieldsVisible) {
+          console.log('🔍 Gmail fields visible, updating mailbox field before submission');
+          updateGmailMailboxField();
+        }
+        
+        // Debug: Check Gmail mailbox field value before submission
+        const gmailMailboxField = document.getElementById('editGmailMailbox');
+        if (gmailMailboxField) {
+          console.log('🔍 Gmail mailbox field value before submission:', gmailMailboxField.value);
+          console.log('🔍 Gmail mailbox field name:', gmailMailboxField.name);
+        }
+        
         // Check if button is disabled to prevent multiple submissions
         const submitBtn = document.getElementById('editEmailAccountSubmit');
         if (submitBtn && submitBtn.disabled) {
@@ -219,6 +725,191 @@
     }
   }
 
+  // === Dynamic Edit Email Form Behavior ===
+  // setupDynamicEditEmailForm: Sets up dynamic mailbox selection for edit modal
+  function setupDynamicEditEmailForm() {
+    // Handle initial state when modal is shown
+    const editModal = document.getElementById('editEmailAccountModal');
+    if (editModal) {
+      editModal.addEventListener('shown.bs.modal', function() {
+        // The server type and mailbox handling is now managed in fillEditForm
+        // and populateEditFormFromDataset functions, so no additional setup needed here
+      });
+    }
+  }
+
+  // === Dynamic Email Form Behavior ===
+  // setupDynamicEmailForm: Sets up server type dependent form fields
+  function setupDynamicEmailForm() {
+    const serverTypeSelect = document.getElementById('addServerType');
+    const traditionalFields = document.getElementById('addTraditionalFields');
+    const gmailFields = document.getElementById('addGmailFields');
+    const commonFields = document.getElementById('addCommonFields');
+    const gmailAuthBtn = document.getElementById('addGmailAuthBtn');
+    const submitBtn = document.getElementById('addEmailAccountSubmit');
+
+    if (!serverTypeSelect) return;
+
+    // Initial state: hide save button until server type is selected
+    if (submitBtn) submitBtn.style.display = 'none';
+
+    serverTypeSelect.addEventListener('change', function() {
+      const serverType = this.value;
+      
+      // Hide all conditional fields
+      if (traditionalFields) traditionalFields.classList.add('d-none');
+      if (gmailFields) gmailFields.classList.add('d-none');
+      if (commonFields) commonFields.classList.add('d-none');
+      if (gmailAuthBtn) gmailAuthBtn.style.display = 'none';
+      if (submitBtn) submitBtn.style.display = 'none'; // Hide until appropriate server type selected
+
+      // Clear required attributes
+      document.querySelectorAll('#addTraditionalFields [required], #addGmailFields [required]').forEach(el => {
+        el.removeAttribute('required');
+      });
+
+      // Show appropriate fields based on server type
+      if (serverType === 'gmail') {
+        if (gmailFields) gmailFields.classList.remove('d-none');
+        if (commonFields) commonFields.classList.remove('d-none');
+        if (gmailAuthBtn) gmailAuthBtn.style.display = 'inline-block';
+        if (submitBtn) submitBtn.style.display = 'none'; // Hide Save button for Gmail - OAuth handles saving
+
+        // Set required for Gmail fields
+        const gmailAddress = document.querySelector('#addGmailFields input[name="gmail_address"]');
+        if (gmailAddress) gmailAddress.setAttribute('required', 'required');
+
+      } else if (serverType === 'imap' || serverType === 'exchange') {
+        if (traditionalFields) traditionalFields.classList.remove('d-none');
+        if (commonFields) commonFields.classList.remove('d-none');
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.style.display = 'inline-block'; // Show Save button for traditional auth
+        }
+
+        // Set required for traditional fields
+        document.querySelectorAll('#addTraditionalFields input[name="server"], #addTraditionalFields input[name="email_address"], #addTraditionalFields input[name="password"], #addTraditionalFields input[name="port"]').forEach(el => {
+          el.setAttribute('required', 'required');
+        });
+
+        // Pre-fill common values for known providers
+        if (serverType === 'imap') {
+          const serverField = document.querySelector('#addTraditionalFields input[name="server"]');
+          const portField = document.querySelector('#addTraditionalFields input[name="port"]');
+          const sslField = document.querySelector('#addTraditionalFields input[name="use_ssl"]');
+          
+          if (serverField && !serverField.value) serverField.placeholder = 'e.g., imap.gmail.com';
+          if (portField && !portField.value) portField.value = '993';
+          if (sslField) sslField.checked = true;
+        }
+      }
+    });
+
+    // Gmail OAuth button handler
+    if (gmailAuthBtn) {
+      gmailAuthBtn.addEventListener('click', function() {
+        const gmailAddress = document.querySelector('#addGmailFields input[name="gmail_address"]').value;
+        if (!gmailAddress) {
+          alert('Please enter your Gmail address first.');
+          return;
+        }
+        
+        // Start OAuth flow
+        initiateGmailOAuth(gmailAddress);
+      });
+    }
+  }
+
+  // initiateGmailOAuth: Starts the Gmail OAuth flow
+  function initiateGmailOAuth(emailAddress) {
+    const gmailAuthBtn = document.getElementById('addGmailAuthBtn');
+    const authStatus = document.getElementById('gmailAuthStatus');
+    
+    // Clear any previous status messages
+    if (authStatus) {
+      authStatus.classList.add('d-none');
+    }
+    
+    // Show loading state
+    gmailAuthBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Opening Gmail...';
+    gmailAuthBtn.disabled = true;
+
+    // Build OAuth URL with email hint
+    const oauthUrl = `/oauth/gmail/start?email=${encodeURIComponent(emailAddress)}`;
+    
+    // Open OAuth in popup window
+    const popup = window.open(oauthUrl, 'gmail_oauth', 'width=500,height=600,scrollbars=yes,resizable=yes');
+    
+    if (!popup) {
+      alert('Popup blocked! Please allow popups for this site and try again.');
+      // Reset button state
+      gmailAuthBtn.disabled = false;
+      gmailAuthBtn.innerHTML = '<i class="fab fa-google"></i> Authenticate with Gmail';
+      return;
+    }
+    
+    // Listen for OAuth completion
+    const checkClosed = setInterval(() => {
+      if (popup.closed) {
+        clearInterval(checkClosed);
+        
+        // Check if OAuth was successful by checking for success message
+        checkGmailOAuthStatus();
+        
+        // Reset button state if OAuth failed (success will hide the button)
+        const oauthSuccess = localStorage.getItem('gmail_oauth_success');
+        if (!oauthSuccess) {
+          gmailAuthBtn.disabled = false;
+          gmailAuthBtn.innerHTML = '<i class="fab fa-google"></i> Authenticate with Gmail';
+        }
+      }
+    }, 1000);
+  }
+
+  // checkGmailOAuthStatus: Checks if Gmail OAuth was successful
+  function checkGmailOAuthStatus() {
+    // Check localStorage for OAuth success (set by OAuth callback)
+    const oauthSuccess = localStorage.getItem('gmail_oauth_success');
+    if (oauthSuccess) {
+      const gmailEmail = localStorage.getItem('gmail_oauth_email');
+      localStorage.removeItem('gmail_oauth_success');
+      localStorage.removeItem('gmail_oauth_email');
+      
+      // Show success message
+      const authStatus = document.getElementById('gmailAuthStatus');
+      const authBtn = document.getElementById('addGmailAuthBtn');
+      
+      if (authStatus) {
+        authStatus.classList.remove('d-none');
+        authStatus.innerHTML = `
+          <div class="alert alert-success">
+            <i class="fas fa-check-circle"></i>
+            Gmail authentication successful! Saving account...
+          </div>
+        `;
+      }
+      
+      // Hide auth button since OAuth is complete
+      if (authBtn) authBtn.style.display = 'none';
+      
+      // Populate the Gmail address field if we got the email
+      if (gmailEmail) {
+        const gmailAddressField = document.getElementById('gmail_address');
+        if (gmailAddressField) {
+          gmailAddressField.value = gmailEmail;
+        }
+      }
+      
+      // Auto-submit the form for Gmail accounts
+      setTimeout(() => {
+        const form = document.getElementById('addEmailAccountForm');
+        if (form) {
+          handleEmailAccountSubmission(form, 'addEmailAccountError', 'addEmailAccountSuccess', 'addEmailAccountSubmit');
+        }
+      }, 1000); // Brief delay to show the success message
+    }
+  }
+
   // handleEmailAccountSubmission: Common handler for add/edit email account forms
   function handleEmailAccountSubmission(form, errorId, successId, submitId) {
     const errorDiv = document.getElementById(errorId);
@@ -246,6 +937,12 @@
 
     // Prepare form data
     const formData = new FormData(form);
+    
+    // Debug: Log all form data before submission
+    console.log('🔍 Form data entries before submission:');
+    for (let [key, value] of formData.entries()) {
+      console.log(`  ${key}: ${value}`);
+    }
 
     // Submit via AJAX
     fetch(form.action, {
@@ -255,8 +952,13 @@
       },
       body: formData
     })
-    .then(response => response.json())
+    .then(response => {
+      console.log('🔍 Server response status:', response.status);
+      console.log('🔍 Server response headers:', response.headers);
+      return response.json();
+    })
     .then(data => {
+      console.log('🔍 Server response data:', data);
       if (data.success) {
         // Hide error message before showing success
         errorDiv.classList.add('d-none');
@@ -292,6 +994,9 @@
       }
     })
     .catch(error => {
+      console.error('🔍 Network error occurred:', error);
+      console.error('🔍 Error details:', error.message, error.stack);
+      
       // Hide success message before showing error
       successDiv.classList.add('d-none');
       
@@ -458,6 +1163,8 @@
     applyLocalTimes();
     attachEmailAccountListeners();
     setupEmailAccountFormHandlers();
+    setupDynamicEmailForm();
+    setupDynamicEditEmailForm();
     
     // Reset any email account form button states on page load
     resetEmailAccountButtonStates();

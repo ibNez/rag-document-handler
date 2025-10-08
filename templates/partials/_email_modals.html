@@ -20,51 +20,91 @@
                     </div>
                     <div class="mb-3">
                         <label class="form-label">Server Type</label>
-                        <select class="form-select" name="server_type" required>
+                        <select class="form-select" name="server_type" id="addServerType" required>
+                            <option value="">Select server type...</option>
                             <option value="imap">IMAP</option>
                             <option value="gmail">Gmail</option>
                             <option value="exchange">Exchange</option>
                         </select>
                     </div>
-                    <div class="mb-3">
-                        <label class="form-label">Server</label>
-                        <input type="text" class="form-control" name="server" required>
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label">Email Address</label>
-                        <input type="text" class="form-control" name="email_address" required>
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label">Password</label>
-                        <input type="password" class="form-control" name="password" required>
-                    </div>
-                    <div class="row">
-                        <div class="col-md-6 mb-3">
-                            <label class="form-label">Port</label>
-                            <input type="number" class="form-control" name="port" required>
+                    
+                    <!-- Traditional Authentication Fields (IMAP/Exchange) -->
+                    <div id="addTraditionalFields" class="d-none">
+                        <div class="mb-3">
+                            <label class="form-label">Server</label>
+                            <input type="text" class="form-control" name="server" placeholder="e.g., imap.gmail.com">
                         </div>
-                        <div class="col-md-6 mb-3">
+                        <div class="mb-3">
+                            <label class="form-label">Email Address</label>
+                            <input type="email" class="form-control" name="email_address" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Password</label>
+                            <input type="password" class="form-control" name="password">
+                        </div>
+                        <div class="row">
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label">Port</label>
+                                <input type="number" class="form-control" name="port" placeholder="993">
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label">Mailbox</label>
+                                <input type="text" class="form-control" name="mailbox" value="INBOX">
+                            </div>
+                        </div>
+                        <div class="mb-3 form-check form-switch">
+                            <input class="form-check-input" type="checkbox" name="use_ssl" id="addUseSSL" value="1" checked>
+                            <label class="form-check-label" for="addUseSSL">Use SSL</label>
+                        </div>
+                    </div>
+                    
+                    <!-- Gmail OAuth Fields -->
+                    <div id="addGmailFields" class="d-none">
+                        <div class="mb-3">
+                            <label class="form-label">Gmail Address</label>
+                            <input type="email" class="form-control" name="gmail_address" placeholder="your.email@gmail.com" required>
+                        </div>
+                        <div class="alert alert-info">
+                            <i class="fas fa-info-circle"></i>
+                            <strong>Gmail OAuth Authentication</strong><br>
+                            Click "Authenticate with Gmail" to securely connect your Gmail account using Google OAuth 2.0.
+                            No password required - authentication is handled by Google.
+                        </div>
+                        <div class="mb-3">
                             <label class="form-label">Mailbox</label>
-                            <input type="text" class="form-control" name="mailbox" required>
+                            <input type="text" class="form-control" name="mailbox" value="INBOX">
+                        </div>
+                        <div id="gmailAuthStatus" class="mb-3 d-none">
+                            <div class="alert alert-success">
+                                <i class="fas fa-check-circle"></i>
+                                Gmail authentication successful! Account saved automatically.
+                            </div>
                         </div>
                     </div>
-                    <div class="row">
-                        <div class="col-md-6 mb-3">
-                            <label class="form-label">Batch Limit</label>
-                            <input type="number" class="form-control" name="batch_limit" required>
+                    
+                    <!-- Common Fields -->
+                    <div id="addCommonFields" class="d-none">
+                        <div class="row">
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label">Batch Size</label>
+                                <input type="number" class="form-control" name="batch_size" value="50" required>
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label">Refresh interval (minutes)</label>
+                                <input type="number" class="form-control" name="refresh_interval_minutes" value="{{ config.EMAIL_DEFAULT_REFRESH_MINUTES }}" required>
+                            </div>
                         </div>
-                        <div class="col-md-6 mb-3">
-                            <label class="form-label">Refresh interval (minutes)</label>
-                            <input type="number" class="form-control" name="refresh_interval_minutes" value="{{ config.EMAIL_DEFAULT_REFRESH_MINUTES }}" required>
-                        </div>
-                    </div>
-                    <div class="mb-3 form-check form-switch">
-                        <input class="form-check-input" type="checkbox" name="use_ssl" id="addUseSSL" value="1">
-                        <label class="form-check-label" for="addUseSSL">Use SSL</label>
                     </div>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    
+                    <!-- Gmail OAuth Button (shown only for Gmail) -->
+                    <button type="button" class="btn btn-info" id="addGmailAuthBtn" style="display: none;">
+                        <i class="fab fa-google"></i> Authenticate with Gmail
+                    </button>
+                    
+                    <!-- Save Button -->
                     <button type="submit" class="btn btn-primary" id="addEmailAccountSubmit">
                         <span class="spinner-border spinner-border-sm d-none" role="status" aria-hidden="true"></span>
                         Save
@@ -94,55 +134,115 @@
                         <label class="form-label">Display Name</label>
                         <input type="text" class="form-control" name="account_name" id="editAccountName" required>
                     </div>
-                    <div class="mb-3">
-                        <label class="form-label">Server Type</label>
-                        <select class="form-select" name="server_type" id="editServerType" required>
-                            <option value="imap">IMAP</option>
-                            <option value="gmail">Gmail</option>
-                            <option value="exchange">Exchange</option>
-                        </select>
+                    
+                    <!-- Traditional Email Fields (hidden for Gmail) -->
+                    <div id="editTraditionalFields">
+                        <div class="mb-3">
+                            <label class="form-label">Server</label>
+                            <input type="text" class="form-control" name="server" id="editServer" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Email Address</label>
+                            <input type="text" class="form-control" name="email_address" id="editEmailAddress" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Password (leave blank to keep current)</label>
+                            <input type="password" class="form-control" name="password" id="editPassword">
+                        </div>
+                        <div class="row">
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label">Port</label>
+                                <input type="number" class="form-control" name="port" id="editPort" required>
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label class="form-label">Mailbox</label>
+                                <input type="text" class="form-control" name="mailbox" id="editMailbox" required>
+                                
+                                <!-- Dynamic Mailbox Selection (hidden by default) -->
+                                <div id="editDynamicMailboxes" class="d-none">
+                                    <label class="form-label">Available Mailboxes</label>
+                                    <div class="card" style="max-height: 200px; overflow-y: auto;">
+                                        <div class="card-body">
+                                            <div id="editMailboxesLoading" class="text-center py-3">
+                                                <div class="spinner-border spinner-border-sm" role="status">
+                                                    <span class="visually-hidden">Loading...</span>
+                                                </div>
+                                                <div class="ms-2">Loading mailboxes...</div>
+                                            </div>
+                                            <div id="editMailboxesList" class="d-none">
+                                                <!-- Mailboxes will be populated here dynamically -->
+                                            </div>
+                                            <div id="editMailboxesError" class="alert alert-warning d-none" role="alert">
+                                                Failed to load mailboxes. Using current mailbox setting.
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <small class="form-text text-muted">Select one or more mailboxes to sync emails from.</small>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Current Offset Position</label>
+                            <input type="number" class="form-control" name="last_synced_offset" id="editLastSyncedOffset" 
+                                   title="Email offset position - set to 0 to rescan from beginning">
+                            <div class="form-text">Email offset position. Set to 0 to rescan from the beginning (idempotent due to duplicate detection).</div>
+                        </div>
+                        <div class="mb-3 form-check form-switch">
+                            <input class="form-check-input" type="checkbox" name="use_ssl" id="editUseSSL" value="1">
+                            <label class="form-check-label" for="editUseSSL">Use SSL</label>
+                        </div>
                     </div>
-                    <div class="mb-3">
-                        <label class="form-label">Server</label>
-                        <input type="text" class="form-control" name="server" id="editServer" required>
+                    
+                    <!-- Gmail Fields -->
+                    <div id="editGmailFields" class="d-none">
+                        <div class="mb-3">
+                            <label class="form-label">Email Address</label>
+                            <input type="text" class="form-control" name="email_address" id="editGmailEmailAddress" readonly>
+                            <div class="form-text">Gmail email address cannot be changed.</div>
+                        </div>
+                        <div class="alert alert-info">
+                            <i class="fas fa-info-circle"></i>
+                            <strong>Gmail OAuth Authentication</strong><br>
+                            This account uses Google OAuth 2.0 for secure authentication. No password is required.
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Gmail Labels</label>
+                            <input type="text" class="form-control" name="mailbox" id="editGmailMailbox" required 
+                                   placeholder="e.g., INBOX,SENT,Important (comma-separated Gmail labels)">
+                            
+                            <!-- Dynamic Gmail Label Selection -->
+                            <div id="editGmailDynamicLabels" class="mt-2">
+                                <div class="card" style="max-height: 200px; overflow-y: auto;">
+                                    <div class="card-body">
+                                        <div id="editGmailLabelsLoading" class="text-center py-3">
+                                            <div class="spinner-border spinner-border-sm" role="status">
+                                                <span class="visually-hidden">Loading...</span>
+                                            </div>
+                                            <div class="ms-2">Loading Gmail labels...</div>
+                                        </div>
+                                        <div id="editGmailLabelsList" class="d-none">
+                                            <!-- Gmail labels will be populated here dynamically -->
+                                        </div>
+                                        <div id="editGmailLabelsError" class="alert alert-warning d-none" role="alert">
+                                            Unable to load Gmail labels automatically. Please enter labels manually above.
+                                        </div>
+                                    </div>
+                                </div>
+                                <small class="form-text text-muted">Select Gmail labels below or enter them manually above, separated by commas.</small>
+                            </div>
+                        </div>
                     </div>
-                    <div class="mb-3">
-                        <label class="form-label">Email Address</label>
-                        <input type="text" class="form-control" name="email_address" id="editEmailAddress" required>
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label">Password (leave blank to keep current)</label>
-                        <input type="password" class="form-control" name="password" id="editPassword">
-                    </div>
+                    
+                    <!-- Common Fields -->
                     <div class="row">
                         <div class="col-md-6 mb-3">
-                            <label class="form-label">Port</label>
-                            <input type="number" class="form-control" name="port" id="editPort" required>
-                        </div>
-                        <div class="col-md-6 mb-3">
-                            <label class="form-label">Mailbox</label>
-                            <input type="text" class="form-control" name="mailbox" id="editMailbox" required>
-                        </div>
-                    </div>
-                    <div class="row">
-                        <div class="col-md-6 mb-3">
-                            <label class="form-label">Batch Limit</label>
-                            <input type="number" class="form-control" name="batch_limit" id="editBatchLimit" required>
+                            <label class="form-label">Batch Size</label>
+                            <input type="number" class="form-control" name="batch_size" id="editBatchSize" required>
                         </div>
                         <div class="col-md-6 mb-3">
                             <label class="form-label">Refresh interval (minutes)</label>
                             <input type="number" class="form-control" name="refresh_interval_minutes" id="editRefreshInterval" required>
                         </div>
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label">Current Offset Position</label>
-                        <input type="number" class="form-control" name="last_synced_offset" id="editLastSyncedOffset" 
-                               title="Email offset position - set to 0 to rescan from beginning">
-                        <div class="form-text">Email offset position. Set to 0 to rescan from the beginning (idempotent due to duplicate detection).</div>
-                    </div>
-                    <div class="mb-3 form-check form-switch">
-                        <input class="form-check-input" type="checkbox" name="use_ssl" id="editUseSSL" value="1">
-                        <label class="form-check-label" for="editUseSSL">Use SSL</label>
                     </div>
                 </div>
                 <div class="modal-footer">

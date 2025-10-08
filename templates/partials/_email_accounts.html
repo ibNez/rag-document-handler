@@ -98,7 +98,7 @@
                                                     data-email="{{ acct.email_address }}"
                                                     data-port="{{ acct.port }}"
                                                     data-mailbox="{{ acct.mailbox or '' }}"
-                                                    data-batch="{{ acct.batch_limit or '' }}"
+                                                    data-batch="{{ acct.batch_size or '' }}"
                                                     data-interval="{{ acct.refresh_interval_minutes or '' }}"
                                                     data-ssl="{{ '1' if acct.use_ssl else '0' }}"
                                                     data-type="{{ acct.server_type }}"

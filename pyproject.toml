@@ -3,9 +3,9 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "rag-document-handler"
+name = "rag-knowledgebase-manager"
 version = "0.1.0"
-description = "Document management system with smart URL organization and RAG capabilities for Milvus database"
+description = "Knowledge lake for managing resources for LLMs"
 readme = "README.md"
 requires-python = ">=3.8"
 authors = [
@@ -44,6 +44,7 @@ dependencies = [
     "cryptography>=41.0.0",
     "google-api-python-client>=2.0.0",
     "google-auth>=2.0.0",
+    "google-auth-oauthlib>=1.0.0",
     "exchangelib>=5.0.0",
     "psycopg2-binary>=2.9.0",
     "langchain_milvus>=0.1.0",

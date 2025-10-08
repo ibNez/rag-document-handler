@@ -142,6 +142,35 @@ class PostgreSQLManager:
             indexed_at TIMESTAMP WITH TIME ZONE
         );
         
+        -- Email accounts table (MUST come before emails table for FK reference)
+        CREATE TABLE IF NOT EXISTS email_accounts (
+            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+            account_name TEXT UNIQUE NOT NULL,
+            server_type TEXT NOT NULL,
+            server TEXT NOT NULL,
+            port INTEGER NOT NULL,
+            email_address TEXT NOT NULL,
+            password TEXT,  -- For IMAP/Exchange (encrypted)
+            oauth_access_token TEXT,  -- For Gmail OAuth (encrypted)
+            oauth_refresh_token TEXT,  -- For Gmail OAuth (encrypted)
+            oauth_token_expires_at TIMESTAMP,  -- Token expiration
+            mailbox TEXT,  -- For IMAP: mailbox name (e.g., 'INBOX'); For Gmail: comma-separated label IDs (e.g., 'INBOX,SENT,Label_1')
+            batch_size INTEGER,
+            use_ssl INTEGER,
+            refresh_interval_minutes INTEGER,
+            last_synced TIMESTAMP,
+            last_update_status TEXT,
+            last_synced_offset INTEGER DEFAULT 0,
+            total_emails_in_mailbox INTEGER DEFAULT 0,
+            -- Windowed sync tracking fields
+            newest_processed_date TIMESTAMP WITH TIME ZONE DEFAULT (NOW() - INTERVAL '30 days'),
+            oldest_processed_date TIMESTAMP WITH TIME ZONE DEFAULT (NOW() - INTERVAL '30 days'),
+            sync_direction VARCHAR(10) DEFAULT 'forward',
+            backfill_complete BOOLEAN DEFAULT FALSE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
         -- Email documents table
         CREATE TABLE IF NOT EXISTS emails (
             id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -153,7 +182,22 @@ class PostgreSQLManager:
             header_hash TEXT UNIQUE NOT NULL,
             content_hash TEXT UNIQUE,
             content TEXT,
-            attachments TEXT,
+            attachments TEXT, -- Original attachment metadata from email headers
+            attachment_files JSONB, -- Structured metadata for stored attachment files
+            -- attachment_files format: [
+            --   {
+            --     "original_filename": "document.pdf",
+            --     "stored_filename": "att_20250914_123456_document.pdf", 
+            --     "file_path": "./email_attachments/att_20250914_123456_document.pdf",
+            --     "content_type": "application/pdf",
+            --     "file_size": 1024000,
+            --     "attachment_id": "part_1",
+            --     "sha256_hash": "abc123...",
+            --     "created_at": "2025-09-14T12:34:56Z"
+            --   }
+            -- ]
+            topics TEXT, -- Comma-separated list of topics extracted by LLM
+            account_id UUID REFERENCES email_accounts(id) ON DELETE SET NULL,
             headers JSONB,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -217,25 +261,6 @@ class PostgreSQLManager:
         
         -- Index for document chunks snapshot relationship
         CREATE INDEX IF NOT EXISTS idx_document_chunks_snapshot_id ON document_chunks(snapshot_id);
-        
-        -- Email accounts table 
-        CREATE TABLE IF NOT EXISTS email_accounts (
-            id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-            account_name TEXT UNIQUE NOT NULL,
-            server_type TEXT NOT NULL,
-            server TEXT NOT NULL,
-            port INTEGER NOT NULL,
-            email_address TEXT NOT NULL,
-            password TEXT NOT NULL,
-            mailbox TEXT,
-            batch_limit INTEGER,
-            use_ssl INTEGER,
-            refresh_interval_minutes INTEGER,
-            last_synced TIMESTAMP,
-            last_update_status TEXT,
-            last_synced_offset INTEGER DEFAULT 0,
-            total_emails_in_mailbox INTEGER DEFAULT 0
-        );
         
         -- Create indexes for performance
         CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(processing_status);

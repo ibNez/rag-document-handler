@@ -724,6 +724,114 @@ class MilvusManager:
             "message": "Deletion command executed - Milvus will clean up asynchronously"
         }
 
+    def delete_email_by_message_id(self, message_id: str) -> Dict[str, Any]:
+        """
+        Delete all email embeddings for a given Gmail `message_id` from the email collection.
+
+        Args:
+            message_id: Gmail message ID to delete
+
+        Returns:
+            Dict with deletion status and basic stats
+        """
+        try:
+            if not message_id:
+                return {
+                    "success": False,
+                    "error": "No message_id provided",
+                    "deleted_count": 0
+                }
+
+            # Ensure email vector store exists
+            self._ensure_email_vector_store()
+
+            # If collection doesn't exist, nothing to delete
+            if not utility.has_collection(self.email_collection_name):
+                logger.warning(f"Email collection '{self.email_collection_name}' does not exist - nothing to delete for message_id {message_id}")
+                return {
+                    "success": True,
+                    "deleted_count": 0,
+                    "entities_before": 0,
+                    "entities_after": 0,
+                    "delete_expression": None
+                }
+
+            col = Collection(self.email_collection_name)
+            try:
+                col.load()
+            except Exception:
+                pass
+
+            # Stats before
+            try:
+                entities_before = col.num_entities
+            except Exception:
+                entities_before = -1
+
+            # Build delete expression on message_id
+            escaped = self._escape_literal(str(message_id))
+            delete_expr = f'message_id == "{escaped}"'
+            logger.info(f"Email delete expression: {delete_expr}")
+
+            # Optional: preview what matches
+            try:
+                preview = col.query(expr=delete_expr, output_fields=["message_id", "chunk_id", "page", "content_hash"], limit=10)
+                logger.info(f"Email delete preview matched {len(preview)} records (showing up to 10)")
+            except Exception as e:
+                logger.debug(f"Email delete preview query failed: {e}")
+                preview = []
+
+            # Execute deletion
+            try:
+                result = col.delete(expr=delete_expr)
+                logger.info(f"Email delete operation result: {result}")
+            except Exception as e:
+                logger.error(f"Email delete operation failed for message_id {message_id}: {e}")
+                return {
+                    "success": False,
+                    "error": str(e),
+                    "deleted_count": 0,
+                    "entities_before": entities_before,
+                    "entities_after": entities_before,
+                    "delete_expression": delete_expr
+                }
+
+            # Flush and reload best-effort
+            try:
+                col.flush()
+                col.load()
+            except Exception:
+                pass
+
+            # Stats after
+            try:
+                entities_after = col.num_entities
+            except Exception:
+                entities_after = -1
+
+            # Verification (may still show results due to eventual consistency)
+            try:
+                remaining = col.query(expr=delete_expr, output_fields=["message_id"], limit=10)
+                remaining_count = len(remaining) if isinstance(remaining, list) else 0
+            except Exception:
+                remaining_count = -1
+
+            return {
+                "success": True,
+                "entities_before": entities_before,
+                "entities_after": entities_after,
+                "reported_delete_result": str(result),
+                "delete_expression": delete_expr,
+                "verification_remaining": remaining_count
+            }
+        except Exception as e:
+            logger.error(f"Failed to delete email vectors for message_id {message_id}: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "deleted_count": 0
+            }
+
     def _sanitize_and_project_meta(self, m: Dict[str, Any]) -> Dict[str, Any]:
         """
         Sanitize and project metadata to lean schema.

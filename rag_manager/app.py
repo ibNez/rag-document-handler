@@ -63,6 +63,14 @@ class RAGKnowledgebaseManager:
         self.app.config['SECRET_KEY'] = self.config.SECRET_KEY
         self.app.config['MAX_CONTENT_LENGTH'] = self.config.MAX_CONTENT_LENGTH
 
+        # Add HTTPS redirect for SSL-enabled deployments only
+        # Skip in development mode when SSL certificates are not available
+        ssl_available = (os.path.exists(self.config.SSL_CERT_PATH) and 
+                        os.path.exists(self.config.SSL_KEY_PATH))
+        
+        if not self.config.FLASK_DEBUG or ssl_available:
+            self._setup_https_redirect()
+
         # Initialize core components
         self.document_processor = DocumentProcessor(self.config)
         self.milvus_manager = MilvusManager(self.config)
@@ -265,6 +273,12 @@ class RAGKnowledgebaseManager:
             # Initialize PostgreSQL email account manager (stats from PostgreSQL, not Milvus)
             from ingestion.email.account_manager import EmailAccountManager
             self.email_account_manager = EmailAccountManager(self.postgres_manager)
+            # Inject MilvusManager into EmailDataManager for vector deletions
+            try:
+                if hasattr(self.email_account_manager, 'email_data_manager'):
+                    self.email_account_manager.email_data_manager.milvus_manager = self.milvus_manager
+            except Exception:
+                pass
             logger.info("PostgreSQL email account manager initialized with PostgreSQL-based statistics")
             
             # Ensure email vector store is ready (separate from document vector store)
@@ -274,6 +288,11 @@ class RAGKnowledgebaseManager:
             # Create PostgreSQL-based email message manager
             from ingestion.email.account_manager import EmailAccountManager as EmailMessageManager
             email_message_manager = EmailMessageManager(self.postgres_manager)
+            try:
+                if hasattr(email_message_manager, 'email_data_manager'):
+                    email_message_manager.email_data_manager.milvus_manager = self.milvus_manager
+            except Exception:
+                pass
             logger.info("PostgreSQL email message manager initialized")
             
             # Inject dependencies into EmailProcessor
@@ -315,6 +334,22 @@ class RAGKnowledgebaseManager:
             logger.error("Failed to initialize email manager: %s", e)
             self.email_account_manager = None
             self.email_orchestrator = None
+
+    def _setup_https_redirect(self) -> None:
+        """Setup HTTPS redirect - SSL is always enabled for enterprise security."""
+        from flask import request, redirect, url_for
+        
+        @self.app.before_request
+        def force_https():
+            """Redirect HTTP requests to HTTPS (SSL always enabled)."""
+            # Skip redirect for health check endpoints or if already HTTPS
+            if request.is_secure or request.endpoint in ['health', 'ping']:
+                return None
+                
+            # Build HTTPS URL
+            url = request.url.replace('http://', 'https://', 1)
+            logger.info(f"Redirecting HTTP request to HTTPS: {request.url} -> {url}")
+            return redirect(url, code=301)
 
     def _setup_directories(self) -> None:
         """Create necessary directories for file management."""
@@ -1307,10 +1342,43 @@ class RAGKnowledgebaseManager:
         logger.info("Starting background scheduler for URL and email processing")
         self.scheduler_manager.start_scheduler()
         
+        # Configure SSL context (required for production, optional for development)
+        import os
+        ssl_context = None
+        
+        if self.config.FLASK_DEBUG:
+            # Development mode - SSL is optional
+            cert_path = self.config.SSL_CERT_PATH
+            key_path = self.config.SSL_KEY_PATH
+            
+            if os.path.exists(cert_path) and os.path.exists(key_path):
+                ssl_context = (cert_path, key_path)
+                logger.info(f"Development mode with SSL - using certificate: {cert_path}")
+                logger.info(f"Access application at: https://{self.config.FLASK_HOST}:{self.config.FLASK_PORT}")
+            else:
+                logger.info("Development mode without SSL - running on HTTP")
+                logger.info(f"Access application at: http://{self.config.FLASK_HOST}:{self.config.FLASK_PORT}")
+        else:
+            # Production mode - SSL is required
+            cert_path = self.config.SSL_CERT_PATH
+            key_path = self.config.SSL_KEY_PATH
+            
+            if os.path.exists(cert_path) and os.path.exists(key_path):
+                ssl_context = (cert_path, key_path)
+                logger.info(f"Production mode with SSL - using certificate: {cert_path}")
+                logger.info(f"Access application at: https://{self.config.FLASK_HOST}:{self.config.FLASK_PORT}")
+            else:
+                logger.error(f"SSL certificates required but not found:")
+                logger.error(f"  Certificate: {cert_path}")
+                logger.error(f"  Private key: {key_path}")
+                logger.error("Run 'python tools/generate_ssl_cert.py' to generate certificates")
+                raise FileNotFoundError("SSL certificates are required for enterprise deployment")
+        
         self.app.run(
             host=self.config.FLASK_HOST,
             port=self.config.FLASK_PORT,
-            debug=self.config.FLASK_DEBUG
+            debug=self.config.FLASK_DEBUG,
+            ssl_context=ssl_context
         )
 
 

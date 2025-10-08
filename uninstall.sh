@@ -270,23 +270,28 @@ else
     echo "   Removed Python packaging artifacts"
 fi
 
-# Step 5: Preserve uploaded and snapshot files to deleted folder
+# Step 5: Preserve uploaded, snapshot, and email attachment files to deleted folder
 echo ""
-echo "📂 Preserving uploaded and snapshot files..."
+echo "📂 Preserving uploaded, snapshot, and email attachment files..."
 
 # Load snapshot directory from .env file
 SNAPSHOT_DIR="./snapshots"  # Default
 UPLOADED_FOLDER="uploaded"  # Default from .env
+EMAIL_ATTACHMENTS_DIR="./email_attachments"  # Default from .env
 if [ -f ".env" ]; then
     # Source snapshot directory from .env
     SNAPSHOT_DIR_FROM_ENV=$(grep "^SNAPSHOT_DIR=" .env 2>/dev/null | cut -d'=' -f2- | tr -d '"' || echo "./snapshots")
     UPLOADED_FOLDER_FROM_ENV=$(grep "^UPLOADED_FOLDER=" .env 2>/dev/null | cut -d'=' -f2- | tr -d '"' || echo "uploaded")
+    EMAIL_ATTACHMENTS_DIR_FROM_ENV=$(grep "^EMAIL_ATTACHMENTS_DIR=" .env 2>/dev/null | cut -d'=' -f2- | tr -d '"' || echo "./email_attachments")
     
     if [ -n "$SNAPSHOT_DIR_FROM_ENV" ]; then
         SNAPSHOT_DIR="$SNAPSHOT_DIR_FROM_ENV"
     fi
     if [ -n "$UPLOADED_FOLDER_FROM_ENV" ]; then
         UPLOADED_FOLDER="$UPLOADED_FOLDER_FROM_ENV"
+    fi
+    if [ -n "$EMAIL_ATTACHMENTS_DIR_FROM_ENV" ]; then
+        EMAIL_ATTACHMENTS_DIR="$EMAIL_ATTACHMENTS_DIR_FROM_ENV"
     fi
 fi
 
@@ -335,11 +340,71 @@ else
     fi
 fi
 
+# Move email attachment files to deleted folder before removal
+if [ -d "$EMAIL_ATTACHMENTS_DIR" ] && [ "$(ls -A "$EMAIL_ATTACHMENTS_DIR" 2>/dev/null)" ]; then
+    if $DRY_RUN; then
+        echo "   [DRY RUN] Would move files from $EMAIL_ATTACHMENTS_DIR/ to deleted/email_attachments_backup_$(date +%Y%m%d_%H%M%S)/"
+        echo "   [DRY RUN] Found $(find "$EMAIL_ATTACHMENTS_DIR" -type f 2>/dev/null | wc -l) files to preserve"
+    else
+        backup_dir="deleted/email_attachments_backup_$(date +%Y%m%d_%H%M%S)"
+        mkdir -p "$backup_dir"
+        echo "   Moving email attachment files to $backup_dir..."
+        mv "$EMAIL_ATTACHMENTS_DIR"/* "$backup_dir/" 2>/dev/null || true
+        echo "   ✅ Email attachment files preserved in $backup_dir"
+    fi
+else
+    if $DRY_RUN; then
+        echo "   [DRY RUN] No email attachment files found to preserve"
+    else
+        echo "   ℹ️  No email attachment files found to preserve"
+    fi
+fi
+
+# Move SSL certificates to deleted folder before removal
+if [ -d "ssl" ] && ([ -d "ssl/certs" ] || [ -d "ssl/private" ] || [ -f "ssl/flask_ssl_config.txt" ]); then
+    if $DRY_RUN; then
+        echo "   [DRY RUN] Would move SSL certificates from ssl/ to deleted/ssl_backup_$(date +%Y%m%d_%H%M%S)/"
+        if [ -d "ssl/certs" ]; then
+            echo "   [DRY RUN] Found $(find ssl/certs -type f 2>/dev/null | wc -l) certificate files"
+        fi
+        if [ -d "ssl/private" ]; then
+            echo "   [DRY RUN] Found $(find ssl/private -type f 2>/dev/null | wc -l) private key files"
+        fi
+    else
+        backup_dir="deleted/ssl_backup_$(date +%Y%m%d_%H%M%S)"
+        mkdir -p "$backup_dir"
+        echo "   Moving SSL certificates to $backup_dir..."
+        
+        # Move certificates and keys while preserving directory structure
+        if [ -d "ssl/certs" ] && [ "$(ls -A ssl/certs 2>/dev/null)" ]; then
+            mkdir -p "$backup_dir/certs"
+            mv ssl/certs/* "$backup_dir/certs/" 2>/dev/null || true
+        fi
+        if [ -d "ssl/private" ] && [ "$(ls -A ssl/private 2>/dev/null)" ]; then
+            mkdir -p "$backup_dir/private"
+            mv ssl/private/* "$backup_dir/private/" 2>/dev/null || true
+        fi
+        if [ -f "ssl/flask_ssl_config.txt" ]; then
+            mv ssl/flask_ssl_config.txt "$backup_dir/" 2>/dev/null || true
+        fi
+        
+        echo "   ✅ SSL certificates preserved in $backup_dir"
+        echo "   💡 You can restore certificates by copying files back to ssl/ directory"
+    fi
+else
+    if $DRY_RUN; then
+        echo "   [DRY RUN] No SSL certificates found to preserve"
+    else
+        echo "   ℹ️  No SSL certificates found to preserve"
+    fi
+fi
+
 echo ""
 echo "📂 Removing now-empty uploaded and staging directories..."
 safe_remove_dir "staging"
 safe_remove_dir "$UPLOADED_FOLDER"
 safe_remove_dir "$SNAPSHOT_DIR"
+safe_remove_dir "ssl"
 
 # Ask about removing the deleted folder (backup files)
 if [ -d "deleted" ]; then

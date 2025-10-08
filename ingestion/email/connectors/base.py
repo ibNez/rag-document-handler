@@ -23,3 +23,18 @@ class EmailConnector(ABC):
         since_date:
             If provided, only messages on or after this date are retrieved.
         """
+
+    @abstractmethod
+    def get_available_mailboxes(self) -> List[Dict[str, Any]]:
+        """Get available mailboxes/folders that can be used for email sync.
+        
+        Returns
+        -------
+        List[Dict[str, Any]]
+            List of mailbox dictionaries with keys:
+            - id: Unique identifier for the mailbox
+            - name: Display name for the mailbox  
+            - type: Type of mailbox (e.g., 'inbox', 'sent', 'folder', 'label')
+            - messageCount: Number of messages in mailbox (optional)
+            - selectable: Whether this mailbox can be selected for sync
+        """

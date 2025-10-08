@@ -47,7 +47,7 @@ class IMAPConnector(EmailConnector):
         mailbox: str = "INBOX",
         *,
         port: int = 993,
-        batch_limit: Optional[int] = 50,
+        batch_size: Optional[int] = 50,
         use_ssl: bool = True,
         primary_mailbox: Optional[str] = None,
     ) -> None:
@@ -56,7 +56,7 @@ class IMAPConnector(EmailConnector):
         self.email_address = email_address
         self.password = password
         self.mailbox = mailbox
-        self.batch_limit = batch_limit
+        self.batch_size = batch_size
         self.use_ssl = use_ssl
         self.primary_mailbox = (primary_mailbox or "").lower() or None
 
@@ -109,8 +109,8 @@ class IMAPConnector(EmailConnector):
                 logger.warning("IMAP search failed: status=%s", status)
                 return []
             email_ids = messages[0].split()
-            if self.batch_limit is not None:
-                email_ids = email_ids[-self.batch_limit :]
+            if self.batch_size is not None:
+                email_ids = email_ids[-self.batch_size :]
 
             results: List[Dict[str, Any]] = []
             for eid in email_ids:
@@ -202,6 +202,113 @@ class IMAPConnector(EmailConnector):
             try:
                 conn.logout()
             except Exception as exc:  # pragma: no cover - defensive
+                logger.warning("Error during IMAP logout: %s", exc)
+
+    def get_available_mailboxes(self) -> List[Dict[str, Any]]:
+        """Get available IMAP mailboxes/folders that can be used for email sync.
+        
+        Returns
+        -------
+        List[Dict[str, Any]]
+            List of mailbox dictionaries with id, name, type, and selectable fields.
+        """
+        logger.info(
+            "Fetching available IMAP mailboxes from %s:%s email=%s",
+            self.host,
+            self.port,
+            self.email_address,
+        )
+        
+        conn = (
+            imaplib.IMAP4_SSL(self.host, self.port)
+            if self.use_ssl
+            else imaplib.IMAP4(self.host, self.port)
+        )
+        
+        try:
+            if not self.use_ssl:
+                try:
+                    status, _ = conn.starttls(ssl_context=ssl.create_default_context())
+                    if status != "OK":
+                        raise imaplib.IMAP4.error("STARTTLS failed")
+                except Exception as exc:
+                    raise RuntimeError(
+                        "IMAP server requires a secure connection; STARTTLS negotiation failed"
+                    ) from exc
+
+            status, _ = conn.login(self.email_address, self.password)
+            if status != "OK":
+                logger.error("IMAP login failed for %s: status=%s", self.email_address, status)
+                return []
+
+            # List all mailboxes/folders
+            status, mailbox_list = conn.list()
+            if status != "OK":
+                logger.error("IMAP list failed: status=%s", status)
+                return []
+
+            mailboxes = []
+            for item in mailbox_list:
+                if not item:
+                    continue
+                    
+                # Parse IMAP LIST response: (flags) "delimiter" "name"
+                # item is typically bytes, need to decode it
+                item_str = item.decode() if isinstance(item, bytes) else str(item)
+                parts = item_str.split('"')
+                if len(parts) >= 3:
+                    flags = parts[0].strip()
+                    delimiter = parts[1] if len(parts) > 1 else "/"
+                    name = parts[2] if len(parts) > 2 else ""
+                    
+                    # Skip if no name or if it's marked as \Noselect
+                    if not name or '\\Noselect' in flags:
+                        continue
+                    
+                    # Determine mailbox type based on name
+                    name_lower = name.lower()
+                    if name_lower in ['inbox']:
+                        mailbox_type = 'inbox'
+                    elif name_lower in ['sent', 'sent items', 'sent mail']:
+                        mailbox_type = 'sent'
+                    elif name_lower in ['drafts', 'draft']:
+                        mailbox_type = 'drafts'
+                    elif name_lower in ['trash', 'deleted items', 'deleted']:
+                        mailbox_type = 'trash'
+                    elif name_lower in ['spam', 'junk', 'junk email']:
+                        mailbox_type = 'spam'
+                    else:
+                        mailbox_type = 'folder'
+
+                    # Try to get message count for this mailbox
+                    message_count = None
+                    try:
+                        status, _ = conn.select(name)
+                        if status == "OK":
+                            status, count_data = conn.search(None, "ALL")
+                            if status == "OK" and count_data and count_data[0]:
+                                message_count = len(count_data[0].split())
+                    except Exception:
+                        pass  # Don't fail if we can't get count
+
+                    mailboxes.append({
+                        'id': name,
+                        'name': name,
+                        'type': mailbox_type,
+                        'messageCount': message_count,
+                        'selectable': True
+                    })
+
+            logger.info(f"📬 Found {len(mailboxes)} available IMAP mailboxes")
+            return mailboxes
+
+        except Exception as e:
+            logger.error(f"❌ Failed to get IMAP mailboxes: {e}")
+            return []
+        finally:
+            try:
+                conn.logout()
+            except Exception as exc:
                 logger.warning("Error during IMAP logout: %s", exc)
 
     # ------------------------------------------------------------------
@@ -478,7 +585,7 @@ class IMAPConnector(EmailConnector):
                 
             email_ids = messages[0].split()
             total_emails = len(email_ids)
-            target_batch_size = fetch_size or self.batch_limit or 50
+            target_batch_size = fetch_size or self.batch_size or 50
             
             logger.info(
                 "Found %d total emails, target batch size: %d, start offset: %d",

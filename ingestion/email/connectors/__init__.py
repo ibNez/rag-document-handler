@@ -25,7 +25,7 @@ Example Usage:
 from .base import EmailConnector
 from .imap_connector import IMAPConnector  
 from .exchange_connector import ExchangeConnector
-from .gmail_connector import GmailConnector
+from .gmail_connector import GmailConnector as GmailConnector
 
 __all__ = [
     "EmailConnector",
