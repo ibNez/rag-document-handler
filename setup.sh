@@ -313,18 +313,61 @@ else
     echo -e "${BLUE}ℹ️  You can install manually later with: python -m playwright install chromium${NC}"
 fi
 
+# SSL Certificate Setup - Always run for enterprise security (before environment setup)
+echo ""
+echo "🔐 SSL Certificate Setup..."
+echo "SSL certificates are required for secure enterprise operation and OAuth integration."
+
+# Generate SSL certificate if it doesn't exist
+if [ ! -f "ssl/certs/server.crt" ] || [ ! -f "ssl/private/server.key" ]; then
+    echo "🔑 Generating SSL certificate for localhost..."
+    if command -v python3 >/dev/null 2>&1; then
+        PYTHON_CMD="python3"
+    elif command -v python >/dev/null 2>&1; then
+        PYTHON_CMD="python"
+    else
+        echo -e "${RED}❌ Python not found. SSL certificate generation requires Python.${NC}"
+        echo -e "${YELLOW}⚠️  SSL setup skipped. You can generate certificates later with:${NC}"
+        echo -e "${BLUE}   python tools/generate_ssl_cert.py${NC}"
+    fi
+    
+    if [ -n "$PYTHON_CMD" ]; then
+        if $PYTHON_CMD tools/generate_ssl_cert.py --hostname localhost >/dev/null 2>&1; then
+            echo -e "${GREEN}✅ SSL certificate generated successfully${NC}"
+        else
+            echo -e "${YELLOW}⚠️  SSL certificate generation failed. You can generate manually later.${NC}"
+            echo -e "${BLUE}   $PYTHON_CMD tools/generate_ssl_cert.py${NC}"
+        fi
+    fi
+else
+    echo -e "${GREEN}✅ SSL certificate already exists${NC}"
+fi
+
 # Check environment file
 echo ""
-echo "� Environment configuration..."
+echo "📋 Environment configuration..."
 if [ ! -f ".env" ]; then
     if [ -f ".env.example" ]; then
         if ask_yes_no "Copy .env.example to .env for configuration?" "y"; then
             cp .env.example .env
             echo -e "${GREEN}✅ .env file created from example${NC}"
             echo -e "${YELLOW}💡 You may want to customize .env for your environment${NC}"
+            
+            # Add SSL configuration since we just created .env from .env.example
+            echo "⚙️  Configuring SSL certificate paths in .env file..."
+            echo "" >> .env
+            echo "# SSL Configuration (Enterprise Security - Auto-configured by setup.sh)" >> .env
+            echo "# The application always runs with HTTPS for secure enterprise operation." >> .env
+            echo "# Replace with your own certificates if needed by updating the paths below." >> .env
+            echo "SSL_CERT_PATH=ssl/certs/server.crt" >> .env
+            echo "SSL_KEY_PATH=ssl/private/server.key" >> .env
+            echo "GMAIL_REDIRECT_URI=https://localhost:3000/oauth/gmail/callback" >> .env
+            echo -e "${GREEN}✅ SSL configuration added to .env${NC}"
+            echo -e "${BLUE}ℹ️ Application will run on https://localhost:3000${NC}"
+            echo -e "${YELLOW}💡 Update Google OAuth redirect URI to: https://localhost:3000/oauth/gmail/callback${NC}"
         else
             echo -e "${YELLOW}⚠️  .env file not found. Using default configuration.${NC}"
-            echo -e "${BLUE}� You can copy .env.example to .env later if needed${NC}"
+            echo -e "${BLUE}📋 You can copy .env.example to .env later if needed${NC}"
         fi
     else
         echo -e "${YELLOW}⚠️  No .env or .env.example file found. Using default configuration.${NC}"
@@ -546,7 +589,7 @@ echo "📚 Key Components:"
 echo "   🐘 PostgreSQL (metadata): localhost:5432"
 echo "   🔍 Milvus (vectors): localhost:19530"
 echo "   🤖 Ollama (local LLM): localhost:11434"
-echo "   🌐 Web Interface: localhost:3000"
+echo "   🌐 Web Interface: https://localhost:3000"
 echo "   📁 Document uploads: ./uploaded/"
 echo "   📁 Processing staging: ./staging/"
 echo "   📊 Logs: ./logs/"
@@ -565,3 +608,7 @@ if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
         fi
     fi
 fi
+
+echo ""
+echo -e "${GREEN}🎉 Setup complete! Your RAG Knowledge Base Manager is ready to use.${NC}"
+echo -e "${BLUE}📖 Check the README.md for usage instructions and next steps.${NC}"

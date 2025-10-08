@@ -1,7 +1,7 @@
 """
 Core configuration module for RAG Knowledgebase Manager.
 
-This module contains all configuration settings and dataclasses following 
+This module contains all configuration settings and datacla    GMAIL_REDIRECT_URI: str = os.getenv("GMAIL_REDIRECT_URI", "https://localhost:3000/oauth/gmail/callback")ses following 
 the development rules for centralized configuration management.
 """
 
@@ -36,11 +36,16 @@ class Config:
     FLASK_DEBUG: bool = os.getenv("FLASK_DEBUG", "True").lower() == "true"
     SECRET_KEY: str = os.getenv("SECRET_KEY", "dev-secret-key-change-in-production")
     
+    # SSL Configuration
+    SSL_CERT_PATH: str = os.getenv("SSL_CERT_PATH", "ssl/certs/server.crt")
+    SSL_KEY_PATH: str = os.getenv("SSL_KEY_PATH", "ssl/private/server.key")
+    
     # File Upload Configuration
-    MAX_CONTENT_LENGTH: int = int(os.getenv("MAX_CONTENT_LENGTH", "104857600"))  # 100MB
+    MAX_CONTENT_LENGTH: int = int(os.getenv("MAX_CONTENT_LENGTH", "194857600")) # 200MB
     UPLOAD_FOLDER: str = os.getenv("UPLOAD_FOLDER", "staging")
     UPLOADED_FOLDER: str = os.getenv("UPLOADED_FOLDER", "uploaded")
     DELETED_FOLDER: str = os.getenv("DELETED_FOLDER", "deleted")
+    EMAIL_ATTACHMENTS_DIR: str = os.getenv("EMAIL_ATTACHMENTS_DIR", "./email_attachments")
     LOG_DIR: str = os.getenv("LOG_DIR", "logs")
     ALLOWED_EXTENSIONS: Set[str] = field(default_factory=lambda: {"txt", "pdf", "docx", "doc", "md"})
     
@@ -107,6 +112,14 @@ class Config:
     IMAP_USE_SSL: bool = os.getenv('IMAP_USE_SSL', 'true').lower() == 'true'
     EMAIL_SYNC_INTERVAL_SECONDS: int = int(os.getenv('EMAIL_SYNC_INTERVAL_SECONDS', '300'))
     EMAIL_DEFAULT_REFRESH_MINUTES: int = int(os.getenv('EMAIL_DEFAULT_REFRESH_MINUTES', '5'))
+    
+    # Email encryption for stored credentials
+    EMAIL_ENCRYPTION_KEY: str = os.getenv('EMAIL_ENCRYPTION_KEY', '')
+    
+    # Gmail OAuth 2.0 Configuration
+    GMAIL_CLIENT_ID: str = os.getenv('GMAIL_CLIENT_ID', '')
+    GMAIL_CLIENT_SECRET: str = os.getenv('GMAIL_CLIENT_SECRET', '')
+    GMAIL_REDIRECT_URI: str = os.getenv('GMAIL_REDIRECT_URI', 'http://localhost:3000/oauth/gmail/callback')
 
     # Document Hybrid Retrieval & Reranking Configuration
     ENABLE_DOCUMENT_RERANKING: bool = os.getenv('ENABLE_DOCUMENT_RERANKING', 'true').lower() == 'true'

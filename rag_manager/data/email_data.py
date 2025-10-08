@@ -41,12 +41,13 @@ class EmailDataManager(BaseDataManager):
     # Email Record Operations
     # =============================================================================
     
-    def upsert_email(self, record: Dict[str, Any]) -> str:
+    def upsert_email(self, record: Dict[str, Any], account_id: Optional[str] = None) -> str:
         """
-        Insert or update email record in PostgreSQL.
+        Insert or update email record in PostgreSQL with proper duplicate handling.
         
         Args:
             record: Email record dictionary with required fields
+            account_id: Optional account ID to associate the email with
             
         Returns:
             The UUID of the upserted email record
@@ -58,7 +59,20 @@ class EmailDataManager(BaseDataManager):
             raise ValueError(f"Email record missing required fields: {missing_fields}")
         
         message_id = record["message_id"]
+        content_hash = record.get("content_hash", "")
+        
         logger.debug(f"Upserting email record for message_id: {message_id}")
+        
+        # Check for existing email with same content hash first to avoid duplicates
+        if content_hash:
+            if self.email_exists_by_content_hash(content_hash):
+                logger.info(f"Email with content hash {content_hash[:16]}... already exists. Skipping duplicate.")
+                # Return existing email ID instead of creating duplicate
+                try:
+                    return self._get_email_id_by_content_hash(content_hash)
+                except Exception as e:
+                    logger.warning(f"Failed to retrieve existing email ID for duplicate, will create new record: {e}")
+                    # Fall through to create new record
         
         try:
             # Convert to_addrs to JSON if it's a list or string
@@ -69,8 +83,8 @@ class EmailDataManager(BaseDataManager):
             query = """
                 INSERT INTO emails (
                     message_id, from_addr, to_addrs, subject, date_utc, 
-                    header_hash, content_hash, content, attachments, headers
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    header_hash, content_hash, content, attachments, headers, account_id
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (message_id) 
                 DO UPDATE SET
                     from_addr = EXCLUDED.from_addr,
@@ -82,6 +96,7 @@ class EmailDataManager(BaseDataManager):
                     content = EXCLUDED.content,
                     attachments = EXCLUDED.attachments,
                     headers = EXCLUDED.headers,
+                    account_id = EXCLUDED.account_id,
                     updated_at = CURRENT_TIMESTAMP
                 RETURNING id
             """
@@ -96,7 +111,8 @@ class EmailDataManager(BaseDataManager):
                 record.get("content_hash", ""),
                 record.get("content", ""),  # Use 'content' field instead of 'body_text'
                 json.dumps(record.get("attachments", [])) if record.get("attachments") else None,
-                json.dumps(record.get("headers", {})) if record.get("headers") else None
+                json.dumps(record.get("headers", {})) if record.get("headers") else None,
+                account_id
             )
             
             result = self.execute_query(query, params, fetch_one=True)
@@ -123,6 +139,7 @@ class EmailDataManager(BaseDataManager):
             True if deleted, False if not found
         """
         try:
+            # First delete from PostgreSQL (will cascade delete chunks via FK)
             query = "DELETE FROM emails WHERE message_id = %s"
             with self.get_connection() as conn:
                 with conn.cursor() as cur:
@@ -132,6 +149,13 @@ class EmailDataManager(BaseDataManager):
             
             if deleted:
                 logger.debug(f"Deleted email record: {message_id}")
+                # Best-effort: also delete vectors from Milvus email collection
+                try:
+                    if self.milvus_manager and hasattr(self.milvus_manager, 'delete_email_by_message_id'):
+                        self.milvus_manager.delete_email_by_message_id(message_id)
+                        logger.debug(f"Triggered Milvus email vector deletion for message_id: {message_id}")
+                except Exception as me:
+                    logger.warning(f"Failed to delete email vectors in Milvus for {message_id}: {me}")
             else:
                 logger.warning(f"Email record not found for deletion: {message_id}")
             
@@ -446,4 +470,183 @@ Email ID: {email_id}"""
         
         context_text = "\n\n".join(context_parts)
         return context_text, sources
+    
+    # =============================================================================
+    # Helper Methods for Gmail Connector
+    # =============================================================================
+    
+    def email_exists_by_message_id(self, message_id: str) -> bool:
+        """
+        Check if an email exists by message_id.
+        
+        Args:
+            message_id: Gmail message ID to check
+            
+        Returns:
+            True if email exists, False otherwise
+        """
+        try:
+            query = "SELECT 1 FROM emails WHERE message_id = %s LIMIT 1"
+            result = self.execute_query(query, (message_id,), fetch_all=True)
+            return result is not None and len(result) > 0
+        except Exception as e:
+            logger.error(f"Failed to check email existence for {message_id}: {e}")
+            return False
+    
+    def email_exists_by_content_hash(self, content_hash: str) -> bool:
+        """
+        Check if an email exists by content_hash.
+        
+        Args:
+            content_hash: Content hash to check
+            
+        Returns:
+            True if email with this content hash exists, False otherwise
+        """
+        try:
+            query = "SELECT 1 FROM emails WHERE content_hash = %s LIMIT 1"
+            result = self.execute_query(query, (content_hash,), fetch_all=True)
+            return result is not None and len(result) > 0
+        except Exception as e:
+            logger.error(f"Failed to check email existence by content hash {content_hash}: {e}")
+            return False
+    
+    def _get_email_id_by_content_hash(self, content_hash: str) -> str:
+        """
+        Get email ID by content_hash.
+        
+        Args:
+            content_hash: Content hash to find
+            
+        Returns:
+            Email ID as string
+        """
+        try:
+            query = "SELECT id FROM emails WHERE content_hash = %s LIMIT 1"
+            result = self.execute_query(query, (content_hash,), fetch_one=True)
+            if result and result.get('id'):
+                email_id = str(result['id'])
+                if email_id and email_id != "None":  # Extra validation
+                    return email_id
+                
+            # If we reach here, no valid ID was found
+            logger.error(f"No valid email ID found for content hash {content_hash[:16]}...")
+            raise RuntimeError(f"Failed to retrieve email ID for content hash {content_hash}")
+            
+        except Exception as e:
+            logger.error(f"Failed to get email ID by content hash {content_hash}: {e}")
+            raise  # Re-raise instead of returning empty string
+    
+    def get_last_processed_email_date(self, account_id: Optional[str] = None) -> Optional[datetime]:
+        """
+        Get the date of the most recently processed email.
+        
+        Args:
+            account_id: Optional account ID to filter by specific account
+        
+        Returns:
+            DateTime of most recent email or None if no emails exist
+        """
+        try:
+            if account_id:
+                query = """
+                    SELECT MAX(date_utc) 
+                    FROM emails 
+                    WHERE date_utc IS NOT NULL AND account_id = %s
+                """
+                result = self.execute_query(query, (account_id,), fetch_one=True)
+            else:
+                query = """
+                    SELECT MAX(date_utc) 
+                    FROM emails 
+                    WHERE date_utc IS NOT NULL
+                """
+                result = self.execute_query(query, fetch_one=True)
+                
+            if result and result.get('max'):
+                return result['max']
+            return None
+        except Exception as e:
+            logger.error(f"Failed to get last processed email date: {e}")
+            return None
+
+    def get_account_sync_window(self, account_id: str) -> Dict[str, Any]:
+        """
+        Get the sync window information for a specific account.
+        
+        Args:
+            account_id: Account ID to get sync window for
+            
+        Returns:
+            Dictionary with newest_processed_date, oldest_processed_date, sync_direction, backfill_complete
+        """
+        try:
+            query = """
+                SELECT 
+                    newest_processed_date,
+                    oldest_processed_date,
+                    sync_direction,
+                    backfill_complete
+                FROM email_accounts 
+                WHERE id = %s
+            """
+            result = self.execute_query(query, (account_id,), fetch_one=True)
+            
+            if result:
+                return {
+                    'newest_processed_date': result.get('newest_processed_date'),
+                    'oldest_processed_date': result.get('oldest_processed_date'),
+                    'sync_direction': result.get('sync_direction', 'forward'),
+                    'backfill_complete': result.get('backfill_complete', False)
+                }
+            else:
+                # Return default values if account not found
+                return {
+                    'newest_processed_date': None,
+                    'oldest_processed_date': None,
+                    'sync_direction': 'forward',
+                    'backfill_complete': False
+                }
+        except Exception as e:
+            logger.error(f"Failed to get sync window for account {account_id}: {e}")
+            return {
+                'newest_processed_date': None,
+                'oldest_processed_date': None,
+                'sync_direction': 'forward',
+                'backfill_complete': False
+            }
+
+    def update_account_sync_window(self, account_id: str, **kwargs) -> None:
+        """
+        Update sync window information for an account.
+        
+        Args:
+            account_id: Account ID to update
+            **kwargs: Fields to update (newest_processed_date, oldest_processed_date, sync_direction, backfill_complete)
+        """
+        if not kwargs:
+            return
+            
+        try:
+            # Build dynamic update query
+            set_clauses = []
+            values = []
+            
+            for key, value in kwargs.items():
+                if key in ['newest_processed_date', 'oldest_processed_date', 'sync_direction', 'backfill_complete']:
+                    set_clauses.append(f"{key} = %s")
+                    values.append(value)
+            
+            if not set_clauses:
+                return
+                
+            values.append(account_id)
+            query = f"UPDATE email_accounts SET {', '.join(set_clauses)} WHERE id = %s"
+            
+            self.execute_query(query, tuple(values))
+            logger.debug(f"Updated sync window for account {account_id}: {kwargs}")
+            
+        except Exception as e:
+            logger.error(f"Failed to update sync window for account {account_id}: {e}")
+            raise
     

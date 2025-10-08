@@ -13,7 +13,7 @@ import re
 from typing import Any, Dict
 from datetime import datetime, timedelta
 
-from flask import Flask, request, render_template, flash, redirect, url_for, jsonify, send_from_directory, abort
+from flask import Flask, request, render_template, flash, redirect, url_for, jsonify, send_from_directory, abort, session
 from werkzeug.utils import secure_filename
 
 from ..core.config import Config
@@ -1255,35 +1255,92 @@ class WebRoutes:
                     request.form.get('server_type', 'imap').lower() or 'imap',
                     "Server type",
                     max_length=10,
-                    pattern=re.compile(r'^(imap|pop3)$')
+                    pattern=re.compile(r'^(imap|pop3|gmail|exchange)$')
                 )
                 
-                server = InputValidator.validate_string(
-                    request.form.get('server', ''),
-                    "Server address",
-                    max_length=255,
-                    required=True
-                )
+                # Handle different authentication methods based on server type
+                if server_type == 'gmail':
+                    # Gmail OAuth authentication
+                    email_address = InputValidator.validate_email(
+                        request.form.get('gmail_address', ''),
+                        "Gmail address"
+                    )
+                    
+                    # Get OAuth credentials from session
+                    gmail_creds = session.get('gmail_credentials')
+                    if not gmail_creds:
+                        if is_ajax:
+                            return jsonify({'success': False, 'error': 'Gmail authentication required. Please authenticate with Gmail first.'}), 400
+                        flash('Gmail authentication required. Please authenticate with Gmail first.', 'error')
+                        return redirect(url_for('index'))
+                    
+                    # Validate that the email address matches (allow for some flexibility)
+                    oauth_email = gmail_creds.get('email', '').lower().strip()
+                    form_email = email_address.lower().strip()
+                    if oauth_email and form_email and oauth_email != form_email:
+                        logger.warning(f"Gmail OAuth email mismatch: OAuth={oauth_email}, Form={form_email}")
+                        if is_ajax:
+                            return jsonify({'success': False, 'error': f'Email address mismatch. Please use the authenticated Gmail address: {oauth_email}'}), 400
+                        flash(f'Email address mismatch. Please use the authenticated Gmail address: {oauth_email}', 'error')
+                        return redirect(url_for('index'))
+                    
+                    # Use the OAuth email if form email is empty
+                    if not email_address and oauth_email:
+                        email_address = oauth_email
+                    
+                    # Set Gmail-specific defaults
+                    server = 'gmail.googleapis.com'
+                    port = 443
+                    password = None  # No password for OAuth
+                    use_ssl = True
+                    
+                    # OAuth tokens will be stored separately
+                    oauth_access_token = gmail_creds.get('access_token')
+                    oauth_refresh_token = gmail_creds.get('refresh_token')
+                    oauth_expires_at = gmail_creds.get('expires_at')
+                    oauth_client_id = gmail_creds.get('client_id')
+                    oauth_client_secret = gmail_creds.get('client_secret')
+                    
+                    # Clear credentials from session after use
+                    session.pop('gmail_credentials', None)
+                    session.pop('oauth_email', None)  # Clear any remaining OAuth email
+                    
+                else:
+                    # Traditional IMAP/Exchange authentication
+                    server = InputValidator.validate_string(
+                        request.form.get('server', ''),
+                        "Server address",
+                        max_length=255,
+                        required=True
+                    )
+                    
+                    email_address = InputValidator.validate_email(
+                        request.form.get('email_address', ''),
+                        "Email address"
+                    )
+                    
+                    password = InputValidator.validate_string(
+                        request.form.get('password', ''),
+                        "Password",
+                        max_length=255,
+                        required=True
+                    )
+                    
+                    port = InputValidator.validate_port(
+                        request.form.get('port', ''),
+                        "Port"
+                    )
+                    
+                    use_ssl = request.form.get('use_ssl') in ('1', 'on')
+                    
+                    # No OAuth tokens for traditional auth
+                    oauth_access_token = None
+                    oauth_refresh_token = None
+                    oauth_expires_at = None
                 
-                email_address = InputValidator.validate_email(
-                    request.form.get('email_address', ''),
-                    "Email address"
-                )
-                
-                password = InputValidator.validate_string(
-                    request.form.get('password', ''),
-                    "Password",
-                    max_length=255,
-                    required=True
-                )
-                
-                port = InputValidator.validate_port(
-                    request.form.get('port', ''),
-                    "Port"
-                )
-                
+                # Handle mailbox field
                 mailbox = None
-                mailbox_input = request.form.get('mailbox', '').strip()
+                mailbox_input = request.form.get('mailbox', 'INBOX').strip() or 'INBOX'
                 if mailbox_input:
                     mailbox = InputValidator.validate_string(
                         mailbox_input,
@@ -1291,12 +1348,12 @@ class WebRoutes:
                         max_length=100
                     )
                 
-                batch_limit = None
-                batch_limit_str = request.form.get('batch_limit', '').strip()
-                if batch_limit_str:
-                    batch_limit = InputValidator.validate_integer(
-                        batch_limit_str,
-                        "Batch limit",
+                batch_size = None
+                batch_size_str = request.form.get('batch_size', '').strip()
+                if batch_size_str:
+                    batch_size = InputValidator.validate_integer(
+                        batch_size_str,
+                        "Batch size",
                         min_val=1,
                         max_val=10000
                     )
@@ -1334,10 +1391,18 @@ class WebRoutes:
                 'email_address': email_address,
                 'password': password,
                 'mailbox': mailbox,
-                'batch_limit': batch_limit,
+                'batch_size': batch_size,
                 'use_ssl': 1 if use_ssl else 0,
                 'refresh_interval_minutes': refresh_interval,
             }
+            
+            # Add OAuth tokens for Gmail accounts
+            if server_type == 'gmail':
+                record.update({
+                    'oauth_access_token': oauth_access_token,
+                    'oauth_refresh_token': oauth_refresh_token,
+                    'oauth_token_expires_at': oauth_expires_at  # Use correct column name
+                })
 
             try:
                 if hasattr(self.rag_manager, 'email_account_manager') and self.rag_manager.email_account_manager:
@@ -1367,13 +1432,21 @@ class WebRoutes:
             """Update an existing email account configuration."""
             is_ajax = request.headers.get('X-Requested-With') == 'XMLHttpRequest' or request.headers.get('Content-Type', '').startswith('application/json')
             
+            # Debug: Log all form data received
+            logger.info(f"🔍 Update account {account_id} - Form data received:")
+            for key, value in request.form.items():
+                logger.info(f"  {key}: '{value}'")
+            
             account_name = request.form.get('account_name', '').strip()
             server = request.form.get('server', '').strip()
             email_address = request.form.get('email_address', '').strip()
             password = request.form.get('password', '').strip()
             port_str = request.form.get('port', '').strip()
             mailbox = request.form.get('mailbox', '').strip() or None
-            batch_limit_str = request.form.get('batch_limit', '').strip()
+            
+            logger.info(f"🔍 Processed mailbox value: '{mailbox}'")
+            
+            batch_size_str = request.form.get('batch_size', '').strip()
             refresh_raw = request.form.get('refresh_interval_minutes', '').strip()
             last_synced_offset_str = request.form.get('last_synced_offset', '').strip()
             use_ssl = request.form.get('use_ssl') in ('1', 'on')
@@ -1392,14 +1465,14 @@ class WebRoutes:
                 updates['password'] = password
             if mailbox is not None:
                 updates['mailbox'] = mailbox
-            if batch_limit_str:
+            if batch_size_str:
                 try:
-                    updates['batch_limit'] = int(batch_limit_str)
+                    updates['batch_size'] = int(batch_size_str)
                 except ValueError:
                     if is_ajax:
-                        return jsonify({"success": False, "error": "Batch limit must be a number"}), 400
+                        return jsonify({"success": False, "error": "Batch size must be a number"}), 400
                     else:
-                        flash('Batch limit must be a number', 'error')
+                        flash('Batch size must be a number', 'error')
                         return redirect(url_for('index'))
             if port_str:
                 try:
@@ -1438,6 +1511,7 @@ class WebRoutes:
                     return redirect(url_for('index'))
 
             try:
+                logger.info(f"🔍 Final updates dictionary: {updates}")
                 if hasattr(self.rag_manager, 'email_account_manager') and self.rag_manager.email_account_manager:
                     self.rag_manager.email_account_manager.update_account(account_id, updates)
                     if is_ajax:
@@ -1485,6 +1559,105 @@ class WebRoutes:
             th.start()
             flash('Email refresh started in background', 'info')
             return redirect(url_for('index'))
+
+        @self.app.route('/email_accounts/<account_id>/mailboxes', methods=['GET'])
+        def get_account_mailboxes(account_id: str):
+            """Get available mailboxes for any email account (Gmail, IMAP, Exchange)."""
+            try:
+                if not hasattr(self.rag_manager, 'email_account_manager') or not self.rag_manager.email_account_manager:
+                    return jsonify({'error': 'Email account manager not available'}), 500
+                
+                # Get account details
+                accounts = self.rag_manager.email_account_manager.list_accounts(include_password=True)
+                account = None
+                for acc in accounts:
+                    if str(acc.get('id', acc.get('email_account_id'))) == str(account_id):
+                        account = acc
+                        break
+                
+                if not account:
+                    return jsonify({'error': 'Account not found'}), 404
+                
+                server_type = account.get('server_type', 'imap')
+                
+                # Create appropriate connector based on server type
+                connector = None
+                try:
+                    if server_type == 'gmail':
+                        logger.info(f"Creating Gmail connector for account {account_id}")
+                        # Check if OAuth tokens are available in the database
+                        oauth_access_token = account.get('oauth_access_token')
+                        oauth_refresh_token = account.get('oauth_refresh_token')
+                        
+                        logger.info(f"OAuth tokens present - access: {'Yes' if oauth_access_token else 'No'}, refresh: {'Yes' if oauth_refresh_token else 'No'}")
+                        
+                        if not oauth_access_token or not oauth_refresh_token:
+                            logger.error(f"Missing OAuth tokens for Gmail account {account_id}")
+                            raise Exception(f'Gmail account {account_id} missing OAuth tokens - access: {bool(oauth_access_token)}, refresh: {bool(oauth_refresh_token)}')
+                        
+                        # Import Gmail connector
+                        from ingestion.email.connectors.gmail_connector import GmailConnector
+                        
+                        logger.info("Creating Gmail connector")
+                        connector = GmailConnector(account)
+                        
+                    elif server_type == 'imap':
+                        # Import IMAP connector
+                        from ingestion.email.connectors.imap_connector import IMAPConnector
+                        
+                        connector = IMAPConnector(
+                            host=account.get('server'),
+                            email_address=account.get('email_address'),
+                            password=account.get('password'),
+                            mailbox=account.get('mailbox', 'INBOX'),
+                            port=account.get('port', 993),
+                            batch_size=50,
+                            use_ssl=account.get('use_ssl', True)
+                        )
+                        
+                    elif server_type == 'exchange':
+                        # Import Exchange connector
+                        from ingestion.email.connectors.exchange_connector import ExchangeConnector
+                        
+                        connector = ExchangeConnector(
+                            server=account.get('server'),
+                            email_address=account.get('email_address'),
+                            password=account.get('password'),
+                            batch_size=50
+                        )
+                    
+                    else:
+                        return jsonify({'error': f'Unsupported server type: {server_type}'}), 400
+                    
+                    if not connector:
+                        logger.error(f"Failed to create connector for {server_type}")
+                        raise Exception(f'Failed to create {server_type} connector')
+                    
+                    logger.info(f"Getting available mailboxes for {server_type} account")
+                    # Get available mailboxes
+                    mailboxes = connector.get_available_mailboxes()
+                    logger.info(f"Retrieved {len(mailboxes)} mailboxes")
+                    
+                    # Get currently selected mailboxes from account
+                    current_mailboxes = account.get('mailbox', 'INBOX').split(',') if account.get('mailbox') else ['INBOX']
+                    
+                    # Add selection status to mailboxes
+                    for mailbox in mailboxes:
+                        mailbox['selected'] = mailbox['id'] in current_mailboxes
+                    
+                    return jsonify({
+                        'mailboxes': mailboxes,
+                        'current_selection': current_mailboxes,
+                        'server_type': server_type
+                    })
+                    
+                except Exception as e:
+                    logger.error(f"Failed to create connector for {server_type}: {e}")
+                    raise Exception(f'Failed to connect to {server_type} server: {str(e)}')
+                    
+            except Exception as e:
+                logger.error(f"Failed to get mailboxes for account {account_id}: {e}")
+                raise Exception(f'Failed to get mailboxes: {str(e)}')
 
         @self.app.route('/email/<email_id>')
         def display_email(email_id: str):
@@ -1599,6 +1772,198 @@ class WebRoutes:
             except Exception as e:
                 logger.error(f"Failed to display email {email_id}: {e}", exc_info=True)
                 return jsonify({"error": f"Failed to load email: {str(e)}"}), 500
+
+        # =============================================================================
+        # Gmail OAuth Routes
+        # =============================================================================
+
+        @self.app.route('/oauth/gmail/start')
+        def gmail_oauth_start():
+            """Initiate Gmail OAuth 2.0 flow."""
+            try:
+                from google_auth_oauthlib.flow import Flow
+                import secrets
+                import os
+                
+                # Generate state for CSRF protection
+                state = secrets.token_urlsafe(32)
+                session['oauth_state'] = state
+                session['oauth_email'] = request.args.get('email', '')
+                
+                # Create OAuth flow
+                flow = Flow.from_client_config(
+                    {
+                        "web": {
+                            "client_id": self.config.GMAIL_CLIENT_ID,
+                            "client_secret": self.config.GMAIL_CLIENT_SECRET,
+                            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                            "token_uri": "https://oauth2.googleapis.com/token",
+                            "redirect_uris": [self.config.GMAIL_REDIRECT_URI]
+                        }
+                    },
+                    scopes=[
+                        'https://www.googleapis.com/auth/gmail.readonly',
+                        'https://www.googleapis.com/auth/userinfo.email',
+                        'openid'
+                    ],
+                    state=state
+                )
+                flow.redirect_uri = self.config.GMAIL_REDIRECT_URI
+                
+                # Get authorization URL
+                auth_url, _ = flow.authorization_url(
+                    access_type='offline',
+                    prompt='consent',  # Force consent to ensure refresh token
+                    include_granted_scopes='true',
+                    login_hint=session.get('oauth_email', '')
+                )
+                
+                return redirect(auth_url)
+                
+            except Exception as e:
+                logger.error(f"Failed to start Gmail OAuth: {e}")
+                return f"<script>window.close(); alert('OAuth setup error: {e}');</script>", 500
+
+        @self.app.route('/oauth/gmail/callback')
+        def gmail_oauth_callback():
+            """Handle Gmail OAuth 2.0 callback."""
+            try:
+                from google_auth_oauthlib.flow import Flow
+                import os
+                
+                # Log the callback details for debugging
+                logger.info(f"Gmail OAuth callback received:")
+                logger.info(f"  Full URL: {request.url}")
+                logger.info(f"  Query params: {dict(request.args)}")
+                logger.info(f"  Configured redirect URI: {self.config.GMAIL_REDIRECT_URI}")
+                
+                # Verify state parameter
+                received_state = request.args.get('state')
+                session_state = session.get('oauth_state')
+                logger.info(f"  State verification - Received: {received_state}, Session: {session_state}")
+                
+                if received_state != session_state:
+                    logger.error("State parameter mismatch - possible CSRF attack or session issue")
+                    return "<script>window.close(); alert('OAuth failed: State parameter mismatch');</script>", 400
+                
+                # Verify we have authorization code
+                if 'code' not in request.args:
+                    error = request.args.get('error', 'Unknown error')
+                    logger.error(f"No authorization code received. Error: {error}")
+                    return f"<script>window.close(); alert('OAuth failed: {error}');</script>", 400
+                
+                # Create OAuth flow - Note: Google may automatically add 'openid' scope
+                flow = Flow.from_client_config(
+                    {
+                        "web": {
+                            "client_id": self.config.GMAIL_CLIENT_ID,
+                            "client_secret": self.config.GMAIL_CLIENT_SECRET,
+                            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                            "token_uri": "https://oauth2.googleapis.com/token",
+                            "redirect_uris": [self.config.GMAIL_REDIRECT_URI]
+                        }
+                    },
+                    scopes=[
+                        'https://www.googleapis.com/auth/gmail.readonly',
+                        'https://www.googleapis.com/auth/userinfo.email',
+                        'openid'
+                    ]
+                    # Note: Don't set state here - Google manages scope expansion
+                )
+                flow.redirect_uri = self.config.GMAIL_REDIRECT_URI
+                
+                # Exchange code for tokens
+                try:
+                    # Use Google's official method for token exchange
+                    # This handles scope variations properly according to OAuth spec
+                    flow.fetch_token(authorization_response=request.url)
+                    credentials = flow.credentials
+                    
+                    # Log the successful token exchange
+                    logger.info(f"OAuth token exchange successful. Granted scopes: {credentials.granted_scopes}")
+                    
+                except Exception as e:
+                    logger.error(f"OAuth token exchange failed: {e}")
+                    
+                    # Check for common error scenarios
+                    if "invalid_grant" in str(e).lower():
+                        logger.error("Invalid grant error - this typically means:")
+                        logger.error("1. Authorization code has already been used or expired")
+                        logger.error("2. Redirect URI mismatch between request and Google Console")
+                        logger.error("3. Clock skew or timing issue")
+                        return "<script>window.close(); alert('OAuth failed: Authorization code expired or already used. Please try again.');</script>", 400
+                    elif "redirect_uri_mismatch" in str(e).lower():
+                        logger.error(f"Redirect URI mismatch. Expected: {self.config.GMAIL_REDIRECT_URI}")
+                        return "<script>window.close(); alert('OAuth failed: Redirect URI configuration error.');</script>", 400
+                    else:
+                        # For other errors, provide generic message
+                        return f"<script>window.close(); alert('OAuth failed: {str(e)[:100]}');</script>", 500
+                
+                # Get user's email address from Google API
+                try:
+                    import urllib.request
+                    import json
+                    
+                    # Use the credentials to get user info
+                    url = 'https://www.googleapis.com/oauth2/v2/userinfo'
+                    headers = {'Authorization': f'Bearer {credentials.token}'}
+                    req = urllib.request.Request(url, headers=headers)
+                    response = urllib.request.urlopen(req)
+                    user_info = json.loads(response.read().decode())
+                    user_email = user_info.get('email', session.get('oauth_email', ''))
+                    logger.info(f"Gmail OAuth successful for user: {user_email}")
+                except Exception as e:
+                    logger.warning(f"Failed to get user email from Google API: {e}")
+                    # Fallback: Try to use the email from the session
+                    user_email = session.get('oauth_email', '')
+                    if not user_email:
+                        # If still no email, try using Gmail API to get profile
+                        try:
+                            from googleapiclient.discovery import build
+                            service = build('gmail', 'v1', credentials=credentials)
+                            profile = service.users().getProfile(userId='me').execute()
+                            user_email = profile.get('emailAddress', '')
+                            logger.info(f"Retrieved email from Gmail profile: {user_email}")
+                        except Exception as gmail_e:
+                            logger.error(f"Failed to get email from Gmail profile: {gmail_e}")
+                    
+                    if not user_email:
+                        logger.error("No email address available from OAuth flow")
+                        return "<script>window.close(); alert('Failed to get email address from Google');</script>", 500
+                
+                # Store tokens in session temporarily
+                logger.info(f"OAuth tokens received - Access token: {'Present' if credentials.token else 'Missing'}, Refresh token: {'Present' if credentials.refresh_token else 'Missing'}")
+                
+                if not credentials.refresh_token:
+                    logger.warning("No refresh token received from Google OAuth - this may cause token refresh issues")
+                    # Still proceed but warn the user
+                
+                session['gmail_credentials'] = {
+                    'access_token': credentials.token,
+                    'refresh_token': credentials.refresh_token,
+                    'expires_at': credentials.expiry.isoformat() if credentials.expiry else None,
+                    'email': user_email
+                }
+                
+                # Clear OAuth state but keep the email for form population
+                session.pop('oauth_state', None)
+                # Don't clear oauth_email yet - we'll need it for form validation
+                
+                # Close popup and signal success to parent window
+                return f"""
+                <script>
+                    // Signal success to parent window with email address
+                    if (window.opener) {{
+                        window.opener.localStorage.setItem('gmail_oauth_success', 'true');
+                        window.opener.localStorage.setItem('gmail_oauth_email', '{user_email}');
+                    }}
+                    window.close();
+                </script>
+                """
+                
+            except Exception as e:
+                logger.error(f"Gmail OAuth callback failed: {e}")
+                return f"<script>window.close(); alert('OAuth failed: {e}');</script>", 500
 
     def _get_directory_files(self, directory: str) -> list:
         """

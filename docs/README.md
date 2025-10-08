@@ -68,6 +68,7 @@ templates/
 - [Usage Guide](usage.md) - Web interface walkthrough, email processing, and URL snapshots
 - [System Architecture](architecture.md) - Database design, component overview, email processing, and retrieval
 - [Configuration](configuration.md) - Environment variables, email settings, and snapshot configuration
+- [Gmail OAuth Setup](gmail-oauth-setup.md) - Complete Gmail API configuration and troubleshooting
 - [Database Schema](database-schema.md) - Complete database field documentation
 - [Contributing](contributing.md) - Development workflow and standards
 - [Document Ingestion POC](document-ingest-poc.md) - Document processing proof of concept

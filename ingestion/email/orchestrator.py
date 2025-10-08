@@ -4,7 +4,9 @@ synchronization of emails from configured accounts. It interacts with PostgreSQL
 management and uses connectors for email retrieval.
 
 Classes:
-    EmailOrchestrator: Handles email synchronization tasks, including refreshing account
+    EmailOrchestrator: Handles email synchronization tasks, including re            update_status("syncing", 40, f"Fetching emails from {server_type.upper()}...")
+            
+            # For Gmail, use a custom processing approach to handle windowed syncunt
     configurations and determining accounts due for synchronization.
 """
 
@@ -15,9 +17,12 @@ from typing import Any, Dict, List, Optional, Callable
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 
-from .connectors import IMAPConnector, GmailConnector, ExchangeConnector
+from .connectors.imap_connector import IMAPConnector
+from .connectors.gmail_connector import GmailConnector
+from .connectors.exchange_connector import ExchangeConnector
 from .account_manager import EmailAccountManager
 from .processor import EmailProcessor
+from ingestion.utils.crypto import encrypt, decrypt
 
 logger = logging.getLogger(__name__)
 
@@ -124,17 +129,17 @@ class EmailOrchestrator:
         name = account.get("account_name") or account.get("email_address")
         acct_id = account.get("email_account_id")
         server_type = (account.get("server_type") or "").lower()
-        batch = account.get("batch_limit")
-        batch_limit = None if batch in (None, "all") else int(batch)
+        batch = account.get("batch_size")
+        batch_size = None if batch in (None, "all") else int(batch)
         
         def update_status(status: str, progress: int, message: str):
             """Helper to update status if callback provided."""
             if status_callback:
                 status_callback(status, progress, message)
         
-        # Get current offset for this account (where to start processing)
-        current_offset = account.get("last_synced_offset", 0)
-        logger.info(f"Account {name}: batch={batch}, batch_limit={batch_limit}, starting_offset={current_offset}")
+        # Get sync position for account (Gmail accounts always use 0)
+        current_offset = account.get("last_synced_offset", 0) if server_type != "gmail" else 0
+        logger.info(f"🚀 EMAIL_SYNC_START: Account={name}, server_type={server_type}, batch_size={batch_size}, offset={current_offset}, account_id={acct_id}")
 
         update_status("connecting", 10, f"Connecting to {server_type.upper()} server...")
 
@@ -145,48 +150,97 @@ class EmailOrchestrator:
                 email_address=account["email_address"],
                 password=account["password"],
                 mailbox=account.get("mailbox") or "INBOX",
-                batch_limit=batch_limit,
+                batch_size=batch_size,
                 use_ssl=bool(account.get("use_ssl", True)),
             )
+            logger.info(f"🔗 IMAP_CONNECTOR: Created IMAP connector for {name}")
         elif server_type == "gmail":
             update_status("connecting", 15, "Authenticating with Gmail...")
-            token_path = account.get("token_file") or account.get("token_path")
-            if not token_path:
-                logger.error(f"No token file configured for Gmail account {name}")
-                update_status("error", 100, "No token file configured for Gmail")
-                return
-            try:
-                creds = Credentials.from_authorized_user_file(token_path)
-                if creds.expired and creds.refresh_token:
-                    try:
-                        update_status("connecting", 18, "Refreshing Gmail credentials...")
-                        creds.refresh(Request())
-                        with open(token_path, "w") as fh:
-                            fh.write(creds.to_json())
-                    except Exception as exc:  # pragma: no cover - defensive
-                        logger.warning(
-                            "Failed to refresh Gmail token for %s: %s", name, exc
-                        )
-                        update_status("error", 100, f"Failed to refresh Gmail token: {exc}")
-                        return
-            except Exception as exc:
-                logger.error(
-                    f"Failed to load Gmail credentials for {name}: {exc}"
-                )
-                update_status("error", 100, f"Failed to load Gmail credentials: {exc}")
-                return
-            connector = GmailConnector(
-                credentials=creds,
-                user_id=account.get("email_address") or "me",
-                batch_limit=batch_limit,
-            )
+            logger.info(f"🔗 GMAIL_AUTH_START: Starting Gmail authentication for {name}")
+            
+            # Check for OAuth tokens in database (new format)
+            oauth_access_token = account.get("oauth_access_token")
+            oauth_refresh_token = account.get("oauth_refresh_token")
+            oauth_expires_at = account.get("oauth_expires_at") or account.get("oauth_token_expires_at")
+            
+            logger.info(f"🔑 GMAIL_TOKENS: access_token={bool(oauth_access_token)}, refresh_token={bool(oauth_refresh_token)}, expires_at={oauth_expires_at}")
+            
+            if oauth_access_token and oauth_refresh_token:
+                # Create credentials from database OAuth tokens
+                try:
+                    from ingestion.utils.crypto import decrypt
+                    
+                    # Decrypt the tokens
+                    access_token = decrypt(oauth_access_token)
+                    refresh_token = decrypt(oauth_refresh_token)
+                    
+                    # Parse expiry date
+                    token_expiry = None
+                    if oauth_expires_at:
+                        try:
+                            if isinstance(oauth_expires_at, str):
+                                token_expiry = datetime.fromisoformat(oauth_expires_at.replace('Z', '+00:00'))
+                            else:
+                                token_expiry = oauth_expires_at
+                        except Exception as e:
+                            logger.warning(f"Failed to parse OAuth expiry date: {e}")
+                    
+                    # Create credentials object
+                    creds = Credentials(
+                        token=access_token,
+                        refresh_token=refresh_token,
+                        token_uri="https://oauth2.googleapis.com/token",
+                        client_id=self.config.GMAIL_CLIENT_ID,
+                        client_secret=self.config.GMAIL_CLIENT_SECRET,
+                        expiry=token_expiry
+                    )
+                    
+                    # Refresh token if expired
+                    if creds.expired and creds.refresh_token:
+                        try:
+                            update_status("connecting", 18, "Refreshing Gmail credentials...")
+                            creds.refresh(Request())
+                            # Update the account with new tokens
+                            if self.account_manager and acct_id:
+                                try:
+                                    updates = {
+                                        'oauth_access_token': encrypt(creds.token),
+                                        'oauth_token_expires_at': creds.expiry.isoformat() if creds.expiry else None
+                                    }
+                                    self.account_manager.update_account(str(acct_id), updates)
+                                    logger.info(f"Updated refreshed OAuth tokens for account {name}")
+                                except Exception as update_exc:
+                                    logger.warning(f"Failed to update refreshed tokens: {update_exc}")
+                        except Exception as exc:
+                            logger.warning(f"Failed to refresh Gmail token for {name}: {exc}")
+                            update_status("error", 100, f"Failed to refresh Gmail token: {exc}")
+                            return
+                            
+                except Exception as exc:
+                    logger.error(f"Failed to create Gmail credentials from database tokens for {name}: {exc}")
+                    logger.error(f"Exception type: {type(exc)}")
+                    logger.error(f"Exception args: {exc.args}")
+                    import traceback
+                    logger.error(f"Full traceback: {traceback.format_exc()}")
+                    update_status("error", 100, f"Failed to load Gmail credentials: {exc}")
+                    return
+                    
+            else:
+                # No OAuth tokens configured - this is an error
+                logger.error(f"No OAuth tokens configured for Gmail account {name}")
+                logger.error(f"Gmail accounts require oauth_access_token and oauth_refresh_token to be configured")
+                update_status("error", 100, "No Gmail OAuth tokens configured")
+                raise RuntimeError(f"Gmail account {name} missing required OAuth tokens")
+                    
+            # Create Gmail connector
+            connector = GmailConnector(account)
         elif server_type == "exchange":
             update_status("connecting", 15, "Connecting to Exchange server...")
             connector = ExchangeConnector(
                 server=account["server"],
                 email_address=account["email_address"],
                 password=account["password"],
-                batch_limit=batch_limit,
+                batch_size=batch_size,
             )
         else:
             logger.warning("Unknown server type '%s' for %s", server_type, name)
@@ -196,9 +250,12 @@ class EmailOrchestrator:
         update_status("connecting", 20, f"Connected to {server_type.upper()} server")
         logger.info("Syncing account %s using %s", name, server_type)
 
-        # Get the current offset for this account
-        current_offset = account.get("last_synced_offset", 0)
-        logger.info("Starting sync for %s at offset %d", name, current_offset)
+        # Set sync position based on protocol type
+        current_offset = account.get("last_synced_offset", 0) if server_type != "gmail" else 0
+        if server_type == "gmail":
+            logger.info("Gmail account %s uses history-based sync (no offset)", name)
+        else:
+            logger.info("Starting sync for %s at offset %d", name, current_offset)
 
         update_status("preparing", 25, "Preparing email processor...")
 
@@ -234,20 +291,25 @@ class EmailOrchestrator:
         try:
             # Smart batch processing is the only supported method
             update_status("syncing", 30, "Starting email synchronization...")
-            logger.info("Using smart batch processing for account %s", name)
-            # Respect batch limit: if batch_limit is set, process only 1 batch per sync cycle
-            max_batches = 1 if batch_limit else None
-            logger.info("Processing %s batches for account %s (batch_limit=%s)", 
-                       "1" if max_batches else "unlimited", name, batch_limit)
+            logger.info("Using smart batch processing for account %s with batch_size=%s", name, batch_size)
             
             update_status("syncing", 40, f"Fetching emails from {server_type.upper()}...")
             
-            stats = processor.process_smart_batch(
-                connector=connector,
-                since_date=None,  # Process all emails
-                max_batches=max_batches,  # Respect batch limit setting
-                start_offset=current_offset  # Start from stored offset
-            )
+            # For Gmail, use a custom processing approach to handle windowed sync
+            if server_type == "gmail":
+                stats = self._process_gmail_smart_batch(
+                    connector=connector,
+                    processor=processor,
+                    account_id=str(acct_id) if acct_id else None,
+                    batch_size=batch_size
+                )
+            else:
+                # Use standard processing for IMAP/Exchange with offset support
+                stats = processor.process_smart_batch(
+                    connector=connector,
+                    since_date=None,  # Process all emails
+                    start_offset=current_offset  # Start from stored offset
+                )
             
             processed_count = stats.get('total_emails_processed', 0)
             batches_count = stats.get('total_batches', 0)
@@ -260,18 +322,21 @@ class EmailOrchestrator:
                 name, processed_count, batches_count, errors_count
             )
             
-            # Update the account's offset for next batch cycle
-            update_status("finalizing", 85, "Updating account sync status...")
-            final_offset = stats.get('final_offset', current_offset)
-            if acct_id and self.account_manager and hasattr(self.account_manager, "update_account"):
-                try:
-                    self.account_manager.update_account(
-                        acct_id,
-                        {"last_synced_offset": final_offset}
-                    )
-                    logger.info("Updated account %s offset to %d", name, final_offset)
-                except Exception as exc:
-                    logger.error("Failed to update offset for account %s: %s", name, exc)
+            # Update offset for non-Gmail accounts only
+            if server_type != "gmail":
+                update_status("finalizing", 85, "Updating account sync status...")
+                final_offset = stats.get('final_offset', current_offset)
+                if acct_id and self.account_manager and hasattr(self.account_manager, "update_account"):
+                    try:
+                        self.account_manager.update_account(
+                            acct_id,
+                            {"last_synced_offset": final_offset}
+                        )
+                        logger.info("📍 OFFSET_UPDATE: Updated account %s offset to %d", name, final_offset)
+                    except Exception as exc:
+                        logger.error("Failed to update offset for account %s: %s", name, exc)
+            else:
+                logger.info("📍 GMAIL_NO_OFFSET: Gmail account %s uses history-based sync - historyId updates handled separately", name)
                     
         except Exception as exc:  # pragma: no cover - defensive
             logger.error("Email sync error for %s: %s", name, exc)
@@ -351,3 +416,104 @@ class EmailOrchestrator:
             self.sync_account(account, processor=self.processor, status_callback=status_callback)
             return True
         return self.run_cycle()
+
+    def _process_gmail_smart_batch(
+        self,
+        connector,
+        processor,
+        account_id: Optional[str] = None,
+        batch_size: Optional[int] = None
+    ) -> Dict[str, int]:
+        """
+        Incremental Gmail sync using a durable checkpoint and message-id boundary.
+        """
+        logger.info("📧 GMAIL_INCREMENTAL_START: Starting Gmail incremental sync")
+
+        stats = {
+            'total_emails_processed': 0,
+            'total_batches': 0,
+            'errors': 0,
+            'final_offset': 0
+        }
+
+        try:
+            if not account_id:
+                logger.error("❌ GMAIL_NO_ACCOUNT_ID: Cannot perform Gmail sync without account_id")
+                return stats | {'errors': 1}
+
+            # Access EmailDataManager for checkpoint and existence checks
+            email_data_manager = getattr(processor, 'email_data_manager', None) or \
+                                 getattr(self.account_manager, 'email_data_manager', None)
+            if not email_data_manager:
+                logger.error("❌ GMAIL_NO_EMAIL_DATA_MANAGER: Missing EmailDataManager for sync")
+                return stats | {'errors': 1}
+
+            # Get checkpoint (newest processed date) to bound queries
+            sync_window = email_data_manager.get_account_sync_window(account_id)
+            since_dt = sync_window.get('newest_processed_date') if sync_window else None
+            logger.info(f"🧭 GMAIL_CHECKPOINT: newest_processed_date={since_dt}")
+
+            # List message IDs newest-first optionally filtered by since date
+            msg_ids = connector.list_message_ids(since_dt)
+            if not msg_ids:
+                logger.info("📭 GMAIL_NO_MESSAGES: No Gmail messages found for sync")
+                return stats
+
+            total = len(msg_ids)
+            logger.info(f"📬 GMAIL_IDS: {total} message IDs to evaluate")
+
+            max_seen_date = since_dt
+            processed = 0
+            batch_counter = 0
+
+            for idx, msg_id in enumerate(msg_ids, start=1):
+                # Fetch and parse first to get message date for proper boundary check
+                email_record = connector.get_email_by_id(msg_id)
+                if not email_record:
+                    continue
+
+                try:
+                    # Boundary: if checkpoint set and this message is older/equal AND already exists, stop
+                    if since_dt:
+                        msg_dt = email_record.get('date_utc')
+                        if msg_dt and msg_dt <= since_dt and email_data_manager.email_exists_by_message_id(msg_id):
+                            logger.info(f"⛔️ GMAIL_BOUNDARY_REACHED at #{idx}: encountered already-processed message at or before checkpoint")
+                            break
+
+                    processor.process(email_record, account_id=account_id)
+                    processed += 1
+                    # Track newest date
+                    msg_dt = email_record.get('date_utc')
+                    if msg_dt and (max_seen_date is None or msg_dt > max_seen_date):
+                        max_seen_date = msg_dt
+                except Exception as email_exc:
+                    stats['errors'] += 1
+                    logger.warning(f"⚠️ GMAIL_EMAIL_ERROR: Failed to process message {msg_id}: {email_exc}")
+
+                # Light progress logs
+                if idx % 50 == 0:
+                    logger.info(f"📈 GMAIL_PROGRESS: {idx}/{total} checked, {processed} processed")
+
+            # Batches are conceptual pages; increment when we cross 500 ids boundary
+            batch_counter = (total // 500) + (1 if total % 500 else 0)
+            stats['total_batches'] = batch_counter
+            stats['total_emails_processed'] = processed
+
+            # Update checkpoint
+            try:
+                if max_seen_date:
+                    email_data_manager.update_account_sync_window(account_id, newest_processed_date=max_seen_date)
+                    logger.info(f"✅ GMAIL_CHECKPOINT_UPDATED: newest_processed_date={max_seen_date}")
+            except Exception as ex:
+                logger.warning(f"Failed to update Gmail checkpoint: {ex}")
+
+            logger.info(
+                f"✅ GMAIL_INCREMENTAL_DONE: processed={processed}, checked={total}, errors={stats['errors']}"
+            )
+            return stats
+
+        except Exception as exc:
+            logger.error(f"❌ GMAIL_INCREMENTAL_FAILED: {exc}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            return stats | {'errors': stats['errors'] + 1}

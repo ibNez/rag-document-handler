@@ -9,7 +9,7 @@ Delegates email data operations to the shared EmailDataManager.
 """
 
 import logging
-from datetime import datetime, UTC
+from datetime import datetime, UTC, timedelta
 from typing import Any, Dict, List, Optional
 
 from rag_manager.managers.postgres_manager import PostgreSQLManager
@@ -27,7 +27,8 @@ class EmailAccountManager:
         self.db_manager = PostgreSQLManager()
         
         # Initialize email data manager for database operations
-        self.email_data_manager = EmailDataManager(postgres_manager)
+        # Provide milvus_manager later from app initialization if available
+        self.email_data_manager = EmailDataManager(self.db_manager)
         
         # Hybrid retrieval components (initialized on demand)
         self.postgres_fts_retriever: Optional[Any] = None
@@ -37,22 +38,42 @@ class EmailAccountManager:
 
     def create_account(self, record: Dict[str, Any]) -> str:
         """Create a new email account (PostgreSQL implementation)."""
+        # Base required fields for all account types
         required = {
             "account_name",
             "server_type", 
             "server",
             "port",
             "email_address",
-            "password",
         }
+        
+        # For non-Gmail accounts, password is required
+        if record.get("server_type") != "gmail":
+            required.add("password")
+        
         missing = required - record.keys()
         if missing:
             raise ValueError(f"record missing required fields: {', '.join(sorted(missing))}")
+        
+        # Additional validation for Gmail accounts - ensure OAuth tokens are present
+        if record.get("server_type") == "gmail":
+            if not record.get("oauth_access_token"):
+                raise ValueError("Gmail accounts require oauth_access_token")
+            # Set password to None for Gmail accounts if not already set
+            if "password" not in record:
+                record = dict(record)
+                record["password"] = None
 
-        # Encrypt the password before persisting
+        # Encrypt sensitive data before persisting
         record = dict(record)
-        if "password" in record:
+        if "password" in record and record["password"]:
             record["password"] = encrypt(str(record["password"]))
+        
+        # Encrypt OAuth tokens
+        if "oauth_access_token" in record and record["oauth_access_token"]:
+            record["oauth_access_token"] = encrypt(str(record["oauth_access_token"]))
+        if "oauth_refresh_token" in record and record["oauth_refresh_token"]:
+            record["oauth_refresh_token"] = encrypt(str(record["oauth_refresh_token"]))
 
         logger.info(
             "Creating email account '%s' (%s) on %s:%s for %s",
@@ -69,8 +90,9 @@ class EmailAccountManager:
                     cur.execute("""
                         INSERT INTO email_accounts (
                             account_name, server_type, server, port, email_address, password,
-                            mailbox, batch_limit, use_ssl, refresh_interval_minutes
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            oauth_access_token, oauth_refresh_token, oauth_token_expires_at,
+                            mailbox, batch_size, use_ssl, refresh_interval_minutes
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         RETURNING id
                     """, (
                         record.get("account_name"),
@@ -79,8 +101,11 @@ class EmailAccountManager:
                         record.get("port"),
                         record.get("email_address"),
                         record.get("password"),
+                        record.get("oauth_access_token"),
+                        record.get("oauth_refresh_token"),
+                        record.get("oauth_token_expires_at"),  # Use correct database column name
                         record.get("mailbox", "INBOX"),
-                        record.get("batch_limit", 50),
+                        record.get("batch_size", 50),
                         record.get("use_ssl", 1),
                         record.get("refresh_interval_minutes", 60)
                     ))
@@ -100,7 +125,8 @@ class EmailAccountManager:
                 if include_password:
                     accounts_query = """
                         SELECT ea.id AS email_account_id, ea.account_name, ea.server_type, ea.server, ea.port, ea.email_address, ea.password,
-                               ea.mailbox, ea.batch_limit, ea.use_ssl, ea.refresh_interval_minutes, 
+                               ea.oauth_access_token, ea.oauth_refresh_token, ea.oauth_token_expires_at,
+                               ea.mailbox, ea.batch_size, ea.use_ssl, ea.refresh_interval_minutes, 
                                ea.last_synced::text as last_synced, ea.last_update_status,
                                COALESCE(ea.last_synced_offset, 0) as last_synced_offset,
                                CASE
@@ -124,7 +150,7 @@ class EmailAccountManager:
                 else:
                     accounts_query = """
                         SELECT ea.id AS email_account_id, ea.account_name, ea.server_type, ea.server, ea.port, ea.email_address,
-                               ea.mailbox, ea.batch_limit, ea.use_ssl, ea.refresh_interval_minutes, 
+                               ea.mailbox, ea.batch_size, ea.use_ssl, ea.refresh_interval_minutes, 
                                ea.last_synced::text as last_synced, ea.last_update_status,
                                COALESCE(ea.last_synced_offset, 0) as last_synced_offset,
                                CASE
@@ -149,11 +175,18 @@ class EmailAccountManager:
                 accounts: List[Dict[str, Any]] = []
                 for row in cur.fetchall():
                     account = dict(row)
-                    if include_password and "password" in account:
-                        try:
-                            account["password"] = decrypt(account["password"])
-                        except Exception:
-                            account["password"] = ""
+                    if include_password:
+                        # Decrypt password if present
+                        # Decrypt passwords but NOT OAuth tokens when include_password=True
+                        # OAuth tokens are handled by the orchestrator itself
+                        if "password" in account and account["password"]:
+                            try:
+                                account["password"] = decrypt(account["password"])
+                            except Exception:
+                                account["password"] = ""
+                        
+                        # Note: OAuth tokens are left encrypted for orchestrator to handle
+                    
                     accounts.append(account)
                 logger.info("Retrieved %d email accounts with PostgreSQL-based statistics", len(accounts))
                 return accounts
@@ -249,5 +282,37 @@ class EmailAccountManager:
                 'total_messages': 0,
                 'processed_messages': 0,
             }
+
+    def update_gmail_watch_expiration(self, account_id: str, expiration: datetime) -> None:
+        """Update Gmail watch expiration timestamp."""
+        self.update_account(account_id, {
+            'gmail_watch_expiration': expiration,
+            'updated_at': datetime.now(UTC)
+        })
+        logger.info(f"Updated Gmail watch expiration for account {account_id}")
+
+    def is_gmail_watch_expired(self, account_id: str) -> bool:
+        """Check if Gmail watch needs renewal (expires in 7 days)."""
+        try:
+            with self.db_manager.get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT gmail_watch_expiration FROM email_accounts WHERE id = %s",
+                        (account_id,)
+                    )
+                    result = cur.fetchone()
+                    if not result or not result['gmail_watch_expiration']:
+                        return True  # No expiration set, needs setup
+                    
+                    # Check if expiring within 1 day (renew early)
+                    expiration = result['gmail_watch_expiration']
+                    if isinstance(expiration, str):
+                        expiration = datetime.fromisoformat(expiration.replace('Z', '+00:00'))
+                    
+                    return expiration <= datetime.now(UTC) + timedelta(days=1)
+                    
+        except Exception as e:
+            logger.error(f"Failed to check Gmail watch expiration for account {account_id}: {e}")
+            return True  # Assume expired on error
 
 
