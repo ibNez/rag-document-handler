@@ -59,6 +59,9 @@
                 <a class="nav-link" href="{{ url_for('search') }}">
                     <i class="fas fa-robot me-1"></i>Ask AI
                 </a>
+                <a class="nav-link" href="/search/animated">
+                    <i class="fas fa-magic me-1"></i>Live Pipeline
+                </a>
             </div>
         </div>
     </nav>
@@ -83,7 +86,7 @@
 
                 <div class="col-lg-4 text-lg-end mt-3 mt-lg-0">
                     <div class="d-inline-block text-start tile p-3 bg-white">
-                        <div class="small text-muted">Conversation type</div>
+                        <div class="small text-muted">Query Classification</div>
                         <div class="fw-bold">
                             {% if conversation_classification and conversation_classification.type %}
                                 {{ conversation_classification.type|capitalize }}
@@ -91,7 +94,18 @@
                                 General
                             {% endif %}
                         </div>
-                        <div class="small text-muted">Confidence: {{ conversation_classification.confidence if conversation_classification and conversation_classification.confidence else '—' }}</div>
+                        <div class="small text-muted">
+                            Confidence: {{ conversation_classification.confidence if conversation_classification and conversation_classification.confidence else '—' }}
+                        </div>
+                        {% if conversation_classification and conversation_classification.domain %}
+                        <div class="mt-2">
+                            <div class="small text-muted">Domain</div>
+                            <div class="fw-bold">{{ conversation_classification.domain|capitalize }}</div>
+                            <div class="small text-muted">
+                                Confidence: {{ conversation_classification.domain_confidence if conversation_classification.domain_confidence else '—' }}
+                            </div>
+                        </div>
+                        {% endif %}
                     </div>
                 </div>
             </div>
@@ -110,9 +124,9 @@
 
                     <!-- labels -->
                     <text x="110" y="62" text-anchor="middle" fill="#111" font-size="14" font-weight="600">Query</text>
-                    <text x="320" y="62" text-anchor="middle" fill="#111" font-size="14" font-weight="600">Retrieval</text>
-                    <text x="530" y="62" text-anchor="middle" fill="#111" font-size="14" font-weight="600">Fusion (RRF)</text>
-                    <text x="740" y="62" text-anchor="middle" fill="#111" font-size="14" font-weight="600">Rerank</text>
+                    <text x="320" y="62" text-anchor="middle" fill="#111" font-size="14" font-weight="600">Classification</text>
+                    <text x="530" y="62" text-anchor="middle" fill="#111" font-size="14" font-weight="600">Multi-Perspective</text>
+                    <text x="740" y="62" text-anchor="middle" fill="#111" font-size="14" font-weight="600">Fusion</text>
                     <text x="1010" y="62" text-anchor="middle" fill="#111" font-size="14" font-weight="600">Answer</text>
 
                     <!-- animated connectors -->
@@ -135,13 +149,25 @@
                         </div>
                     </div>
                     <div class="col-md-3">
-                        <div id="stage-retrieval" class="tile p-3 bg-white" data-stage="retrieval">
+                        <div id="stage-classification" class="tile p-3 bg-white" data-stage="classification">
                             <div class="d-flex align-items-center">
-                                <div class="me-3 display-6 text-success"><i class="fas fa-search"></i></div>
+                                <div class="me-3 display-6 text-success"><i class="fas fa-brain"></i></div>
                                 <div>
-                                    <div class="small text-muted">Retrieved</div>
-                                    <div class="fw-bold">{{ rag_results.num_sources if rag_results and rag_results.num_sources else 0 }} chunks</div>
-                                    <div class="small text-muted">{{ rag_results.analysis_info.get('fusion_stats').overlap_count if rag_results and rag_results.analysis_info and rag_results.analysis_info.get('fusion_stats') else '' }}</div>
+                                    <div class="small text-muted">Classification</div>
+                                    <div class="fw-bold">{{ conversation_classification.type if conversation_classification else 'General' }}</div>
+                                    <div class="small text-muted">{{ conversation_classification.domain if conversation_classification and conversation_classification.domain else 'Multi-domain' }}</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        <div id="stage-perspectives" class="tile p-3 bg-white" data-stage="perspectives">
+                            <div class="d-flex align-items-center">
+                                <div class="me-3 display-6 text-warning"><i class="fas fa-eye"></i></div>
+                                <div>
+                                    <div class="small text-muted">Perspectives</div>
+                                    <div class="fw-bold">{{ rag_results.analysis_info.get('perspectives_used', 3) if rag_results and rag_results.analysis_info else 3 }}</div>
+                                    <div class="small text-muted">Professor, Child, Domain</div>
                                 </div>
                             </div>
                         </div>
@@ -149,23 +175,11 @@
                     <div class="col-md-3">
                         <div id="stage-fusion" class="tile p-3 bg-white" data-stage="fusion">
                             <div class="d-flex align-items-center">
-                                <div class="me-3 display-6 text-warning"><i class="fas fa-layer-group"></i></div>
+                                <div class="me-3 display-6 text-danger"><i class="fas fa-layer-group"></i></div>
                                 <div>
                                     <div class="small text-muted">Fusion</div>
-                                    <div class="fw-bold">RRF</div>
-                                    <div class="small text-muted">Constant: {{ rag_results.analysis_info.rrf_constant if rag_results and rag_results.analysis_info and rag_results.analysis_info.rrf_constant is not none else '60' }}</div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="col-md-3">
-                        <div id="stage-rerank" class="tile p-3 bg-white" data-stage="rerank">
-                            <div class="d-flex align-items-center">
-                                <div class="me-3 display-6 text-danger"><i class="fas fa-filter"></i></div>
-                                <div>
-                                    <div class="small text-muted">Rerank</div>
-                                    <div class="fw-bold">{{ 'Enabled' if rag_results and rag_results.analysis_info and rag_results.analysis_info.reranking_enabled else 'Disabled' }}</div>
-                                    <div class="small text-muted">Top movers highlighted below</div>
+                                    <div class="fw-bold">Weighted RRF</div>
+                                    <div class="small text-muted">{{ rag_results.analysis_info.get('fusion_stats', {}).get('total_methods', 3) if rag_results and rag_results.analysis_info else 3 }} methods</div>
                                 </div>
                             </div>
                         </div>
@@ -175,6 +189,42 @@
         </div>
 
         <div class="row">
+            <!-- Multi-Perspective Search Insights -->
+            {% if rag_results and rag_results.analysis_info %}
+            <div class="col-lg-12 mb-4">
+                <div class="card">
+                    <div class="card-header">
+                        <h6 class="mb-0">Multi-Perspective Search Analysis</h6>
+                    </div>
+                    <div class="card-body">
+                        <div class="row g-3">
+                            {% if rag_results.analysis_info.get('search_methods_used') %}
+                            <div class="col-md-4">
+                                <div class="small text-muted">Search Methods Used</div>
+                                <div class="fw-bold">{{ rag_results.analysis_info.search_methods_used|length }} perspectives</div>
+                                <div class="small">{{ rag_results.analysis_info.search_methods_used|join(', ') }}</div>
+                            </div>
+                            {% endif %}
+                            {% if rag_results.analysis_info.get('domain_confidence') %}
+                            <div class="col-md-4">
+                                <div class="small text-muted">Domain Confidence</div>
+                                <div class="fw-bold">{{ rag_results.analysis_info.domain_confidence }}/10</div>
+                                <div class="small">{{ rag_results.analysis_info.get('detected_domain', 'General') }} domain</div>
+                            </div>
+                            {% endif %}
+                            {% if rag_results.analysis_info.get('processing_time') %}
+                            <div class="col-md-4">
+                                <div class="small text-muted">Processing Time</div>
+                                <div class="fw-bold">{{ "%.2f"|format(rag_results.analysis_info.processing_time) }}s</div>
+                                <div class="small">Multi-perspective analysis</div>
+                            </div>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+            
             <div class="col-lg-7">
                 <div class="card mb-3">
                     <div class="card-header d-flex justify-content-between align-items-center">
@@ -472,15 +522,15 @@
             const hasResults = container?.dataset?.hasResults === '1';
             if (!hasResults) return;
 
-            const stages = ['stage-query','stage-retrieval','stage-fusion','stage-rerank'];
-            let delay = 120;
+            const stages = ['stage-query','stage-classification','stage-perspectives','stage-fusion'];
+            let delay = 150;
             stages.forEach((id, i) => {
                 const el = document.getElementById(id);
                 if (!el) return;
                 setTimeout(()=>{
                     el.classList.add('stage-play');
                     el.classList.add('active');
-                    setTimeout(()=>{ el.classList.remove('stage-play'); }, 700);
+                    setTimeout(()=>{ el.classList.remove('stage-play'); }, 800);
                 }, delay * (i+1));
             });
 

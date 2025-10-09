@@ -94,8 +94,8 @@ show_help() {
     echo "      • webui            (web interface) - only with --all"
     echo ""
     echo "AFTER SETUP:"
-    echo "  🌐 Web interface: http://localhost:3000 (if webui container running)"
-    echo "  🔧 Local development: source .venv/bin/activate && python app.py"
+    echo "  🌐 Web interface: https://localhost:443 (if webui container running)"
+    echo "  🔧 Local development: source .venv/bin/activate && python app.py (http://localhost:3000)"
     echo "  📊 Status check: ./status.sh"
     echo "  🤖 Robots.txt monitoring: python tools/robots_monitor.py --test-system"
     echo "  📈 Performance testing: python tools/robots_performance_test.py"
@@ -363,8 +363,12 @@ if [ ! -f ".env" ]; then
             echo "SSL_KEY_PATH=ssl/private/server.key" >> .env
             echo "GMAIL_REDIRECT_URI=https://localhost:3000/oauth/gmail/callback" >> .env
             echo -e "${GREEN}✅ SSL configuration added to .env${NC}"
-            echo -e "${BLUE}ℹ️ Application will run on https://localhost:3000${NC}"
-            echo -e "${YELLOW}💡 Update Google OAuth redirect URI to: https://localhost:3000/oauth/gmail/callback${NC}"
+            echo -e "${BLUE}ℹ️ Application URLs:${NC}"
+            echo -e "${BLUE}   Container mode: https://localhost:443${NC}"
+            echo -e "${BLUE}   Local dev mode: https://localhost:3000${NC}"
+            echo -e "${YELLOW}💡 Update Google OAuth redirect URI based on deployment mode:${NC}"
+            echo -e "${YELLOW}   Container: https://localhost:443/oauth/gmail/callback${NC}"
+            echo -e "${YELLOW}   Local dev: https://localhost:3000/oauth/gmail/callback${NC}"
         else
             echo -e "${YELLOW}⚠️  .env file not found. Using default configuration.${NC}"
             echo -e "${BLUE}📋 You can copy .env.example to .env later if needed${NC}"
@@ -428,7 +432,7 @@ if check_docker; then
         if [ $? -eq 0 ]; then
             echo ""
             echo -e "${GREEN}🎉 All services are running!${NC}"
-            echo -e "${BLUE}🌐 RAG Knowledge Base Web interface: http://localhost:3000${NC}"
+            echo -e "${BLUE}🌐 RAG Knowledge Base Web interface: https://localhost:443${NC}"
             echo -e "${BLUE}🐘 PostgreSQL: localhost:5432${NC}"
             echo -e "${BLUE}🔍 Milvus: localhost:19530${NC}"
             echo -e "${BLUE}🤖 Ollama: localhost:11434${NC}"
@@ -513,7 +517,7 @@ if check_docker; then
         if ask_yes_no "Install and start RAG Knowledge Base WebUI container?" "n"; then
             start_services "webui" "RAG Knowledge Base WebUI container"
             if [ $? -eq 0 ]; then
-                echo -e "${BLUE}🌐 RAG Knowledge Base Web interface: http://localhost:3000${NC}"
+                echo -e "${BLUE}🌐 RAG Knowledge Base Web interface: https://localhost:443${NC}"
             fi
         else
             echo -e "${YELLOW}⏭️  WebUI skipped (good for local development)${NC}"
@@ -535,7 +539,7 @@ echo "=================="
 # Summary based on setup mode
 if [ "$AUTO_YES" = true ]; then
     echo -e "${GREEN}✅ Fully automated setup completed${NC}"
-    echo -e "${BLUE}🌐 Ready to use: http://localhost:3000${NC}"
+    echo -e "${BLUE}🌐 Ready to use: https://localhost:443${NC}"
 elif [ "$DEV_MODE" = true ]; then
     echo -e "${GREEN}✅ Development environment ready${NC}"
     echo -e "${YELLOW}💻 Start local development with: python app.py${NC}"
@@ -562,7 +566,7 @@ if [ "$DEV_MODE" = true ]; then
     echo -e "   3. Open browser: ${BLUE}http://localhost:3000${NC}"
 elif [ "$AUTO_YES" = true ]; then
     echo -e "${GREEN}Production Mode - All containers running:${NC}"
-    echo "   🌐 RAG Knowledge Base Web interface: ${BLUE}http://localhost:3000${NC}"
+    echo "   🌐 RAG Knowledge Base Web interface: ${BLUE}https://localhost:443${NC}"
     echo "   📊 Application ready to use immediately!"
 else
     echo -e "${BLUE}Manual Options:${NC}"
@@ -589,7 +593,8 @@ echo "📚 Key Components:"
 echo "   🐘 PostgreSQL (metadata): localhost:5432"
 echo "   🔍 Milvus (vectors): localhost:19530"
 echo "   🤖 Ollama (local LLM): localhost:11434"
-echo "   🌐 Web Interface: https://localhost:3000"
+echo "   🌐 Web Interface (container): https://localhost:443"
+echo "   🌐 Web Interface (local dev): http://localhost:3000"
 echo "   📁 Document uploads: ./uploaded/"
 echo "   📁 Processing staging: ./staging/"
 echo "   📊 Logs: ./logs/"

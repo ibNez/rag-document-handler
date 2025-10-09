@@ -989,8 +989,32 @@ class RAGKnowledgebaseManager:
                 logger.info(f"Continuing document processing without topic enrichment")
             
             status.status = "storing"
-            status.message = "Storing in Milvus..."
-            status.progress = 80
+            status.message = "Storing chunks in PostgreSQL..."
+            status.progress = 75
+            
+            # Store document chunks in PostgreSQL FIRST to get chunk_ids
+            if self.postgres_manager and self.document_source_manager and self.document_source_manager.document_data_manager:
+                logger.info(f"Storing {len(chunks)} chunks in PostgreSQL for document: {filename} via DocumentDataManager.persist_chunks")
+                try:
+                    stored = self.document_source_manager.document_data_manager.persist_chunks(document_id=str(document_id), chunks=chunks)
+                    logger.info(f"Persisted {stored}/{len(chunks)} chunks for document {document_id}")
+                    
+                    # Now chunks have chunk_id in metadata as 'document_chunk_id'
+                    logger.info("Chunk IDs obtained from PostgreSQL, proceeding with Milvus storage")
+                    
+                except Exception as e:
+                    logger.error(f"Failed to persist document chunks via DocumentDataManager: {e}")
+                    status.status = "error"
+                    status.message = f"PostgreSQL storage failed: {str(e)[:100]}..."
+                    return
+            else:
+                logger.error("PostgreSQL manager or DocumentSourceManager not available, cannot proceed")
+                status.status = "error"
+                status.message = "PostgreSQL manager not available"
+                return
+
+            status.message = "Storing vectors in Milvus..."
+            status.progress = 85
             
             logger.info(f"Storing {len(chunks)} chunks in Milvus for document: {filename}")
             
@@ -1013,8 +1037,8 @@ class RAGKnowledgebaseManager:
                 
                 logger.info(f"Ollama embedding service confirmed available (model: {ollama_status.model_name}, response: {ollama_status.response_time_ms:.1f}ms)")
                 
-                # Proceed with Milvus storage using ONLY the UUID as document identifier
-                # All metadata lives in PostgreSQL, Milvus only stores vectors + UUID reference
+                # Store in Milvus with chunk_ids now available in chunk metadata
+                # Each chunk should now have 'document_chunk_id' in metadata from PostgreSQL storage
                 self.milvus_manager.insert_documents(document_id, chunks)
                 logger.info(f"Successfully stored document '{filename}' with ID '{document_id}' in Milvus vector database")
                 
@@ -1029,20 +1053,6 @@ class RAGKnowledgebaseManager:
                     status.status = "error"
                     status.message = f"Storage failed: {str(e)[:100]}..."
                     return
-            
-            # Store document chunks in PostgreSQL for retrieval
-            status.message = "Storing chunks in PostgreSQL..."
-            status.progress = 85
-            
-            if self.postgres_manager and self.document_source_manager and self.document_source_manager.document_data_manager:
-                logger.info(f"Storing {len(chunks)} chunks in PostgreSQL for document: {filename} via DocumentDataManager.persist_chunks")
-                try:
-                    stored = self.document_source_manager.document_data_manager.persist_chunks(document_id=str(document_id), chunks=chunks)
-                    logger.info(f"Persisted {stored}/{len(chunks)} chunks for document {document_id}")
-                except Exception as e:
-                    logger.error(f"Failed to persist document chunks via DocumentDataManager: {e}")
-            else:
-                logger.error("PostgreSQL manager or DocumentSourceManager not available, skipping document chunk storage")
             
             # Move file to uploaded folder
             uploaded_path = os.path.join(self.config.UPLOADED_FOLDER, filename)

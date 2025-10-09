@@ -159,3 +159,76 @@ For existing installations:
 4. **Update bookmarks** to use `https://localhost:3000`
 
 This SSL-first approach ensures the RAG Document Handler meets enterprise security requirements while maintaining ease of use for internal deployment.
+
+## Production SSL Configuration
+
+### Production Certificate Management
+
+For production deployments, replace self-signed certificates with certificates from a trusted Certificate Authority:
+
+**Using Let's Encrypt (Recommended):**
+```bash
+# Install certbot
+sudo apt install certbot
+
+# Generate certificate for your domain
+sudo certbot certonly --standalone -d your-domain.com
+
+# Copy certificates to application directory
+sudo cp /etc/letsencrypt/live/your-domain.com/fullchain.pem ssl/certs/server.crt
+sudo cp /etc/letsencrypt/live/your-domain.com/privkey.pem ssl/private/server.key
+sudo chown www-data:www-data ssl/certs/server.crt ssl/private/server.key
+sudo chmod 644 ssl/certs/server.crt
+sudo chmod 600 ssl/private/server.key
+```
+
+**Using Commercial CA:**
+1. Generate Certificate Signing Request (CSR)
+2. Submit CSR to your Certificate Authority
+3. Install issued certificate and intermediate chain
+4. Update file permissions as shown above
+
+### Production SSL Settings
+
+**Nginx Reverse Proxy Configuration:**
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name your-domain.com;
+    
+    # SSL Configuration
+    ssl_certificate /path/to/ssl/certs/server.crt;
+    ssl_certificate_key /path/to/ssl/private/server.key;
+    
+    # Security headers
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header X-Frame-Options DENY;
+    add_header X-Content-Type-Options nosniff;
+    
+    # Proxy to application
+    location / {
+        proxy_pass https://127.0.0.1:3000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+### Certificate Renewal Automation
+
+**Let's Encrypt Renewal:**
+```bash
+# Add to crontab for automatic renewal
+0 2 * * * /usr/bin/certbot renew --quiet --deploy-hook "systemctl reload rag-knowledgebase"
+```
+
+**Certificate Monitoring:**
+```bash
+# Check certificate expiration
+openssl x509 -in ssl/certs/server.crt -noout -dates
+
+# Verify certificate chain
+openssl s_client -connect localhost:443 -verify_return_error
+```

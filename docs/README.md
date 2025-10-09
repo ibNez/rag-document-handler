@@ -71,9 +71,6 @@ templates/
 - [Gmail OAuth Setup](gmail-oauth-setup.md) - Complete Gmail API configuration and troubleshooting
 - [Database Schema](database-schema.md) - Complete database field documentation
 - [Contributing](contributing.md) - Development workflow and standards
-- [Document Ingestion POC](document-ingest-poc.md) - Document processing proof of concept
-- [PostgreSQL Guide](postgresql_guide.md) - Database setup and management
-- [Roadmap](roadmap.md) - Future features and enhancements
 
 ## Management Commands
 
@@ -84,7 +81,6 @@ templates/
 | `./setup.sh --dev` | Development environment setup |
 | `./status.sh` | System health and connectivity check |
 | `./uninstall.sh --dry-run` | Preview removal (safe testing) |
-
 
 
 Each document reflects the current project state and highlights areas for future development.

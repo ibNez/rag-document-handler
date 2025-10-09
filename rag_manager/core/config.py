@@ -124,6 +124,16 @@ class Config:
     DOCUMENT_RERANK_TOP_K: Optional[int] = int(os.getenv('DOCUMENT_RERANK_TOP_K', '0')) or None  # 0 means rerank all
     DOCUMENT_RRF_CONSTANT: int = int(os.getenv('DOCUMENT_RRF_CONSTANT', '60'))
     
+    # Multi-Perspective Search Reranking Configuration
+    ENABLE_MULTI_PERSPECTIVE_RERANKING: bool = os.getenv('ENABLE_MULTI_PERSPECTIVE_RERANKING', 'true').lower() == 'true'
+    MULTI_PERSPECTIVE_RERANKER_MODEL: str = os.getenv('MULTI_PERSPECTIVE_RERANKER_MODEL', 'ms-marco-minilm')
+    MULTI_PERSPECTIVE_RERANK_TOP_K: Optional[int] = int(os.getenv('MULTI_PERSPECTIVE_RERANK_TOP_K', '0')) or None
+    
+    # Chunk Consolidation Configuration
+    CONSOLIDATION_MIN_GROUP_SIZE: int = int(os.getenv('CONSOLIDATION_MIN_GROUP_SIZE', '2'))
+    CONSOLIDATION_MAX_COMBINED_LENGTH: int = int(os.getenv('CONSOLIDATION_MAX_COMBINED_LENGTH', '4000'))
+    CONSOLIDATION_PRESERVE_BOUNDARIES: bool = os.getenv('CONSOLIDATION_PRESERVE_BOUNDARIES', 'true').lower() == 'true'
+    
     # Advanced Document Chunking Configuration
     DOCUMENT_CHUNKING_STRATEGY: str = os.getenv('DOCUMENT_CHUNKING_STRATEGY', 'title_aware')  # title_aware, page_aware, basic
     DOCUMENT_TARGET_TOKENS: int = int(os.getenv('DOCUMENT_TARGET_TOKENS', '850'))  # Target ~800-1,000 tokens
