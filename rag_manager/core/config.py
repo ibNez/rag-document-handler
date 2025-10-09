@@ -87,9 +87,6 @@ class Config:
     UNSTRUCTURED_OVERLAP: int = int(os.getenv('UNSTRUCTURED_OVERLAP', '200'))
     UNSTRUCTURED_INCLUDE_ORIG: bool = os.getenv('UNSTRUCTURED_INCLUDE_ORIG', 'false').lower() == 'true'
     
-    # Milvus flags
-    MILVUS_DROP_COLLECTION: bool = os.getenv('MILVUS_DROP_COLLECTION', 'false').lower() == 'false'
-
     # Crawl settings
     CRAWL_MAX_PAGES: int = int(os.getenv('CRAWL_MAX_PAGES', '50'))
     CRAWL_REQUEST_TIMEOUT: int = int(os.getenv('CRAWL_REQUEST_TIMEOUT', '10'))

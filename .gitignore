@@ -34,6 +34,7 @@ venv.bak/
 .env.local
 .env.production
 .env.staging
+.env.configured
 
 # IDEs
 .vscode/
@@ -129,3 +130,5 @@ id_rsa*
 containers/
 
 tests/asset_generator*
+ssl/
+ssl/*

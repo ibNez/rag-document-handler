@@ -139,8 +139,6 @@ else
     echo "❌ uninstall.sh (missing or not executable)"
 fi
 
-check_file "test_postgres.py"
-
 echo ""
 
 # 6. Check database connectivity (if environment is set up)
