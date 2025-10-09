@@ -1,0 +1,55 @@
+# RAG Knowledge Base Manager - Systemd Service Unit
+# Copy this file to /etc/systemd/system/rag-knowledgebase.service
+# Then run: sudo systemctl enable rag-knowledgebase && sudo systemctl start rag-knowledgebase
+
+[Unit]
+Description=RAG Knowledge Base Manager - Production WSGI Server
+Documentation=https://github.com/ibNez/rag-document-handler
+After=network.target postgresql.service docker.service
+Wants=postgresql.service docker.service
+
+[Service]
+Type=forking
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/rag-document-handler
+Environment=FLASK_ENV=production
+Environment=FLASK_DEBUG=False
+Environment=WORKERS=4
+Environment=WORKER_CLASS=sync
+Environment=MAX_REQUESTS=1000
+Environment=TIMEOUT=120
+
+# Start command
+ExecStart=/opt/rag-document-handler/start_production.sh
+ExecStop=/opt/rag-document-handler/stop_production.sh
+ExecReload=/bin/kill -HUP $MAINPID
+
+# Process management
+PIDFile=/opt/rag-document-handler/logs/gunicorn.pid
+Restart=always
+RestartSec=10
+TimeoutStartSec=120
+TimeoutStopSec=30
+
+# Security settings
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/opt/rag-document-handler/logs
+ReadWritePaths=/opt/rag-document-handler/uploaded
+ReadWritePaths=/opt/rag-document-handler/staging
+ReadWritePaths=/opt/rag-document-handler/deleted
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=rag-knowledgebase
+
+[Install]
+WantedBy=multi-user.target

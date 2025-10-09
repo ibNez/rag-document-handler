@@ -246,11 +246,46 @@ MILVUS_HOST=localhost
 ```bash
 # Use production-ready settings
 FLASK_DEBUG=False
+FLASK_ENV=production
 FLASK_HOST=0.0.0.0
 POSTGRES_HOST=production-postgres-host
 MILVUS_HOST=production-milvus-host
 # Add SSL/TLS configuration
 # Add authentication credentials
+```
+
+### Production WSGI Configuration
+
+| Variable | Description | Default | Required | Example |
+|----------|-------------|---------|----------|---------|
+| `WORKERS` | Number of Gunicorn worker processes | `4` | No | `8` |
+| `WORKER_CLASS` | Worker process type | `sync` | No | `gevent` |
+| `MAX_REQUESTS` | Maximum requests per worker before restart | `1000` | No | `500` |
+| `MAX_REQUESTS_JITTER` | Random jitter for max requests | `100` | No | `50` |
+| `TIMEOUT` | Worker timeout in seconds | `120` | No | `60` |
+| `BIND_ADDRESS` | Address to bind Gunicorn server | `0.0.0.0:3000` | No | `127.0.0.1:8000` |
+| `PRELOAD` | Preload application in master process | `true` | No | `false` |
+
+**Worker Configuration Guidelines:**
+
+**CPU-bound tasks** (default):
+```bash
+export WORKERS=$((2 * $(nproc) + 1))  # 2*CPU cores + 1
+export WORKER_CLASS=sync
+```
+
+**I/O-bound tasks** (high concurrency):
+```bash
+export WORKERS=$((2 * $(nproc) + 1))
+export WORKER_CLASS=gevent
+# Install: pip install gunicorn[gevent]
+```
+
+**Memory optimization**:
+```bash
+export MAX_REQUESTS=500              # Lower for memory-intensive apps
+export MAX_REQUESTS_JITTER=50        # Add randomness
+export WORKER_TMP_DIR=/dev/shm       # Use RAM for temp files
 ```
 
 ## Configuration Validation

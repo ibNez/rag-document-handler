@@ -1175,6 +1175,155 @@ Email content is mapped to the unified Milvus document schema as follows:
 - Database connectivity testing
 - Directory structure verification
 
+## Production Deployment Architecture
+
+### Production Infrastructure Components
+
+The production deployment uses enterprise-grade infrastructure with security hardening and performance optimization:
+
+**Production WSGI Server (Gunicorn):**
+- Multi-worker process architecture for scalability
+- Worker recycling prevents memory leaks and ensures stability
+- SSL/TLS termination with automatic certificate generation
+- Process monitoring and graceful restart capabilities
+- Performance tuning for production workloads
+
+**Container-Based Deployment:**
+- Docker Compose orchestration for service coordination
+- Separate production configuration (`docker-compose.prod.yml`)
+- Volume mounting for persistent data and SSL certificates
+- Network isolation and service discovery
+- Automatic restart policies for high availability
+
+**System Service Integration:**
+- Systemd service unit for system-level management
+- Automatic startup on system boot
+- Process monitoring and automatic restart on failure
+- Service dependencies and startup ordering
+- Standard logging through journald
+
+### Production Service Architecture
+
+```
+                    ┌─────────────────────┐
+                    │  Reverse Proxy      │
+                    │  (Nginx/HAProxy)    │
+                    │  Port 80/443        │
+                    └──────────┬──────────┘
+                               │
+                    ┌─────────────────────┐
+                    │  Application        │
+                    │  (Gunicorn WSGI)    │
+                    │  Port 3000/443      │
+                    └──────────┬──────────┘
+                               │
+              ┌────────────────┼────────────────┐
+              │                │                │
+    ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐
+    │   PostgreSQL    │ │     Milvus      │ │     Ollama      │
+    │   Port 5432     │ │   Port 19530    │ │   Port 11434    │
+    └─────────────────┘ └─────────────────┘ └─────────────────┘
+```
+
+### Production Scripts and Management
+
+**Core Production Files:**
+- `wsgi.py` - WSGI application entry point for production servers
+- `start_production.sh` - Production startup with SSL and service coordination
+- `stop_production.sh` - Graceful shutdown with worker management
+- `status_production.sh` - Comprehensive health monitoring and status reporting
+- `rag-knowledgebase.service` - Systemd service unit with security hardening
+
+**Production Management Workflow:**
+1. **Service Installation**: Copy systemd unit file and reload daemon
+2. **Service Control**: Standard systemctl commands for start/stop/restart
+3. **Health Monitoring**: Automated status checks and log monitoring
+4. **Graceful Shutdown**: SIGTERM handling for zero-downtime restarts
+5. **Log Management**: Structured logging with log rotation
+
+### SSL Certificate Management
+
+**Automatic Certificate Generation:**
+- Self-signed certificates for development and testing
+- Integration with Let's Encrypt for production domains
+- Certificate renewal automation
+- SSL configuration optimization for security
+
+**Certificate Storage Structure:**
+```
+ssl/
+├── certs/
+│   └── server.crt          # SSL certificate
+├── private/
+│   └── server.key          # Private key
+└── config/
+    └── ssl.conf            # SSL configuration
+```
+
+### Performance Optimization
+
+**Worker Configuration:**
+- CPU-bound workload optimization with sync workers
+- I/O-bound workload support with async workers (gevent)
+- Memory optimization with worker recycling
+- Connection pooling for database efficiency
+
+**Resource Limits:**
+- File descriptor limits for high concurrency
+- Process limits to prevent resource exhaustion
+- Memory limits and monitoring
+- Disk space monitoring and cleanup
+
+### Security Hardening
+
+**Process Security:**
+- Runs as dedicated `www-data` user (non-root)
+- Process isolation and privilege dropping
+- System call restrictions
+- File system access controls
+
+**Network Security:**
+- SSL/TLS encryption for all external communication
+- Internal service communication isolation
+- Firewall configuration recommendations
+- Rate limiting and DDoS protection support
+
+### Monitoring and Logging
+
+**Log Types and Locations:**
+- **Application Logs**: `logs/rag_knowledge_base_manager.log`
+- **Access Logs**: `logs/gunicorn_access.log` 
+- **Error Logs**: `logs/gunicorn_error.log`
+- **System Logs**: journald integration for systemd service
+
+**Health Check Endpoints:**
+- Application health: `/health`
+- Database connectivity checks
+- Service dependency validation
+- Performance metrics collection
+
+**Monitoring Integration:**
+- Log aggregation support (ELK stack, Grafana)
+- Metrics export (Prometheus compatible)
+- Alert configuration for critical events
+- Performance dashboards and reporting
+
+### Backup and Recovery
+
+**Data Backup Strategy:**
+- PostgreSQL database dumps with compression
+- Milvus collection exports and snapshots
+- File system backups for uploaded content
+- Configuration backup and versioning
+
+**Recovery Procedures:**
+- Database restoration from backups
+- Vector database reconstruction
+- Service configuration recovery
+- Disaster recovery documentation
+
+This production architecture ensures enterprise-grade reliability, security, and performance for the RAG Knowledge Base Manager in production environments.
+
 ## Security Considerations
 
 ### Email Account Security
