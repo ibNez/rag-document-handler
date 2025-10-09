@@ -10,7 +10,7 @@ import time
 import hashlib
 import logging
 import re
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple, Union
 
 from pymilvus import connections, utility, Collection
 from langchain_ollama import OllamaEmbeddings, ChatOllama
@@ -98,7 +98,8 @@ class MilvusManager:
                     "document_id": "init-dummy", 
                     "content_hash": "init", 
                     "page": 1,
-                    "snapshot_id": "init-dummy-snapshot"  # Include snapshot_id for schema creation
+                    "snapshot_id": "init-dummy-snapshot",  # Include snapshot_id for schema creation
+                    "chunk_id": "init-dummy-chunk"  # Include chunk_id for schema creation
                 }]
                 
                 # Ensure vector store is initialized before using add_texts
@@ -370,7 +371,8 @@ class MilvusManager:
                 'document_id': document_id,  # ID reference to PostgreSQL document
                 'content_hash': ch,            # For deduplication
                 'page': int(meta.get('page', 0) or 0),  # Keep page for basic navigation
-                'snapshot_id': meta.get('snapshot_id') or ""  # Keep snapshot_id for temporal deletion, empty string for file uploads
+                'snapshot_id': meta.get('snapshot_id') or "",  # Keep snapshot_id for temporal deletion, empty string for file uploads
+                'chunk_id': meta.get('document_chunk_id', '')  # Include chunk_id from PostgreSQL for topic expansion
             }
             
             texts.append(content)
@@ -1276,6 +1278,1041 @@ Classification:"""
         except Exception as e:
             logger.error(f"Query classification failed: {e}, defaulting to 'general'")
             return 'general'
+    
+    def classify_query_with_confidence(self, query: str) -> Dict[str, Any]:
+        """
+        Query classification with confidence scoring and domain detection.
+        
+        Args:
+            query: User's search query
+            
+        Returns:
+            Dict containing classification, domain info, and confidence scores
+        """
+        from retrieval.classification import QueryClassifier, DomainDetector
+        
+        # Initialize classifiers
+        query_classifier = QueryClassifier(self.config)
+        domain_detector = DomainDetector(self.config)
+        
+        # Get classification with confidence (one-shot) - required
+        classification_result = query_classifier.classify_with_confidence(query)
+        
+        # Get domain detection (one-shot) - optional
+        try:
+            domain_result = domain_detector.detect_domain(query)
+            domain_info = domain_result['domain']
+        except Exception as e:
+            logger.warning(f"Domain detection failed during classification: {e}")
+            # Use default domain info if detection fails
+            domain_info = {
+                'domain': 'general',
+                'confidence': 5,
+                'secondary': None,
+                'reasoning': 'Domain detection failed, using default',
+                'keywords': []
+            }
+        
+        # Return flattened structure for backward compatibility
+        return {
+            'classification': classification_result['classification'],  # Extract nested classification
+            'domain': domain_info  # Extract nested domain or use default
+        }
+
+    def multi_perspective_vector_search(self, query: str, top_k: int = 15) -> List[Dict[str, Any]]:
+        """
+        Multi-perspective vector search with reframing and result fusion.
+        
+        Args:
+            query: User's search query
+            top_k: Number of results per perspective
+            
+        Returns:
+            List of merged and ranked results
+        """
+        from retrieval.classification import QueryClassifier, DomainDetector
+        from retrieval.reframing import QueryReframer, SynonymExpander
+        from retrieval.fusion import ResultMerger
+        
+        logger.info(f"Starting multi-perspective search for: '{query}' (top_k={top_k})")
+        
+        # Step 1: Classify query type (general vs email vs specific)
+        query_type = 'general'  # Default to general
+        try:
+            query_type = self.classify_query_intent(query)
+            logger.info(f"Query classified as: {query_type}")
+        except Exception as e:
+            logger.warning(f"Query classification failed: {e}. Using default 'general'.")
+        
+        # Step 2: Domain Detection (optional - search can continue without it)
+        domain_info = None
+        try:
+            domain_detector = DomainDetector(self.config)
+            domain_result = domain_detector.detect_domain(query)
+            domain_info = domain_result['domain']  # Extract domain info from one-shot structure
+            logger.info(f"Domain detected: {domain_info['domain']} (confidence: {domain_info['confidence']})")
+        except Exception as e:
+            logger.warning(f"Domain detection failed: {e}. Proceeding with general search.")
+            domain_info = {
+                'domain': 'general',
+                'confidence': 3,
+                'secondary': None,
+                'reasoning': 'Domain detection failed',
+                'keywords': []
+            }
+        
+        # Step 2: Generate all prompt variants (gracefully handle failures)
+        perspectives = {'original': query}  # Always include original query
+        try:
+            query_reframer = QueryReframer(self.config)
+            perspectives.update(query_reframer.generate_all_perspectives(query, domain_info))
+            logger.info(f"Generated {len(perspectives)} perspectives: {list(perspectives.keys())}")
+        except Exception as e:
+            logger.warning(f"Query reframing failed: {e}. Using original query only.")
+        
+        # Step 3: Generate synonym variants (gracefully handle failures)
+        synonym_variants = []
+        try:
+            synonym_expander = SynonymExpander(self.config)
+            synonym_variants = synonym_expander.generate_synonym_variants(query, max_variants=3)
+            logger.info(f"Generated {len(synonym_variants)} synonym variants")
+        except Exception as e:
+            logger.warning(f"Synonym expansion failed: {e}. Proceeding without synonyms.")
+        
+        # Step 4: Perform vector searches for all perspectives (each search is independent)
+        perspective_results = {}
+        
+        # Search all available perspectives with topic expansion for general queries
+        for perspective_name, perspective_query in perspectives.items():
+            try:
+                if query_type == 'general':
+                    # Use topic expansion for general queries
+                    results = self._perform_single_vector_search_with_topic_expansion(perspective_query, top_k)
+                else:
+                    # Use regular vector search for specific queries
+                    results = self._perform_single_vector_search(perspective_query, top_k)
+                perspective_results[perspective_name] = results
+                logger.info(f"Perspective '{perspective_name}' returned {len(results)} results")
+            except Exception as e:
+                logger.warning(f"Search failed for perspective '{perspective_name}': {e}")
+                perspective_results[perspective_name] = []  # Empty results for failed perspective
+        
+        # Search synonym variants with topic expansion for general queries
+        for i, variant in enumerate(synonym_variants):
+            try:
+                if query_type == 'general':
+                    # Use topic expansion for general queries
+                    results = self._perform_single_vector_search_with_topic_expansion(variant, top_k)
+                else:
+                    # Use regular vector search for specific queries
+                    results = self._perform_single_vector_search(variant, top_k)
+                perspective_results[f'synonym_{i}'] = results
+                logger.info(f"Synonym variant {i} returned {len(results)} results")
+            except Exception as e:
+                logger.warning(f"Search failed for synonym variant {i}: {e}")
+                perspective_results[f'synonym_{i}'] = []
+        
+        # Step 5: Merge and rank results (even if some perspectives failed)
+        try:
+            result_merger = ResultMerger(self.config)
+            merged_results = result_merger.merge_weighted_results(perspective_results, domain_info)
+            logger.info(f"Multi-perspective search completed: {len(merged_results)} merged results from {len([k for k, v in perspective_results.items() if v])} successful perspectives")
+        except Exception as e:
+            logger.warning(f"Result merging failed: {e}. Using original query results only.")
+            # Fallback to original query results if merging fails
+            merged_results = perspective_results.get('original', [])
+        
+        return merged_results
+    
+    def _apply_consolidation_and_reranking(self, query: str, search_results: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        """
+        Apply chunk consolidation and cross-encoder reranking to search results.
+        
+        Args:
+            query: Original search query
+            search_results: Results from multi-perspective search
+            
+        Returns:
+            Tuple of (consolidated and reranked results, reranking info)
+        """
+        logger.info(f"Starting consolidation and reranking for {len(search_results)} results")
+        
+        reranking_info = {
+            'consolidation_applied': False,
+            'reranking_applied': False,
+            'original_count': len(search_results),
+            'consolidation_stats': {},
+            'reranking_stats': {},
+            'pre_rerank': [],
+            'post_rerank': [],
+            'comparison_table': []
+        }
+        
+        if not search_results:
+            return search_results, reranking_info
+        
+        try:
+            # Step 1: Apply chunk consolidation
+            from rag_manager.utils.chunk_consolidator import create_chunk_consolidator
+            consolidator = create_chunk_consolidator(self.config)
+            consolidated_results = consolidator.consolidate_chunks(search_results)
+            
+            consolidation_stats = consolidator.get_consolidation_stats(search_results, consolidated_results)
+            reranking_info['consolidation_applied'] = True
+            reranking_info['consolidation_stats'] = consolidation_stats
+            reranking_info['post_consolidation_count'] = len(consolidated_results)
+            
+            logger.info(f"Consolidation completed: {len(search_results)} → {len(consolidated_results)} results")
+            
+        except Exception as e:
+            logger.warning(f"Chunk consolidation failed: {e}. Proceeding with original results.")
+            consolidated_results = search_results
+            reranking_info['consolidation_error'] = str(e)
+        
+        try:
+            # Step 2: Apply cross-encoder reranking if enabled
+            enable_reranking = getattr(self.config, 'ENABLE_MULTI_PERSPECTIVE_RERANKING', True)
+            
+            if enable_reranking and len(consolidated_results) > 1:
+                logger.info("Applying cross-encoder reranking to consolidated results")
+                
+                # Capture pre-rerank snapshot
+                pre_rerank_snapshot = []
+                for idx, result in enumerate(consolidated_results):
+                    metadata = result.get('metadata', {})
+                    consolidation_info = result.get('consolidation_info', {})
+                    
+                    pre_rerank_snapshot.append({
+                        'rank': idx + 1,
+                        'document_chunk_id': result.get('chunk_id', result.get('document_chunk_id', '')),
+                        'title': metadata.get('title', metadata.get('filename', '')),
+                        'combined_score': float(result.get('score', 0.0)),
+                        'chunk_count': consolidation_info.get('chunk_count', 1),
+                        'preview': result.get('content', '')[:200] + '...' if len(result.get('content', '')) > 200 else result.get('content', '')
+                    })
+                
+                # Apply reranking
+                reranked_results = self._apply_cross_encoder_reranking(query, consolidated_results)
+                
+                if reranked_results:
+                    # Capture post-rerank snapshot
+                    post_rerank_snapshot = []
+                    for idx, result in enumerate(reranked_results):
+                        metadata = result.get('metadata', {})
+                        consolidation_info = result.get('consolidation_info', {})
+                        
+                        post_rerank_snapshot.append({
+                            'rank': idx + 1,
+                            'document_chunk_id': result.get('chunk_id', result.get('document_chunk_id', '')),
+                            'title': metadata.get('title', metadata.get('filename', '')),
+                            'rerank_score': float(result.get('rerank_score', result.get('score', 0.0))),
+                            'original_score': float(result.get('original_score', result.get('score', 0.0))),
+                            'chunk_count': consolidation_info.get('chunk_count', 1),
+                            'preview': result.get('content', '')[:200] + '...' if len(result.get('content', '')) > 200 else result.get('content', '')
+                        })
+                    
+                    # Create comparison table
+                    comparison_table = []
+                    for pre_item in pre_rerank_snapshot:
+                        chunk_id = pre_item['document_chunk_id']
+                        # Find corresponding post item
+                        post_item = next((p for p in post_rerank_snapshot if p['document_chunk_id'] == chunk_id), None)
+                        
+                        if post_item:
+                            comparison_table.append({
+                                'document_chunk_id': chunk_id,
+                                'title': pre_item['title'],
+                                'pre_rank': pre_item['rank'],
+                                'pre_score': pre_item['combined_score'],
+                                'post_rank': post_item['rank'],
+                                'post_score': post_item['rerank_score'],
+                                'score_delta': post_item['rerank_score'] - pre_item['combined_score'],
+                                'rank_delta': pre_item['rank'] - post_item['rank'],
+                                'chunk_count': pre_item['chunk_count'],
+                                'preview': pre_item['preview']
+                            })
+                    
+                    consolidated_results = reranked_results
+                    reranking_info['reranking_applied'] = True
+                    reranking_info['pre_rerank'] = pre_rerank_snapshot
+                    reranking_info['post_rerank'] = post_rerank_snapshot
+                    reranking_info['comparison_table'] = comparison_table
+                    reranking_info['final_count'] = len(reranked_results)
+                    
+                    logger.info(f"Cross-encoder reranking completed: {len(reranked_results)} results reranked")
+                else:
+                    logger.warning("Cross-encoder reranking returned no results, using consolidated results")
+                    reranking_info['reranking_error'] = "Reranking returned no results"
+            else:
+                logger.info("Cross-encoder reranking disabled or insufficient results")
+                reranking_info['reranking_disabled_reason'] = 'disabled' if not enable_reranking else 'insufficient_results'
+                
+        except Exception as e:
+            logger.error(f"Cross-encoder reranking failed: {e}. Using consolidated results.")
+            reranking_info['reranking_error'] = str(e)
+        
+        return consolidated_results, reranking_info
+    
+    def _apply_cross_encoder_reranking(self, query: str, consolidated_results: List[Dict[str, Any]]) -> Optional[List[Dict[str, Any]]]:
+        """
+        Apply cross-encoder reranking to consolidated results.
+        
+        Args:
+            query: Original search query
+            consolidated_results: Results after consolidation
+            
+        Returns:
+            Reranked results or None if reranking fails
+        """
+        try:
+            from rerank.cross_encoder import RerankerFactory
+            
+            # Create reranker
+            reranker_model = getattr(self.config, 'MULTI_PERSPECTIVE_RERANKER_MODEL', 'ms-marco-minilm')
+            rerank_top_k = getattr(self.config, 'MULTI_PERSPECTIVE_RERANK_TOP_K', None)
+            
+            reranker = RerankerFactory.create_reranker(reranker_model)
+            
+            if not reranker.is_available():
+                logger.warning("Cross-encoder reranker not available")
+                return None
+            
+            # Prepare candidates for reranking
+            candidates = []
+            for result in consolidated_results:
+                candidate = {
+                    'document_chunk_id': result.get('chunk_id', result.get('document_chunk_id', '')),
+                    'text': result.get('content', ''),
+                    'score': result.get('score', 0.0),
+                    'metadata': result.get('metadata', {}),
+                    'consolidation_info': result.get('consolidation_info', {}),
+                    'source_methods': result.get('source_methods', []),
+                    'num_perspectives': result.get('num_perspectives', 1),
+                    'rank_boost': result.get('rank_boost', 0.0)
+                }
+                candidates.append(candidate)
+            
+            # Apply reranking
+            rerank_results = reranker.rerank(query, candidates, rerank_top_k or len(candidates))
+            
+            # Convert back to search result format
+            reranked_search_results = []
+            for result in rerank_results:
+                # Get original result metadata
+                original_metadata = result.metadata.copy() if hasattr(result, 'metadata') and result.metadata else {}
+                
+                # Extract additional fields from metadata if they exist
+                consolidation_info = original_metadata.pop('consolidation_info', {})
+                source_methods = original_metadata.pop('source_methods', [])
+                num_perspectives = original_metadata.pop('num_perspectives', 1)
+                rank_boost = original_metadata.pop('rank_boost', 0.0)
+                
+                # Create reranked result
+                reranked_result = {
+                    'chunk_id': result.chunk_id,
+                    'document_chunk_id': result.chunk_id,
+                    'content': result.text,
+                    'score': result.rerank_score,  # Use rerank score as primary score
+                    'similarity_score': result.rerank_score,
+                    'original_score': result.original_score,
+                    'rerank_score': result.rerank_score,
+                    'final_rank': result.final_rank,
+                    'source_methods': source_methods,
+                    'num_perspectives': num_perspectives,
+                    'rank_boost': rank_boost,
+                    'metadata': original_metadata,
+                    'consolidation_info': consolidation_info,
+                    'reranking_applied': True
+                }
+                reranked_search_results.append(reranked_result)
+            
+            return reranked_search_results
+            
+        except Exception as e:
+            logger.error(f"Cross-encoder reranking failed: {e}")
+            return None
+    
+    def multi_perspective_email_search(self, query: str, top_k: int = 15) -> List[Dict[str, Any]]:
+        """
+        Multi-perspective email search with domain-aware reframing.
+        
+        Args:
+            query: User's search query
+            top_k: Number of results per perspective
+            
+        Returns:
+            List of merged and ranked email results
+        """
+        from retrieval.classification import DomainDetector
+        from retrieval.reframing import QueryReframer, SynonymExpander
+        from retrieval.fusion import ResultMerger
+        
+        logger.info(f"Starting multi-perspective email search for: '{query}' (top_k={top_k})")
+        
+        # Step 1: Domain Detection for email context
+        domain_detector = DomainDetector(self.config)
+        domain_info = domain_detector.detect_domain(query)
+        
+        # Step 2: Generate email-specific perspectives
+        query_reframer = QueryReframer(self.config)
+        
+        # Standard perspectives
+        professor_prompt = query_reframer.reframe_as_professor(query)
+        child_prompt = query_reframer.reframe_as_child(query)
+        
+        # Email domain-specific reframing
+        email_domain_prompt = query_reframer.reframe_for_email_domain(query, domain_info['domain'])
+        
+        # Email-specific synonym variants
+        synonym_expander = SynonymExpander(self.config)
+        email_synonym_variants = synonym_expander.expand_for_email_context(query)
+        
+        # Step 3: Perform email searches for all perspectives
+        perspective_results = {
+            'original': self._perform_single_email_search(query, top_k),
+            'professor': self._perform_single_email_search(professor_prompt, top_k),
+            'child': self._perform_single_email_search(child_prompt, top_k),
+            'email_domain': self._perform_single_email_search(email_domain_prompt, top_k)
+        }
+        
+        # Add email synonym variants
+        for i, variant in enumerate(email_synonym_variants):
+            perspective_results[f'email_synonym_{i}'] = self._perform_single_email_search(variant, top_k)
+        
+        # Step 4: Merge results with email-specific weights
+        result_merger = ResultMerger(self.config)
+        merged_results = result_merger.merge_email_results(
+            perspective_results['original'],
+            perspective_results['professor'],
+            perspective_results['child'],
+            perspective_results['email_domain'],
+            [perspective_results.get(f'email_synonym_{i}', []) for i in range(len(email_synonym_variants))]
+        )
+        
+        logger.info(f"Multi-perspective email search completed: {len(merged_results)} merged results")
+        return merged_results
+    
+    def _perform_single_vector_search(self, query: str, top_k: int) -> List[Dict[str, Any]]:
+        """
+        Perform a single vector search against document collection.
+        
+        Args:
+            query: Search query
+            top_k: Number of results to return
+            
+        Returns:
+            List of search results
+        """
+        try:
+            self._ensure_vector_store()
+            if not self.vector_store:
+                logger.warning("Vector store not available for single vector search")
+                return []
+            
+            # Check if collection exists and has data
+            if not utility.has_collection(self.collection_name):
+                logger.warning(f"Collection '{self.collection_name}' does not exist")
+                return []
+            
+            col = Collection(self.collection_name)
+            entity_count = col.num_entities
+            if entity_count == 0:
+                logger.warning(f"Collection '{self.collection_name}' is empty (0 entities)")
+                return []
+            
+            # Perform similarity search
+            results = self.vector_store.similarity_search_with_score(query, k=top_k)
+            
+            # Convert to standardized format
+            formatted_results = []
+            for doc, score in results:
+                formatted_results.append({
+                    'chunk_id': doc.metadata.get('chunk_id', ''),
+                    'document_chunk_id': doc.metadata.get('chunk_id', ''),
+                    'similarity_score': float(score),
+                    'content': doc.page_content,
+                    'metadata': doc.metadata,
+                    'title': doc.metadata.get('title', ''),
+                    'filename': doc.metadata.get('filename', ''),
+                    'page': doc.metadata.get('page', 0),
+                    'category': doc.metadata.get('category', ''),
+                    'category_type': doc.metadata.get('category_type', ''),
+                    'topics': doc.metadata.get('topics', '')
+                })
+            
+            logger.info(f"Single vector search returned {len(formatted_results)} results for query: '{query[:50]}...'")
+            return formatted_results
+            
+        except Exception as e:
+            logger.error(f"Single vector search failed for query '{query}': {e}")
+            return []
+
+    def _perform_single_vector_search_with_topic_expansion(self, query: str, top_k: int) -> List[Dict[str, Any]]:
+        """
+        Perform vector search with topic-based expansion.
+        
+        1. Get initial chunks from Milvus embeddings
+        2. Look up chunk IDs in PostgreSQL to get topics
+        3. Parse comma-separated topics and find most common
+        4. Expand results by finding additional chunks with that topic
+        5. Group and rank all results
+        
+        Args:
+            query: Search query
+            top_k: Number of initial results per perspective
+            
+        Returns:
+            List of expanded search results
+        """
+        try:
+            # Step 1: Get initial embedding results
+            initial_results = self._perform_single_vector_search(query, top_k)
+            if not initial_results:
+                logger.info(f"No initial embedding results for query: '{query[:50]}...'")
+                return []
+            
+            logger.info(f"Got {len(initial_results)} initial embedding results for topic expansion")
+            
+            # Step 2: Extract chunk IDs and look up in PostgreSQL
+            if not self.postgres_manager:
+                logger.warning("PostgreSQL manager not available for topic expansion, returning initial results")
+                return initial_results
+            
+            # Get chunk IDs from initial results - try multiple methods
+            chunk_ids = []
+            content_hashes = []
+            document_page_pairs = []
+            
+            for result in initial_results:
+                # Method 1: Direct chunk_id from metadata
+                chunk_id = result.get('chunk_id') or result.get('document_chunk_id')
+                if chunk_id and chunk_id != 'None' and chunk_id.strip():
+                    chunk_ids.append(chunk_id.strip())
+                    continue
+                
+                # Method 2: Try chunk_id from metadata dict
+                metadata = result.get('metadata', {})
+                chunk_id = metadata.get('chunk_id') or metadata.get('document_chunk_id')
+                if chunk_id and chunk_id != 'None' and chunk_id.strip():
+                    chunk_ids.append(chunk_id.strip())
+                    continue
+                
+                # Method 3: Use content_hash to look up chunk_id in PostgreSQL (PRIMARY METHOD)
+                content_hash = metadata.get('content_hash')
+                if content_hash and content_hash.strip():
+                    content_hashes.append(content_hash.strip())
+                    continue
+                
+                # Method 4: Use document_id + page to look up chunk_id in PostgreSQL (FALLBACK)
+                document_id = metadata.get('document_id')
+                page = metadata.get('page')
+                if document_id and page is not None:
+                    document_page_pairs.append((document_id, page))
+            
+            # If we have content hashes, look up chunk IDs using hash-based lookup (fastest method)
+            if content_hashes and not chunk_ids:
+                logger.info(f"Using content_hash lookup for {len(content_hashes)} results")
+                try:
+                    with self.postgres_manager.get_connection() as conn:
+                        with conn.cursor() as cursor:
+                            # Use hash-based lookup (indexed for performance)
+                            cursor.execute("""
+                                SELECT id FROM document_chunks 
+                                WHERE chunk_hash = ANY(%s)
+                            """, (content_hashes,))
+                            
+                            found_chunks = cursor.fetchall()
+                            chunk_ids = [str(row['id']) for row in found_chunks]
+                            logger.info(f"Found {len(chunk_ids)} chunk IDs via content_hash lookup")
+                except Exception as e:
+                    logger.warning(f"Content hash lookup failed: {e}")
+            
+            # If we have document_id + page pairs, look up chunk IDs in PostgreSQL (slower fallback)
+            if document_page_pairs and not chunk_ids:
+                logger.info(f"Falling back to document+page lookup for {len(document_page_pairs)} results")
+                try:
+                    with self.postgres_manager.get_connection() as conn:
+                        with conn.cursor() as cursor:
+                            # First try exact page match for page 0 (common for PDFs)
+                            page_0_docs = [doc_id for doc_id, page in document_page_pairs if page == 0]
+                            
+                            if page_0_docs:
+                                # For page 0, get all chunks from these documents
+                                cursor.execute("""
+                                    SELECT id FROM document_chunks 
+                                    WHERE document_id = ANY(%s::uuid[])
+                                    ORDER BY chunk_ordinal
+                                """, (page_0_docs,))
+                                
+                                found_chunks = cursor.fetchall()
+                                chunk_ids = [str(row['id']) for row in found_chunks]
+                                logger.info(f"Found {len(chunk_ids)} chunk IDs via document lookup (page 0 fallback)")
+                            
+                            # If no page 0 results or other pages, try page range lookup
+                            if not chunk_ids and len(document_page_pairs) > len(page_0_docs):
+                                page_conditions = []
+                                params = []
+                                for doc_id, page in document_page_pairs:
+                                    if page != 0:  # Skip page 0 as we already handled it
+                                        page_conditions.append("(document_id = %s AND page_start <= %s AND page_end >= %s)")
+                                        params.extend([doc_id, page, page])
+                                
+                                if page_conditions:
+                                    query = f"""
+                                        SELECT id FROM document_chunks 
+                                        WHERE {' OR '.join(page_conditions)}
+                                    """
+                                    cursor.execute(query, params)
+                                    found_chunks = cursor.fetchall()
+                                    chunk_ids.extend([str(row['id']) for row in found_chunks])
+                                    logger.info(f"Found additional {len(found_chunks)} chunk IDs via page range lookup")
+                except Exception as e:
+                    logger.warning(f"Document+page lookup failed: {e}")
+            
+            if not chunk_ids:
+                logger.info("No valid chunk IDs found for topic expansion, returning initial results")
+                return initial_results
+            
+            logger.info(f"Looking up topics for {len(chunk_ids)} chunks in PostgreSQL")
+            
+            # Step 3: Get topics from PostgreSQL and find most common
+            try:
+                with self.postgres_manager.get_connection() as conn:
+                    with conn.cursor() as cursor:
+                        # Query to get topics for these chunks
+                        cursor.execute("""
+                            SELECT id, topics 
+                            FROM document_chunks 
+                            WHERE id = ANY(%s::uuid[]) AND topics IS NOT NULL AND topics != ''
+                        """, (chunk_ids,))
+                        
+                        topic_rows = cursor.fetchall()
+                        logger.info(f"Found {len(topic_rows)} chunks with topics in PostgreSQL")
+                        
+                        # Parse comma-separated topics and count occurrences
+                        topic_counts = {}
+                        for row in topic_rows:
+                            topics_str = row.get('topics', '')
+                            if topics_str:
+                                # Split comma-separated topics and clean them
+                                topics = [t.strip() for t in topics_str.split(',') if t.strip()]
+                                for topic in topics:
+                                    topic_counts[topic] = topic_counts.get(topic, 0) + 1
+                        
+                        if not topic_counts:
+                            logger.info("No topics found in chunks, returning initial results")
+                            return initial_results
+                        
+                        # Find most common topic
+                        if topic_counts:
+                            most_common_topic = max(topic_counts.keys(), key=lambda k: topic_counts[k])
+                            topic_frequency = topic_counts[most_common_topic]
+                        else:
+                            logger.info("No topics found, returning initial results")
+                            return initial_results
+                        
+                        logger.info(f"Most common topic: '{most_common_topic}' (appears {topic_frequency} times)")
+                        logger.info(f"All topic frequencies: {dict(sorted(topic_counts.items(), key=lambda x: x[1], reverse=True))}")
+                        
+                        # Step 4: Expand results by finding additional chunks with this topic
+                        cursor.execute("""
+                            SELECT id AS document_chunk_id, document_id, chunk_text, chunk_ordinal, 
+                                   page_start, page_end, topics, created_at
+                            FROM document_chunks 
+                            WHERE topics LIKE %s
+                            ORDER BY document_id, chunk_ordinal
+                            LIMIT %s
+                        """, (f'%{most_common_topic}%', top_k * 3))  # Get more for expansion
+                        
+                        expansion_rows = cursor.fetchall()
+                        logger.info(f"Found {len(expansion_rows)} additional chunks with topic '{most_common_topic}'")
+                        
+                        # Step 5: Combine and deduplicate results
+                        combined_results = list(initial_results)  # Start with original results
+                        existing_chunk_ids = {r.get('chunk_id') or r.get('document_chunk_id') for r in initial_results}
+                        
+                        # Add expansion results that aren't already included
+                        for row in expansion_rows:
+                            chunk_id = str(row['document_chunk_id'])
+                            if chunk_id not in existing_chunk_ids:
+                                # Create result in same format as vector search
+                                expansion_result = {
+                                    'chunk_id': chunk_id,
+                                    'document_chunk_id': chunk_id,
+                                    'similarity_score': 0.5,  # Lower score for topic-expanded results
+                                    'content': row['chunk_text'],
+                                    'metadata': {
+                                        'document_id': str(row['document_id']),
+                                        'chunk_ordinal': row['chunk_ordinal'],
+                                        'page_start': row['page_start'],
+                                        'page_end': row['page_end'],
+                                        'topics': row['topics'],
+                                        'expansion_source': 'topic',
+                                        'expansion_topic': most_common_topic
+                                    },
+                                    'title': '',
+                                    'filename': '',
+                                    'page': row['page_start'] or 0,
+                                    'category': '',
+                                    'category_type': '',
+                                    'topics': row['topics'] or '',
+                                    'expansion_source': 'topic',
+                                    'expansion_topic': most_common_topic
+                                }
+                                combined_results.append(expansion_result)
+                                existing_chunk_ids.add(chunk_id)
+                        
+                        logger.info(f"Topic expansion complete: {len(initial_results)} initial + {len(combined_results) - len(initial_results)} expanded = {len(combined_results)} total results")
+                        
+                        # Step 6: Group by document and sort by chunk_ordinal for coherent text flow
+                        # Sort by document_id first, then chunk_ordinal to maintain document structure
+                        def sort_key(result):
+                            metadata = result.get('metadata', {})
+                            doc_id = metadata.get('document_id', '')
+                            chunk_ord = metadata.get('chunk_ordinal', 0)
+                            # Boost original embedding results with higher score
+                            is_original = result.get('expansion_source') != 'topic'
+                            score_boost = 1.0 if is_original else 0.0
+                            return (doc_id, chunk_ord, -score_boost)
+                        
+                        combined_results.sort(key=sort_key)
+                        
+                        return combined_results
+                        
+            except Exception as e:
+                logger.error(f"Topic expansion failed: {e}")
+                logger.info("Falling back to initial embedding results")
+                return initial_results
+                
+        except Exception as e:
+            logger.error(f"Vector search with topic expansion failed: {e}")
+            return []
+    
+    def _perform_single_email_search(self, query: str, top_k: int) -> List[Dict[str, Any]]:
+        """
+        Perform a single vector search against email collection.
+        
+        Args:
+            query: Search query
+            top_k: Number of results to return
+            
+        Returns:
+            List of email search results
+        """
+        try:
+            self._ensure_email_vector_store()
+            if not self.email_vector_store:
+                logger.warning("Email vector store not available for single email search")
+                return []
+            
+            # Check if email collection exists and has data
+            if not utility.has_collection(self.email_collection_name):
+                logger.warning(f"Email collection '{self.email_collection_name}' does not exist")
+                return []
+            
+            col = Collection(self.email_collection_name)
+            entity_count = col.num_entities
+            if entity_count == 0:
+                logger.warning(f"Email collection '{self.email_collection_name}' is empty (0 entities)")
+                return []
+            
+            # Perform similarity search
+            results = self.email_vector_store.similarity_search_with_score(query, k=top_k)
+            
+            # Convert to standardized format
+            formatted_results = []
+            for doc, score in results:
+                formatted_results.append({
+                    'chunk_id': doc.metadata.get('chunk_id', ''),
+                    'email_chunk_id': doc.metadata.get('chunk_id', ''),
+                    'similarity_score': float(score),
+                    'content': doc.page_content,
+                    'metadata': doc.metadata,
+                    'subject': doc.metadata.get('subject', ''),
+                    'from_addr': doc.metadata.get('from_addr', ''),
+                    'to_addr': doc.metadata.get('to_addr', ''),
+                    'date_utc': doc.metadata.get('date_utc', ''),
+                    'message_id': doc.metadata.get('message_id', ''),
+                    'category_type': 'email'
+                })
+            
+            logger.info(f"Single email search returned {len(formatted_results)} results for query: '{query[:50]}...'")
+            return formatted_results
+            
+        except Exception as e:
+            logger.error(f"Single email search failed for query '{query}': {e}")
+            return []
+
+    def rag_search_and_answer_multi_perspective(self, query: str, top_k: int = 15) -> Dict[str, Any]:
+        """
+        RAG search with multi-perspective capabilities and domain awareness.
+        
+        Args:
+            query: User's question/query
+            top_k: Number of documents to retrieve per perspective
+            
+        Returns:
+            Dict containing answer, sources, metadata, and search analytics
+        """
+        logger.info(f"Starting multi-perspective RAG search for query: '{query}' with top_k={top_k}")
+        
+        try:
+            # Get classification with domain detection - use one-shot calls
+            classification_result = self.classify_query_with_confidence(query)
+            classification = classification_result['classification']['type']
+            domain_info = classification_result['domain']  # Keep the full domain object
+            
+        except Exception as e:
+            logger.warning(f"Classification failed for query '{query}': {e}")
+            # Continue with default classification instead of failing
+            classification = 'general'
+            domain_info = {
+                'domain': 'general',
+                'confidence': 5,
+                'secondary': None,
+                'reasoning': 'Classification failed, using default',
+                'keywords': []
+            }
+            # Create default classification result structure
+            classification_result = {
+                'classification': {
+                    'type': 'general',
+                    'confidence': 5,
+                    'reasoning': 'Classification failed, using default'
+                },
+                'domain': domain_info
+            }
+            logger.info("Using default classification: general search without domain-specific optimizations")
+        
+        # Use multi-perspective search
+        logger.info("Using multi-perspective search")
+        search_results = self.multi_perspective_vector_search(query, top_k)
+        
+        # Apply chunk consolidation and reranking
+        pre_consolidation_count = len(search_results)
+        consolidated_results, reranking_info = self._apply_consolidation_and_reranking(query, search_results)
+        logger.info(f"Post-processing: {pre_consolidation_count} → {len(consolidated_results)} results after consolidation and reranking")
+        
+        # Convert results to Document format for existing pipeline
+        documents = self._convert_search_results_to_documents(consolidated_results)
+        
+        # Handle empty results gracefully
+        if not documents:
+            logger.warning(f"No documents found for query: '{query}'. Domain: {domain_info['domain']}, Classification: {classification}")
+            
+            # Return empty result structure instead of raising error
+            return {
+                'answer': f"I couldn't find any relevant documents for your query: '{query}'. This could be because:\n\n• No documents match your search terms\n• The document collection is empty\n• The query terms are too specific\n\nTry rephrasing your query with different keywords or broader terms.",
+                'sources': [],
+                'unique_sources': [],
+                'conversation_classification': classification_result['classification'],
+                'domain_info': domain_info,
+                'num_sources': 0,
+                'analysis_info': {
+                    'search_type': 'multi_perspective',
+                    'domain_detected': domain_info['domain'],
+                    'domain_confidence': domain_info['confidence'],
+                    'perspectives_used': 0,
+                    'conversation_classification': classification_result['classification'],
+                    'domain_info': domain_info,
+                    'milvus_results': [],
+                    'fusion_statistics': {'no_results': True}
+                },
+                'success': False,
+                'error': 'No documents found'
+            }
+        
+        # Format context and generate answer
+        context_text, sources = self._format_document_context(documents)
+        system_prompt = self._get_standard_system_prompt()
+        
+        # Generate LLM response with domain-aware prompting if available
+        if domain_info['confidence'] >= 7 and domain_info['domain'] != 'general':
+            domain_prompt = self._get_domain_aware_system_prompt(domain_info)
+            if domain_prompt:
+                system_prompt = domain_prompt
+        
+        logger.info(f"Prepared context with {len(sources)} sources, "
+                   f"total context length: {len(context_text)} characters")
+        
+        # Initialize LLM and generate answer
+        llm = ChatOllama(
+            model=self.config.CHAT_MODEL,
+            base_url=self.config.CHAT_BASE_URL,
+            temperature=self.config.CHAT_TEMPERATURE
+        )
+        
+        # Prepare messages and generate response
+        system_message = SystemMessage(content=(
+            f"{system_prompt}\n\nContext:\n{context_text}\n\n"
+        ))
+        human_message = HumanMessage(content=query)
+        
+        response = llm.invoke([system_message, human_message])
+        answer_text = str(response.content)
+        
+        # Create unique sources list
+        unique_sources_list = []
+        seen_document_ids = set()
+        for source in sources:
+            document_id = source.get('document_id', '')
+            if document_id and document_id not in seen_document_ids:
+                unique_sources_list.append(source)
+                seen_document_ids.add(document_id)
+        
+        # Sort by reference number if available
+        unique_sources_list.sort(key=lambda x: x.get('ref_num', 0))
+        
+        # Build analysis info with search metadata
+        # Fix: Flatten source_methods lists to get unique perspective count
+        all_perspectives = set()
+        for result in search_results:
+            source_methods = result.get('source_methods', [])
+            if isinstance(source_methods, list):
+                all_perspectives.update(source_methods)
+            else:
+                all_perspectives.add(str(source_methods))
+        
+        analysis_info = {
+            'system_instructions': system_prompt,
+            'search_type': 'multi_perspective',
+            'domain_detected': domain_info['domain'],
+            'domain_confidence': domain_info['confidence'],
+            'perspectives_used': len(all_perspectives),
+            'conversation_classification': classification_result['classification'],
+            'domain_info': domain_info,
+            'milvus_results': [
+                {
+                    'rank': idx + 1,
+                    'document_id': doc.metadata.get('document_id'),
+                    'title': doc.metadata.get('title') or doc.metadata.get('filename') or None,
+                    'page': doc.metadata.get('page'),
+                    'category': doc.metadata.get('category'),
+                    'category_type': doc.metadata.get('category_type'),
+                    'topics': doc.metadata.get('topics', ''),
+                    'similarity_score': float(doc.metadata.get('combined_score', 0.0)),
+                    'content_preview': doc.page_content[:150] + "..." if len(doc.page_content) > 150 else doc.page_content,
+                    'source_methods': doc.metadata.get('source_methods', [])
+                } for idx, doc in enumerate(documents)
+            ]
+        }
+        
+        # Add perspective statistics
+        from retrieval.fusion import ResultMerger
+        result_merger = ResultMerger(self.config)
+        fusion_stats = result_merger.get_fusion_statistics(search_results)
+        analysis_info['fusion_statistics'] = fusion_stats
+        
+        return {
+            'answer': answer_text,
+            'sources': sources,
+            'unique_sources': unique_sources_list,
+            'conversation_classification': classification_result['classification'],
+            'domain_info': domain_info,
+            'num_sources': len(sources),
+            'analysis_info': analysis_info,
+            'search_info': {
+                'reranking_info': reranking_info,
+                'pre_consolidation_count': pre_consolidation_count,
+                'post_consolidation_count': len(consolidated_results)
+            },
+            'success': True
+        }
+    
+    def _convert_search_results_to_documents(self, search_results: List[Dict[str, Any]]) -> List[Document]:
+        """
+        Convert search results to LangChain Document format.
+        
+        Args:
+            search_results: List of search results from multi-perspective search
+            
+        Returns:
+            List of Document objects
+        """
+        documents = []
+        for result in search_results:
+            metadata = result.get('metadata', {}).copy()
+            
+            # Use chunk_id as the primary document identifier
+            chunk_id = result.get('chunk_id', result.get('document_chunk_id', 'unknown'))
+            metadata['document_id'] = chunk_id
+            
+            metadata.update({
+                'combined_score': result.get('score', 0.0),
+                'source_methods': result.get('source_methods', []),
+                'num_perspectives': result.get('num_perspectives', 1),
+                'rank_boost': result.get('rank_boost', 0.0)
+            })
+            
+            doc = Document(
+                page_content=result.get('content', ''),
+                metadata=metadata
+            )
+            documents.append(doc)
+        
+        return documents
+    
+    def _get_domain_aware_system_prompt(self, domain_info: Dict[str, Any]) -> Optional[str]:
+        """
+        Get domain-aware system prompt for enhanced response generation.
+        
+        Args:
+            domain_info: Domain detection information
+            
+        Returns:
+            Domain-specific system prompt or None for default
+        """
+        domain = domain_info.get('domain', 'general')
+        confidence = domain_info.get('confidence', 5)
+        
+        if confidence < 7 or domain == 'general':
+            return None
+        
+        domain_prompts = {
+            'legal': """
+You are an assistant with legal expertise that answers questions USING ONLY the retrieved legal documents, case law, and legal sources provided in the Context below.
+
+REQUIRED BEHAVIOR:
+1) You MUST produce answers that are strictly extractive: only quote or paraphrase text that appears verbatim in the provided Context snippets. Do NOT invent legal interpretations or combine pieces to create new legal conclusions.
+2) For every legal claim, include an inline citation using the numbered reference format [1], [2], [3], etc., where the numbers map to the provided source headers.
+3) When you quote legal text or cite cases, include the exact snippet (verbatim) you used as evidence immediately after the citation in double quotes.
+4) If you cannot find verbatim legal evidence in the Context for the user's question, you MUST respond exactly with the sentence: "No answer in knowledge base." and provide no additional legal guidance.
+5) Use appropriate legal terminology and cite format when presenting information from the sources.
+6) Be precise and factual in legal context; avoid speculation or general legal advice.
+
+Now, answer ONLY the following legal question using the Context and following the rules above:
+""",
+            
+            'medical': """
+You are an assistant with medical knowledge that answers questions USING ONLY the retrieved medical documents, clinical studies, and healthcare sources provided in the Context below.
+
+REQUIRED BEHAVIOR:
+1) You MUST produce answers that are strictly extractive: only quote or paraphrase text that appears verbatim in the provided Context snippets. Do NOT invent medical advice or combine pieces to create new medical conclusions.
+2) For every medical claim, include an inline citation using the numbered reference format [1], [2], [3], etc., where the numbers map to the provided source headers.
+3) When you quote medical information, include the exact snippet (verbatim) you used as evidence immediately after the citation in double quotes.
+4) If you cannot find verbatim medical evidence in the Context for the user's question, you MUST respond exactly with the sentence: "No answer in knowledge base." and provide no medical guidance.
+5) Use appropriate medical terminology when presenting information from clinical sources.
+6) Be precise and factual; this is for informational purposes only and not medical advice.
+
+Now, answer ONLY the following medical question using the Context and following the rules above:
+""",
+            
+            'technical': """
+You are an assistant with technical expertise that answers questions USING ONLY the retrieved technical documents, specifications, and technical sources provided in the Context below.
+
+REQUIRED BEHAVIOR:
+1) You MUST produce answers that are strictly extractive: only quote or paraphrase text that appears verbatim in the provided Context snippets. Do NOT invent technical solutions or combine pieces to create new technical approaches.
+2) For every technical claim, include an inline citation using the numbered reference format [1], [2], [3], etc., where the numbers map to the provided source headers.
+3) When you quote technical specifications or code, include the exact snippet (verbatim) you used as evidence immediately after the citation in double quotes.
+4) If you cannot find verbatim technical evidence in the Context for the user's question, you MUST respond exactly with the sentence: "No answer in knowledge base." and provide no additional technical guidance.
+5) Use appropriate technical terminology and formatting when presenting information from technical sources.
+6) Be precise and factual in technical context; focus on documented specifications and procedures.
+
+Now, answer ONLY the following technical question using the Context and following the rules above:
+"""
+        }
+        
+        return domain_prompts.get(domain)
 
     def _get_standard_system_prompt(self) -> str:
         """Get standard system prompt for document/web content queries."""
@@ -1302,13 +2339,6 @@ Now, answer ONLY the following user question using the Context and following the
     def rag_search_and_answer(self, query: str, top_k: int = 5) -> Dict[str, Any]:
         """
         Document RAG search and answer generation (email search handled by EmailManager).
-        
-        Args:
-            query: User's question/query
-            top_k: Number of documents to retrieve
-            
-        Returns:
-            Dict containing answer, sources, metadata, and query classification
         """
         logger.info(f"Starting document RAG search for query: '{query}' with top_k={top_k}")
         
@@ -1354,17 +2384,7 @@ Now, answer ONLY the following user question using the Context and following the
                         }
                     }
             
-            # Enrich documents with metadata from PostgreSQL before formatting context
-            try:
-                if hasattr(self, 'document_data_manager') and self.document_data_manager:
-                    self.document_data_manager.batch_enrich_documents_from_postgres(documents)
-                    logger.debug("Documents enriched with PostgreSQL metadata")
-                else:
-                    logger.warning("DocumentDataManager not available for enrichment - using Milvus metadata only")
-            except Exception as e:
-                logger.warning(f"Document enrichment failed: {e} - continuing with Milvus metadata only")
-            
-            # Format document context using enriched metadata
+            # Format document context
             context_text, sources = self._format_document_context(documents)
             system_prompt = self._get_standard_system_prompt()
             

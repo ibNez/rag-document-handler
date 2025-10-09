@@ -389,3 +389,104 @@ pytest tests/ --cov=ingestion.url.utils --cov-report=html
 
 For detailed robots.txt configuration and implementation details, see [System Architecture Documentation](architecture.md) and [Configuration Documentation](configuration.md).
 
+## Production Monitoring and Maintenance
+
+### Service Status Monitoring
+
+**Check overall system status:**
+```bash
+./status_production.sh
+```
+
+**Monitor specific components:**
+```bash
+# Check application health
+curl -f http://localhost:3000/health || echo "Service down"
+
+# Database connectivity
+./status_production.sh | grep -E "(PostgreSQL|Milvus)"
+
+# Docker services status
+docker compose ps
+```
+
+### Log Management
+
+**Real-time log monitoring:**
+```bash
+# Application access logs
+tail -f logs/gunicorn_access.log
+
+# Error monitoring
+tail -f logs/gunicorn_error.log | grep ERROR
+
+# Application logs
+tail -f logs/rag_knowledge_base_manager.log
+```
+
+**Log analysis:**
+```bash
+# Request response times
+tail -n 1000 logs/gunicorn_access.log | awk '{print $NF}' | sort -n
+
+# Error rate analysis
+grep -c "ERROR" logs/gunicorn_error.log
+```
+
+### Performance Monitoring
+
+**System resources:**
+```bash
+# CPU and memory usage
+htop
+
+# Network connections
+netstat -tulpn | grep :3000
+
+# Open files by process
+lsof -p $(cat logs/gunicorn.pid)
+```
+
+**Application metrics:**
+```bash
+# Worker process status
+./status_production.sh
+
+# Database performance
+docker compose exec postgres pg_stat_activity
+
+# Vector database status
+docker compose exec milvus-standalone ./bin/milvus list collections
+```
+
+### Health Checks
+
+**Service connectivity tests:**
+```bash
+# PostgreSQL connectivity
+nc -z localhost 5432 && echo "PostgreSQL OK"
+
+# Milvus connectivity  
+nc -z localhost 19530 && echo "Milvus OK"
+
+# Ollama service
+nc -z localhost 11434 && echo "Ollama OK"
+```
+
+### Backup and Recovery
+
+**Database backups:**
+```bash
+# PostgreSQL backup
+docker compose exec postgres pg_dump -U postgres rag_metadata > backup_$(date +%Y%m%d).sql
+
+# Milvus collection backup
+# (Refer to Milvus documentation for collection export)
+```
+
+**File system backups:**
+```bash
+# Backup uploaded files and logs
+tar -czf backup_files_$(date +%Y%m%d).tar.gz uploaded/ logs/ staging/
+```
+

@@ -188,26 +188,26 @@ class DocumentSearchManager:
         
         for result in results:
             try:
-                # Enhance result with search metadata
-                enhanced_result = dict(result)
+                # Process result with search metadata
+                processed_result = dict(result)
                 
                 # Add search relevance indicators
-                enhanced_result['search_query'] = original_query
-                enhanced_result['result_type'] = 'document'
+                processed_result['search_query'] = original_query
+                processed_result['result_type'] = 'document'
                 
                 # Ensure consistent field naming
-                if 'fts_rank' in enhanced_result:
-                    enhanced_result['relevance_score'] = enhanced_result['fts_rank']
+                if 'fts_rank' in processed_result:
+                    processed_result['relevance_score'] = processed_result['fts_rank']
                 
                 # Add display-friendly formatting
-                if enhanced_result.get('content_preview'):
-                    preview = enhanced_result['content_preview']
+                if processed_result.get('content_preview'):
+                    preview = processed_result['content_preview']
                     if len(preview) > 300:
-                        enhanced_result['display_preview'] = preview[:300] + '...'
+                        processed_result['display_preview'] = preview[:300] + '...'
                     else:
-                        enhanced_result['display_preview'] = preview
+                        processed_result['display_preview'] = preview
                 
-                processed.append(enhanced_result)
+                processed.append(processed_result)
                 
             except Exception as e:
                 logger.debug(f"Failed to process search result: {e}")
@@ -224,7 +224,7 @@ class DocumentSearchManager:
             document_id: Document identifier
             
         Returns:
-            Enhanced document dictionary or None
+            Processed document dictionary or None
         """
         try:
             # Validate document ID format
@@ -236,10 +236,10 @@ class DocumentSearchManager:
             result = self.document_data_manager.get_document_by_id(document_id.strip())
             
             if result:
-                # Apply retrieval-specific enhancements
-                enhanced_result = self._enhance_single_document(result)
+                # Apply retrieval-specific processing
+                processed_result = self._process_single_document(result)
                 logger.debug(f"Retrieved document: {document_id}")
-                return enhanced_result
+                return processed_result
             else:
                 logger.info(f"Document not found: {document_id}")
                 return None
@@ -248,41 +248,41 @@ class DocumentSearchManager:
             logger.error(f"Failed to get document {document_id}: {e}")
             return None
 
-    def _enhance_single_document(self, document: Dict[str, Any]) -> Dict[str, Any]:
+    def _process_single_document(self, document: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Enhance single document for retrieval display.
+        Process single document for retrieval display.
         
         Args:
             document: Raw document from data manager
             
         Returns:
-            Enhanced document dictionary
+            Processed document dictionary
         """
-        enhanced = dict(document)
+        processed = dict(document)
         
         try:
             # Add retrieval metadata
-            enhanced['retrieved_at'] = None  # Can be set by caller
-            enhanced['source_type'] = 'database'
+            processed['retrieved_at'] = None  # Can be set by caller
+            processed['source_type'] = 'database'
             
             # Ensure consistent datetime formatting
             from datetime import datetime
-            for key, value in enhanced.items():
+            for key, value in processed.items():
                 if isinstance(value, datetime):
-                    enhanced[key] = value.isoformat() if value else None
+                    processed[key] = value.isoformat() if value else None
             
             # Add display helpers
-            if enhanced.get('file_size'):
-                size_kb = enhanced['file_size'] / 1024
+            if processed.get('file_size'):
+                size_kb = processed['file_size'] / 1024
                 if size_kb < 1024:
-                    enhanced['display_size'] = f"{size_kb:.1f} KB"
+                    processed['display_size'] = f"{size_kb:.1f} KB"
                 else:
-                    enhanced['display_size'] = f"{size_kb/1024:.1f} MB"
+                    processed['display_size'] = f"{size_kb/1024:.1f} MB"
             
         except Exception as e:
-            logger.debug(f"Failed to enhance document: {e}")
+            logger.debug(f"Failed to process document: {e}")
         
-        return enhanced
+        return processed
 
     def search_document_chunks_fts(self, query: str, k: int = 10) -> List[Dict[str, Any]]:
         """
@@ -331,26 +331,26 @@ class DocumentSearchManager:
         
         for chunk in chunks:
             try:
-                enhanced_chunk = dict(chunk)
+                processed_chunk = dict(chunk)
                 
                 # Add retrieval metadata
-                enhanced_chunk['search_query'] = original_query
-                enhanced_chunk['result_type'] = 'chunk'
+                processed_chunk['search_query'] = original_query
+                processed_chunk['result_type'] = 'chunk'
                 
-                # Enhance text display
-                chunk_text = enhanced_chunk.get('chunk_text', '')
+                # Process text display
+                chunk_text = processed_chunk.get('chunk_text', '')
                 if len(chunk_text) > 500:
-                    enhanced_chunk['display_text'] = chunk_text[:500] + '...'
+                    processed_chunk['display_text'] = chunk_text[:500] + '...'
                 else:
-                    enhanced_chunk['display_text'] = chunk_text
+                    processed_chunk['display_text'] = chunk_text
                 
                 # Add context hints
-                if enhanced_chunk.get('page_start'):
-                    enhanced_chunk['context'] = f"Page {enhanced_chunk['page_start']}"
-                elif enhanced_chunk.get('chunk_index'):
-                    enhanced_chunk['context'] = f"Section {enhanced_chunk['chunk_index']}"
+                if processed_chunk.get('page_start'):
+                    processed_chunk['context'] = f"Page {processed_chunk['page_start']}"
+                elif processed_chunk.get('chunk_index'):
+                    processed_chunk['context'] = f"Section {processed_chunk['chunk_index']}"
                 
-                processed.append(enhanced_chunk)
+                processed.append(processed_chunk)
                 
             except Exception as e:
                 logger.debug(f"Failed to process chunk result: {e}")

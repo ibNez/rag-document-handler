@@ -155,3 +155,78 @@ export EMAIL_ENCRYPTION_KEY="<output-from-command>"
 Keep this value secret and **do not** commit it to version control. If the key
 is rotated, previously stored passwords will need to be re-entered.
 
+## Production Deployment
+
+### Docker Production Deployment (Recommended)
+
+For production environments, use the Docker deployment with HTTPS support:
+
+```bash
+# Start production services with HTTPS
+docker compose -f docker-compose.prod.yml up -d
+
+# Check status
+docker compose -f docker-compose.prod.yml ps
+
+# View logs
+docker compose -f docker-compose.prod.yml logs -f
+
+# Stop services
+docker compose -f docker-compose.prod.yml down
+```
+
+**Production Features:**
+- **HTTPS by default** on port 443
+- **HTTP to HTTPS redirect** on port 80
+- **Production WSGI server** (Gunicorn) with multiple workers
+- **Automatic SSL certificate generation**
+- **Resource optimization** and security hardening
+
+**Production URLs:**
+- **Main Application**: https://localhost:443 (HTTPS)
+- **HTTP Redirect**: http://localhost:80 → https://localhost:443
+
+### Native WSGI Deployment
+
+For environments where Docker is not available, use the production scripts:
+
+```bash
+# Start in production mode
+./start_production.sh
+
+# Check status
+./status_production.sh
+
+# Stop gracefully
+./stop_production.sh
+```
+
+**Core Production Files:**
+- `wsgi.py` - WSGI entry point for production servers
+- `start_production.sh` - Production start script using Gunicorn
+- `stop_production.sh` - Graceful shutdown script
+- `status_production.sh` - Status monitoring script
+- `rag-knowledgebase.service` - Systemd service unit file
+
+### Systemd Service (Recommended for Production)
+
+For system-level service management:
+
+1. **Copy service file**:
+```bash
+sudo cp rag-knowledgebase.service /etc/systemd/system/
+sudo systemctl daemon-reload
+```
+
+2. **Enable and start**:
+```bash
+sudo systemctl enable rag-knowledgebase
+sudo systemctl start rag-knowledgebase
+```
+
+3. **Monitor**:
+```bash
+sudo systemctl status rag-knowledgebase
+sudo journalctl -u rag-knowledgebase -f
+```
+

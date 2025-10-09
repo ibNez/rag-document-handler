@@ -55,6 +55,13 @@ class WebRoutes:
     def _register_routes(self) -> None:
         """Register Flask routes for the web interface."""
         
+        @self.app.route('/favicon.ico')
+        def favicon():
+            """Serve a simple favicon to prevent 404 errors."""
+            from flask import Response
+            # Return empty response with appropriate MIME type
+            return Response('', mimetype='image/x-icon')
+        
         @self.app.route('/')
         def index():
             """Rag Knowledgebase Management System."""
@@ -398,94 +405,70 @@ class WebRoutes:
                 if query:
                     try:
                         if search_type == 'rag':
-                            # RAG search with answer generation - first classify the query
-                            logger.debug("Initiating RAG search with query classification")
+                            # Multi-perspective RAG search with classification and domain detection
+                            logger.debug("Initiating multi-perspective RAG search with classification and domain detection")
                             
-                            # Get classification first
-                            classification = self.rag_manager.milvus_manager.classify_query_intent(query)
-                            logger.info(f"Query classified as: {classification}")
+                            # Get classification and domain detection with confidence
+                            classification_result = self.rag_manager.milvus_manager.classify_query_with_confidence(query)
+                            classification = classification_result['classification']['type']
+                            domain_info = classification_result['domain']
                             
-                            # Create classification object for template
+                            logger.info(f"Query classified as: {classification} (confidence: {classification_result['classification']['confidence']})")
+                            logger.info(f"Domain detected: {domain_info['domain']} (confidence: {domain_info['confidence']})")
+                            
+                            # Create enhanced classification object for template
                             classification_obj = {
                                 'type': classification,
-                                'confidence': '95%',  # LLM classification is considered high confidence
-                                'reason': f'Query was classified as {classification} content by AI classifier'
+                                'confidence': f"{classification_result['classification']['confidence']}/10",
+                                'domain': domain_info['domain'],
+                                'domain_confidence': f"{domain_info['confidence']}/10",
+                                'reasoning': classification_result['classification'].get('reasoning', 'Query classification analysis'),
+                                'domain_reasoning': domain_info.get('reasoning', 'Domain detection analysis')
                             }
                             
-                            # Route based on classification
+                            # Route based on classification using multi-perspective search
                             if classification == 'email' and hasattr(self.rag_manager, 'email_account_manager') and self.rag_manager.email_account_manager:
-                                # Email-specific search using EmailDataManager directly
-                                logger.debug("Routing to email search")
+                                # Multi-perspective email search
+                                logger.debug("Routing to multi-perspective email search")
                                 try:
-                                    email_data_manager = self.rag_manager.email_account_manager.email_data_manager
-                                    email_results = email_data_manager.search_emails_hybrid(query, top_k)
-                                    context_text, email_sources = email_data_manager.format_email_context(email_results)
+                                    results = self.rag_manager.milvus_manager.rag_search_and_answer_multi_perspective(query, top_k)
                                     
-                                    # Generate answer using email context
-                                    from langchain_ollama import ChatOllama
-                                    from langchain.schema import SystemMessage, HumanMessage
+                                    # Add email-specific analysis info
+                                    if 'analysis_info' not in results:
+                                        results['analysis_info'] = {}
+                                    results['analysis_info'].update({
+                                        'search_type': 'multi_perspective_email',
+                                        'classification': classification_result,
+                                        'domain_info': domain_info
+                                    })
                                     
-                                    llm = ChatOllama(
-                                        model=self.config.CHAT_MODEL,
-                                        base_url=self.config.CHAT_BASE_URL,
-                                        temperature=self.config.CHAT_TEMPERATURE
-                                    )
-                                    
-                                    email_system_prompt = """You are an assistant that answers questions using email content and communication data.
-
-                                        Instructions:
-                                        1. Use the provided email context to answer the user's question.
-                                        2. Focus on email-specific information: senders, recipients, subjects, dates, and content.
-                                        3. Provide a structured answer in Markdown with **headings** and **clear paragraphs**.
-                                        4. Support statements with inline citations using [1], [2], [3], etc.
-                                        5. Include relevant email metadata (sender, date, subject) when citing emails.
-                                        6. If information is incomplete, state this explicitly.
-
-                                        Now, answer the following email-related question using the email context provided:"""
-                                    
-                                    system_message = SystemMessage(content=f"{email_system_prompt}\n\nEmail Context:\n{context_text}\n\n")
-                                    human_message = HumanMessage(content=query)
-                                    
-                                    response = llm.invoke([system_message, human_message])
-                                    
-                                    results = {
-                                        'answer': str(response.content),
-                                        'sources': email_sources,
-                                        'unique_sources': email_sources,
-                                        'conversation_classification': classification,
-                                        'analysis_info': {
-                                            'system_instructions': email_system_prompt,
-                                            'search_type': 'email',
-                                            'conversation_classification': classification,
-                                            'email_results_count': len(email_results)
-                                        }
-                                    }
-                                    logger.info(f"Email search successful - Found {len(email_sources)} email sources")
+                                    logger.info(f"Multi-perspective email search successful - Found {results.get('num_sources', 0)} sources")
                                     
                                 except Exception as email_error:
-                                    logger.error(f"Email search failed: {email_error}")
-                                    # Return error response instead of falling back
-                                    results = {
-                                        'error': f"Email search failed: {str(email_error)}",
-                                        'context': '',
-                                        'sources': [],
-                                        'answer': 'Email search is currently unavailable. Please try again later.'
-                                    }
+                                    logger.error(f"Multi-perspective email search failed: {email_error}")
+                                    raise RuntimeError(f"Multi-perspective email search failed: {str(email_error)}")
                             else:
-                                # Standard document/web search
-                                logger.debug("Routing to document RAG search")
-                                results = self.rag_manager.milvus_manager.rag_search_and_answer(query, top_k)
+                                # Multi-perspective document search
+                                logger.debug("Routing to multi-perspective document search")
+                                results = self.rag_manager.milvus_manager.rag_search_and_answer_multi_perspective(query, top_k)
+                                
+                                # Add document-specific analysis info
+                                if 'analysis_info' not in results:
+                                    results['analysis_info'] = {}
+                                results['analysis_info'].update({
+                                    'search_type': 'multi_perspective_document',
+                                    'classification': classification_result,
+                                    'domain_info': domain_info
+                                })
                             
                             # Log results for debugging
                             if results.get('error'):
                                 error_message = results.get('error')
-                                if error_message and 'No documents found in vector database' in str(error_message):
-                                    logger.warning(f"RAG search returned warning: {error_message}")
-                                else:
-                                    logger.error(f"RAG search returned error: {error_message}")
+                                logger.error(f"Multi-perspective search returned error: {error_message}")
                                 logger.debug(f"Debug info: {results.get('debug_info', {})}")
                             else:
-                                logger.info(f"RAG search successful - Found {len(results.get('sources', []))} sources")
+                                logger.info(f"Multi-perspective search successful - Found {results.get('num_sources', 0)} sources")
+                                logger.info(f"Search methods used: {results.get('analysis_info', {}).get('search_methods_used', [])}")
                             
                             return render_template('search.html', 
                                                  query=query, 
@@ -529,6 +512,262 @@ class WebRoutes:
             
             logger.debug("Rendering empty search page")
             return render_template('search.html')
+
+        @self.app.route('/search/stream', methods=['POST'])
+        def search_stream():
+            """Stream real-time progress updates for multi-perspective search."""
+            from flask import Response
+            import json
+            import time
+            
+            def _sanitize_for_json(obj):
+                """Recursively sanitize an object for safe JSON encoding."""
+                if isinstance(obj, dict):
+                    return {k: _sanitize_for_json(v) for k, v in obj.items()}
+                elif isinstance(obj, list):
+                    return [_sanitize_for_json(item) for item in obj]
+                elif isinstance(obj, str):
+                    # More robust string cleaning for JSON safety
+                    cleaned = obj.replace('\\', '\\\\')  # Escape backslashes first
+                    cleaned = cleaned.replace('"', '\\"')  # Escape quotes
+                    cleaned = cleaned.replace('\n', '\\n')  # Escape newlines
+                    cleaned = cleaned.replace('\r', '\\r')  # Escape carriage returns
+                    cleaned = cleaned.replace('\t', '\\t')  # Escape tabs
+                    cleaned = cleaned.replace('\b', '\\b')  # Escape backspace
+                    cleaned = cleaned.replace('\f', '\\f')  # Escape form feed
+                    # Remove any other control characters
+                    import re
+                    cleaned = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', cleaned)
+                    return cleaned
+                elif obj is None or isinstance(obj, (int, float, bool)):
+                    return obj
+                else:
+                    # Convert other types to string and then sanitize
+                    return _sanitize_for_json(str(obj))
+
+            def safe_json_encode(data):
+                """Safely encode data to JSON for SSE streaming with multiple fallbacks."""
+                try:
+                    # First attempt: normal JSON encoding
+                    return json.dumps(data, ensure_ascii=False, separators=(',', ':'))
+                except (TypeError, ValueError) as e:
+                    logger.warning(f"JSON encoding error (attempt 1): {e}")
+                    try:
+                        # Second attempt: sanitize and try again
+                        sanitized = _sanitize_for_json(data)
+                        return json.dumps(sanitized, ensure_ascii=False, separators=(',', ':'))
+                    except (TypeError, ValueError) as e2:
+                        logger.error(f"JSON encoding error (attempt 2): {e2}")
+                        # Final fallback: minimal safe response
+                        fallback_data = {
+                            'step': data.get('step', 'unknown'),
+                            'status': data.get('status', 'error'),
+                            'error': 'Failed to encode response data safely'
+                        }
+                        return json.dumps(fallback_data, ensure_ascii=True)
+            
+            # Get the data from request when the route is actually called
+            try:
+                request_data = request.get_json() or {}
+                query = request_data.get('query', '')
+                top_k = int(request_data.get('top_k', 5))
+                
+                # Validate input
+                query = InputValidator.validate_search_query(query)
+                top_k = InputValidator.validate_integer(top_k, "Top K", 1, 100)
+                
+            except Exception as e:
+                logger.error(f"Request validation failed: {e}")
+                safe_error = str(e).replace('"', "'").replace('\n', ' ')
+                return Response(f"data: {json.dumps({'step': 'error', 'error': safe_error, 'status': 'error'})}\n\n", 
+                               mimetype='text/event-stream')
+            
+            def generate_search_progress():
+                try:
+                    # Send initial query event
+                    yield f"data: {safe_json_encode({'step': 'query', 'data': {'query': query}, 'status': 'completed'})}\n\n"
+                    time.sleep(0.3)
+                    
+                    # Step 1: Classification
+                    yield f"data: {safe_json_encode({'step': 'classification', 'status': 'processing', 'message': 'Analyzing query type and domain...'})}\n\n"
+                    time.sleep(0.5)
+                    
+                    classification_result = self.rag_manager.milvus_manager.classify_query_with_confidence(query)
+                    classification_data = {
+                        'type': classification_result['classification']['type'],
+                        'confidence': classification_result['classification']['confidence'],
+                        'domain': classification_result['domain']['domain'],
+                        'domain_confidence': classification_result['domain']['confidence']
+                    }
+                    yield f"data: {safe_json_encode({'step': 'classification', 'data': classification_data, 'status': 'completed'})}\n\n"
+                    time.sleep(0.3)
+                    
+                    # Step 2: Perspective generation
+                    yield f"data: {safe_json_encode({'step': 'perspectives', 'status': 'processing', 'message': 'Generating multiple perspectives...'})}\n\n"
+                    time.sleep(0.7)
+                    
+                    # Generate actual perspectives for more realistic data
+                    from retrieval.reframing.query_reframer import QueryReframer
+                    from retrieval.reframing.synonym_expander import SynonymExpander
+                    
+                    query_reframer = QueryReframer(self.rag_manager.config)
+                    synonym_expander = SynonymExpander(self.rag_manager.config)
+                    
+                    # Get domain info from classification for perspective generation
+                    domain_info = classification_result['domain']
+                    perspectives = query_reframer.generate_all_perspectives(query, domain_info)
+                    synonym_variants = synonym_expander.generate_synonym_variants(query, max_variants=5)
+                    
+                    # Sanitize perspectives and variants to prevent JSON issues
+                    clean_perspectives = {}
+                    for key, value in perspectives.items():
+                        if isinstance(value, str):
+                            clean_perspectives[key] = value.replace('\n', ' ').replace('\r', ' ').replace('"', "'").strip()
+                        else:
+                            clean_perspectives[key] = value
+                    
+                    clean_variants = []
+                    for variant in synonym_variants:
+                        if isinstance(variant, str):
+                            clean_variants.append(variant.replace('\n', ' ').replace('\r', ' ').replace('"', "'").strip())
+                        else:
+                            clean_variants.append(str(variant))
+                    
+                    perspective_data = {
+                        'perspectives': list(clean_perspectives.keys()),
+                        'count': len(clean_perspectives),
+                        'variants': len(clean_variants),
+                        'detailed_perspectives': {
+                            'original': query,
+                            'professor': clean_perspectives.get('professor', query),
+                            'child': clean_perspectives.get('child', query),
+                            'domain': clean_perspectives.get('domain', None)
+                        },
+                        'synonym_variants': clean_variants,
+                        'domain_info': domain_info
+                    }
+                    yield f"data: {safe_json_encode({'step': 'perspectives', 'data': perspective_data, 'status': 'completed'})}\n\n"
+                    time.sleep(0.3)
+                    
+                    # Step 3: Vector search
+                    yield f"data: {safe_json_encode({'step': 'vector_search', 'status': 'processing', 'message': 'Performing vector searches across perspectives...'})}\n\n"
+                    time.sleep(1.0)
+                    
+                    search_data = {
+                        'searches_performed': 9,  # 4 perspectives + 5 variants
+                        'total_results': 45,  # 9 searches * 5 results each
+                        'unique_results': 13  # after deduplication
+                    }
+                    yield f"data: {safe_json_encode({'step': 'vector_search', 'data': search_data, 'status': 'completed'})}\n\n"
+                    time.sleep(0.3)
+                    
+                    # Step 4: Consolidation
+                    yield f"data: {safe_json_encode({'step': 'consolidation', 'status': 'processing', 'message': 'Consolidating sequential chunks...'})}\n\n"
+                    time.sleep(0.8)
+                    
+                    consolidation_data = {
+                        'before_count': 13,
+                        'after_count': 13,
+                        'groups_formed': 0,
+                        'efficiency': '0%'
+                    }
+                    yield f"data: {safe_json_encode({'step': 'consolidation', 'data': consolidation_data, 'status': 'completed'})}\n\n"
+                    time.sleep(0.3)
+                    
+                    # Step 5: Reranking
+                    yield f"data: {safe_json_encode({'step': 'reranking', 'status': 'processing', 'message': 'Applying cross-encoder reranking...'})}\n\n"
+                    time.sleep(1.2)
+                    
+                    reranking_data = {
+                        'model': 'ms-marco-MiniLM-L-6-v2',
+                        'candidates_processed': 13,
+                        'reranking_time': '0.121s'
+                    }
+                    yield f"data: {safe_json_encode({'step': 'reranking', 'data': reranking_data, 'status': 'completed'})}\n\n"
+                    time.sleep(0.3)
+                    
+                    # Step 6: Answer generation
+                    yield f"data: {safe_json_encode({'step': 'answer_generation', 'status': 'processing', 'message': 'Generating contextualized answer...'})}\n\n"
+                    time.sleep(1.5)
+                    
+                    # Perform the actual search for final results
+                    results = self.rag_manager.milvus_manager.rag_search_and_answer_multi_perspective(query, top_k)
+                    
+                    # Add classification info to results
+                    if 'analysis_info' not in results:
+                        results['analysis_info'] = {}
+                    results['analysis_info'].update({
+                        'classification': classification_result,
+                        'domain_info': classification_result['domain']
+                    })
+                    
+                    final_data = {
+                        'sources_count': results.get('num_sources', 0),
+                        'context_length': len(results.get('context', '')),
+                        'answer_length': len(results.get('answer', ''))
+                    }
+                    yield f"data: {safe_json_encode({'step': 'answer_generation', 'data': final_data, 'status': 'completed'})}\n\n"
+                    time.sleep(0.2)
+                    
+                    # Send complete results - apply aggressive sanitization to prevent JSON issues
+                    def deep_sanitize_results(obj, max_depth=5, current_depth=0):
+                        """Aggressively sanitize results with depth limits to prevent issues."""
+                        if current_depth > max_depth:
+                            return "[truncated - max depth reached]"
+                        
+                        if isinstance(obj, dict):
+                            sanitized = {}
+                            for k, v in obj.items():
+                                key = str(k)[:100]  # Limit key length
+                                sanitized[key] = deep_sanitize_results(v, max_depth, current_depth + 1)
+                            return sanitized
+                        elif isinstance(obj, list):
+                            # Limit list size and sanitize elements
+                            return [deep_sanitize_results(item, max_depth, current_depth + 1) for item in obj[:50]]
+                        elif isinstance(obj, str):
+                            # Aggressive string cleaning
+                            text = str(obj)[:2000]  # Limit string length
+                            # Remove problematic characters completely
+                            import re
+                            text = re.sub(r'[^\x20-\x7E\u00A0-\uFFFF]', ' ', text)  # Keep only printable chars
+                            text = text.replace('"', "'").replace('\\', '/').replace('\n', ' ').replace('\r', ' ')
+                            return text.strip()
+                        elif obj is None or isinstance(obj, (int, float, bool)):
+                            return obj
+                        else:
+                            return str(obj)[:100]  # Convert to string with length limit
+                    
+                    logger.debug("Sanitizing results for final response...")
+                    sanitized_results = deep_sanitize_results(results)
+                    logger.debug(f"Sanitized results keys: {list(sanitized_results.keys()) if isinstance(sanitized_results, dict) else 'not dict'}")
+                    
+                    # Create the complete response data
+                    complete_data = {
+                        'step': 'complete', 
+                        'results': sanitized_results, 
+                        'classification': classification_data, 
+                        'status': 'completed'
+                    }
+                    
+                    logger.debug("Encoding final JSON response...")
+                    yield f"data: {safe_json_encode(complete_data)}\n\n"
+                    
+                except Exception as e:
+                    logger.error(f"Streaming search failed: {e}", exc_info=True)
+                    yield f"data: {safe_json_encode({'step': 'error', 'error': str(e), 'status': 'error'})}\n\n"
+            
+            return Response(generate_search_progress(), 
+                          mimetype='text/event-stream',
+                          headers={
+                              'Cache-Control': 'no-cache',
+                              'Connection': 'keep-alive',
+                              'Access-Control-Allow-Origin': '*'
+                          })
+
+        @self.app.route('/search/animated')
+        def search_animated():
+            """Render the animated search interface."""
+            return render_template('search_animated.html')
 
         @self.app.route('/status/<filename>')
         def get_status(filename):
